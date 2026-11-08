@@ -145,7 +145,7 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
 │  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
-│  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
+│  │  ├─ evals/            # ← packages/evals(judge / スキーマ抽出 / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
 │  │  ├─ authz_hmac/       # ← packages/authz-hmac(jti 失効つきの HMAC capability AuthzPort と、approval
 │  │  │                    #   トークンの ApprovalPort。TS のファイルごとに 1 モジュール、依存先は spec のみ)
@@ -517,9 +517,11 @@ TTL の上限での切り詰め、自己承認の拒否、`create_memory_approva
 どちらも TS の port とバイト単位で wire 互換であり、言語間 golden の `authzHmac` セクションが、TS が発行した
 capability と approval のトークン一式を固定して、Python の port が検証でき、同一の文字列を再発行できることを
 保証する。さらに、TS の AuthzPort / ApprovalPort / revocation store の契約テスト群の Python 版
-(`python/kohaku/tests/authz_hmac/_contract.py`)も通る。テストで固定できるよう、port は注入可能な `now` と
-`generate_jti` を受け取る(TS は壁時計と `randomBytes` を直接参照する)。TS と違い、既定の秘密鍵は無い
-(必ず渡す。sales サンプルは `KOHAKU_CAPABILITY_SECRET` を読む)。
+(`python/kohaku/tests/authz_hmac/_contract.py`)も通る。テストと golden で固定できるよう、port は `now` と
+`generate_jti` を**テスト専用**の注入点として受け取る(TS は壁時計と `randomBytes` を直接参照する)。本番では
+決して設定しないこと(乱数でない `generate_jti` は jti が衝突して失効と 1 回限りの承認を壊し、ずれた `now` は
+あらゆる期限をずらす)。TS と同じく、ファクトリは秘密鍵を必須とし、開発用の fallback を与えるのは sales
+サンプルの入口だけである(`KOHAKU_CAPABILITY_SECRET`)。
 
 JWT / OIDC の identity 側は `kohaku.authz_jwt` である(TS の `packages/authz-jwt` のミラー。extra `jwt`
 (`pip install 'kohaku-ui[jwt]'`)で PyJWT を `crypto` extra 付きで入れる。依存先は `kohaku.spec` と
@@ -546,7 +548,7 @@ jose と同じトークンに同じ判定を返す。sales サンプルの `KOHA
 
 `kohaku.domain_mcp` は `@kohaku-ui/domain-mcp` のミラーで、既存の MCP サーバーをホストの `DomainPort` にします。
 `annotations.read_only_hint is True` のツールは `query://` の op(結果は `TabularData`)、それ以外のツールは
-`tier="approve"` の Action(`tier_for` で上書き可)で、その `paramsSchema` は `inputSchema` を閉じた
+`tier="approve"` の Action(`tier_for` で上書き可。書き込みツールに `tier_for(tool) == "auto"` を返すと、ホストが読み取りの経路で拒否するのは `confirm` / `approve` の operation だけなので(SPEC ACT-RD-001)、`paramsSchema` の検査なしに `query://` の読み取り ref から到達できます)で、その `paramsSchema` は `inputSchema` を閉じた
 `ActionParamsSchema` の部分集合へ射影したものです(nullable な `Optional[X]` 形以外の `anyOf`、`oneOf`、`$ref`、`additionalProperties: true` を使う場合は付きません)。
 既存の `mcp` extra(`pip install 'kohaku-ui[mcp]'`)に含まれ、`mcp` 自体は import しません: 公式 SDK の `Client` を
 引数で渡します(`list_tools(cursor=...)` / `call_tool(name, arguments)` を持つ任意のオブジェクトで可)。
@@ -642,15 +644,9 @@ failed catalog/structure validation」という文言とは別物にし、この
   (`revision`、`validate_params`)は `getattr` で探ることが TS との違いである。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
-- **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
-  `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
-  フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
-  `schemaSuggested` / `schemaEdited` カウンタ(一方 analytics の `usage` 行、`l2ByIntent`、
-  `schemaEditsByComponent` は反映済み: `summarize_usage` と `summarize_lineage`、
-  design.md #74 / #73。`review` ブロックは引き続き未反映)、TS 側の rubric 0.4(Python の
-  `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
-  を欠く)、`storage-redis` / `storage-postgres` の本番アダプタ、
-  `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
+- **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):**
+  `storage-redis` / `storage-postgres` の本番アダプタ、
+  `admin-react`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に

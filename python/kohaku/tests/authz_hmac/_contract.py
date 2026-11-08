@@ -123,6 +123,16 @@ class AuthzPortContract:
 
         run(go())
 
+    def test_denies_a_token_holding_a_lone_surrogate_instead_of_raising(self) -> None:
+        async def go() -> None:
+            authz = self.make_port(FakeClock())
+            cap = await authz.issue_capability(PRINCIPAL, READ_X)
+            payload = cap.split(".")[0]
+            for bad in ("\ud800", f"{payload}.\ud800", f"\ud800{payload}.sig", f"{cap}\udfff"):
+                assert (await authz.verify(bad, REQ_X)).ok is False
+
+        run(go())
+
     def test_rejects_an_expired_capability(self) -> None:
         async def go() -> None:
             clock = FakeClock()
@@ -298,6 +308,21 @@ class ApprovalPortContract:
             token = await self._issue(approvals)
             assert not await self._verify(approvals, _tamper(token))
             assert not await self._verify(approvals, "not-a-token")
+
+        run(go())
+
+    def test_denies_a_token_holding_a_lone_surrogate_instead_of_raising(self) -> None:
+        async def go() -> None:
+            approvals = self.make_port(FakeClock())
+            token = await self._issue(approvals)
+            payload = token.split(".")[-2]
+            for bad in (
+                "\ud800",
+                token[: token.rfind(".") + 1] + "\ud800",
+                token.replace(payload, "\ud800" + payload, 1),
+                token + "\udfff",
+            ):
+                assert not await self._verify(approvals, bad)
 
         run(go())
 

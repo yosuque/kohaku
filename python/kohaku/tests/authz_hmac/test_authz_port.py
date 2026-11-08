@@ -534,3 +534,38 @@ class TestPreUpgradeTokenAndMalformedClaims:
             assert (result.ok, result.reason) == (False, "malformed payload")
 
         asyncio.run(run())
+
+
+class TestTenantLengthInUtf16CodeUnits:
+    """TS counts `String.length` (UTF-16 code units): an astral-plane character is 2 units."""
+
+    def test_an_astral_tenant_near_the_limit_is_counted_in_code_units(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("s")
+            req = VerifyRequest(kind="read", ref="query://s/x")
+            ok = "\U0001f600" * 128  # 128 characters = 256 code units: accepted
+            too_long = "\U0001f600" * 129  # 129 characters = 258 code units: rejected (like TS)
+            assert (await authz.verify(_signed_with("s", tenant=ok), req)).tenant == ok
+            denied = await authz.verify(_signed_with("s", tenant=too_long), req)
+            assert (denied.ok, denied.reason) == (False, "malformed payload")
+            await authz.issue_capability(PRINCIPAL, [], tenant=ok)
+            with pytest.raises(ValueError, match="tenant"):
+                await authz.issue_capability(PRINCIPAL, [], tenant=too_long)
+
+        asyncio.run(run())
+
+
+class TestHugeIntegerExp:
+    def test_an_integer_exp_too_large_for_a_float_is_malformed_not_an_exception(self) -> None:
+        async def run() -> None:
+            secret = "test-secret"
+            payload = b64url(b'{"sub":"u","scopes":[],"exp":1' + b"0" * 400 + b"}")
+            digest = hmac.new(
+                secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+            ).digest()
+            result = await create_hmac_authz_port(secret).verify(
+                f"{payload}.{b64url(digest)}", VerifyRequest(kind="read", ref="query://s/x")
+            )
+            assert (result.ok, result.reason) == (False, "malformed payload")
+
+        asyncio.run(run())

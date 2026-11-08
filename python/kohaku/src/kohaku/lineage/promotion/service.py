@@ -14,8 +14,9 @@ Differences from TS:
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -53,6 +54,7 @@ from .machine import (
     may_have_projection,
     transition,
 )
+from .suggestion import diff_draft
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,10 @@ class PromotionPolicy:
 
 
 DEFAULT_PROMOTION_POLICY = PromotionPolicy()
+
+DEFAULT_SUGGEST_CONCURRENCY = 4
+"""Default for `create_promotions`' `suggest_concurrency` (#15): at most this many `suggest_schema` extractions
+are in flight at once across one `evaluate_and_list` scan's freshly nominated candidates."""
 
 
 class PromotionNotPublishedError(Exception):
@@ -150,6 +156,38 @@ class PromotionCandidate:
     component.generated payload. Kept across every transition once captured (unlike html/sha256/ref,
     which are only copied onto the snapshot at publish time — origin is provenance, not a projection).
     Port of TS's PromotionOrigin (kept as a loose dict here, matching this port's wire-shaped style)."""
+    suggestion: dict[str, Any] | None = None
+    """Machine-extracted registration proposal (advisory; persisted on the snapshot as data["suggestion"]).
+    Port of TS's `PromotionCandidate.suggestion` (`kohaku.spec.SchemaSuggestion`), carried in its wire form (a
+    plain dict) like `verdict` / `origin`, so a malformed persisted value reaches the approve path's fail-open
+    handling instead of being rejected on load."""
+
+
+@dataclass(frozen=True)
+class SuggestContext:
+    """Context handed to the `suggest_schema` hook: the call-level tenant of `evaluate_and_list` (TS's
+    `TenantScope`), so the extractor can read only that tenant's reviewer corrections."""
+
+    tenant: str | None = None
+
+
+# The optional schema extraction hook (product responsibility, e.g. `kohaku.evals.create_schema_extractor`).
+# Returns a `kohaku.spec.SchemaSuggestion` (or its wire dict), or None for "no proposal".
+SuggestSchema = Callable[["PromotionCandidate", SuggestContext], Awaitable[Any]]
+
+
+def _suggestion_to_wire(value: Any) -> dict[str, Any]:
+    """Normalizes a `suggest_schema` result to the wire dict persisted on the snapshot."""
+    to_wire = getattr(value, "to_wire", None)
+    if callable(to_wire):
+        wire = to_wire()
+        if isinstance(wire, Mapping):
+            return dict(wire)
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(
+        f"suggest_schema must return a SchemaSuggestion, a mapping or None, got {type(value).__name__}"
+    )
 
 
 @dataclass(frozen=True)
@@ -200,6 +238,9 @@ PromotionErrorEndpoint = Literal[
     "promotion.reconcile.projection",
     "promotion.nominate.tenant",
     "promotion.nominate.audit",
+    "promotion.suggest.schema",
+    "promotion.suggest.audit",
+    "promotion.approve.audit",
     "storage.record.invalid",
 ]
 """The call sites create_promotions' on_error hook may fire from, named for the observability hook:
@@ -214,6 +255,10 @@ PromotionErrorEndpoint = Literal[
   transition to candidate is already persisted) failed for one nominated candidate. Unlike publish/unpublish's
   audit, there is currently no reconcile-style backfill for a missed component.nominated event, so the audit
   trail stays incomplete for that artifact until a manual fix.
+- promotion.suggest.schema: the optional suggest_schema hook (schema extraction) raised for one newly
+  nominated candidate; the candidate is nominated without a suggestion.
+- promotion.suggest.audit: the fail-open component.schemaSuggested audit record failed.
+- promotion.approve.audit: the fail-open component.schemaEdited audit record on the approve path failed.
 - storage.record.invalid: a promotion-state record read back from StoragePort.get_promotion_state
   (_load_candidate) failed kohaku.spec.validate_promotion_state (§4.3 A10 of the 2026-09 review — a
   corrupted or hand-edited promotions.json entry). The reader treats it exactly like a real absence (the
@@ -342,9 +387,13 @@ class Promotions:
         validate_publish: ValidatePublish | None = None,
         on_unpublish: OnUnpublish | None = None,
         judge: PromotionJudge | None = None,
+        suggest_schema: SuggestSchema | None = None,
+        suggest_concurrency: int = DEFAULT_SUGGEST_CONCURRENCY,
         clock: Clock = now_iso,
         on_error: OnError | None = None,
     ) -> None:
+        self._suggest_schema = suggest_schema
+        self._suggest_concurrency = suggest_concurrency
         self._lineage = lineage
         self._storage = storage
         self._on_error = on_error
@@ -437,6 +486,7 @@ class Promotions:
             sessions=sessions,
             verdict=state_data.get("verdict"),
             draft=(component_draft_from_wire(draft_wire) if isinstance(draft_wire, dict) else None),
+            suggestion=cast("dict[str, Any] | None", state_data.get("suggestion")),
             origin=origin,
             updatedAt=state.updatedAt if state is not None else generated[0].ts,
         )
@@ -451,6 +501,10 @@ class Promotions:
             data["verdict"] = candidate.verdict
         if candidate.draft is not None:
             data["draft"] = candidate.draft.to_wire()
+        # The advisory schema suggestion (promotion/suggestion.py). Kept across every transition once attached
+        # at nomination, so the approval UI can still prefill after a changes_requested round-trip.
+        if candidate.suggestion is not None:
+            data["suggestion"] = candidate.suggestion
         if candidate.request is not None:
             data["request"] = candidate.request
         # Generation provenance (kit / generatorVersion / model), captured once from the candidate's
@@ -603,6 +657,15 @@ class Promotions:
                 nominated_ids.add(_usage_index_key(record_tenant, artifact_id))
             candidates.append(candidate)
 
+        # Advisory schema extraction (fail-open), run with up to `suggest_concurrency` in flight at once across
+        # this scan's freshly nominated candidates rather than fully sequentially: this whole call runs inside
+        # the tenant's promotion governance mutex (host_rest's per-tenant promotion lock), so N sequential LLM
+        # calls would hold that lock for N x the extractor's own latency. Bounded rather than unbounded (#15).
+        # Still runs before _persist_many so every suggestion lands in the same snapshot write as its
+        # candidate's status transition (each call mutates its own candidate object in place).
+        if self._suggest_schema is not None:
+            await self._suggest_for(to_persist, tenant)
+
         # Every eligible candidate's status transition is now applied in memory; persist them all in a single
         # batch write (see _persist_many's doc for the SupportsBatchPromotionStates isinstance check / fallback).
         await self._persist_many(to_persist, tenant)
@@ -633,7 +696,60 @@ class Promotions:
                     e,
                 )
 
+        # Audit the advisory suggestion (if any), after component.nominated -- the same fail-open discipline: a
+        # storage hiccup here must not undo the already-persisted suggestion or stop auditing the rest of the
+        # batch.
+        for candidate in to_persist:
+            if candidate.suggestion is None:
+                continue
+            try:
+                await self._lineage.record(
+                    "component.schemaSuggested",
+                    {"artifactId": candidate.artifactId, "suggestion": candidate.suggestion},
+                    LineageActor(kind="model"),
+                    tenant,
+                )
+            except Exception as e:  # noqa: BLE001 — fail-open; see doc above
+                _notify_promotion_error(
+                    self._on_error,
+                    PromotionErrorContext(
+                        endpoint="promotion.suggest.audit",
+                        artifactId=candidate.artifactId,
+                        tenant=tenant,
+                    ),
+                    e,
+                )
+
         return sorted(candidates, key=lambda c: c.uses, reverse=True)
+
+    async def _suggest_for(self, to_persist: list[PromotionCandidate], tenant: str | None) -> None:
+        """Runs `suggest_schema` over the freshly nominated candidates with at most `suggest_concurrency` calls
+        in flight (port of nomination.ts's mapWithConcurrency + suggestFailOpen). A raise from one candidate's
+        extraction is reported via on_error(endpoint="promotion.suggest.schema") and treated as "no
+        suggestion", exactly like a None result, and never affects the others."""
+        hook = self._suggest_schema
+        assert hook is not None
+        # Never fewer than one worker: a non-positive limit is treated as 1, like TS.
+        semaphore = asyncio.Semaphore(max(1, self._suggest_concurrency))
+
+        async def one(candidate: PromotionCandidate) -> None:
+            async with semaphore:
+                try:
+                    result = await hook(candidate, SuggestContext(tenant=tenant))
+                    if result is not None:
+                        candidate.suggestion = _suggestion_to_wire(result)
+                except Exception as error:  # noqa: BLE001 — fail-open: advisory only
+                    _notify_promotion_error(
+                        self._on_error,
+                        PromotionErrorContext(
+                            endpoint="promotion.suggest.schema",
+                            artifactId=candidate.artifactId,
+                            tenant=tenant,
+                        ),
+                        error,
+                    )
+
+        await asyncio.gather(*(one(c) for c in to_persist))
 
     async def list_candidates(self, *, tenant: str | None = None) -> list[PromotionCandidate]:
         """Read-only candidate list (does neither auto-nominate nor persist).
@@ -893,15 +1009,70 @@ class Promotions:
                 "reason": f"judge could not run: {e}",
             }
 
+    async def _record_schema_edit(
+        self,
+        artifact_id: str,
+        suggestion: dict[str, Any],
+        draft: ComponentDraft,
+        reviewer: Principal,
+        tenant: str | None,
+        acknowledged_suggestion: bool,
+    ) -> None:
+        """Records `component.schemaEdited` (the reviewer's edits against the machine suggestion) on the approve
+        path, fail-open like the other audit records there (port of TS's recordSchemaEdit).
+
+        diff_draft is pure but not defensive: the persisted `data["suggestion"]` is carried as-is without
+        validation, so a suggestion that exists but is missing/malformed `draft` (a truncated write, a
+        hand-edited promotions.json, a future field rename) would otherwise raise here and propagate out of
+        approve() -- blocking the one thing this whole feature must never block, the publish. Report and skip
+        the diff instead.
+        """
+        try:
+            diff = diff_draft(suggestion.get("draft"), draft)
+            await self._lineage.record(
+                "component.schemaEdited",
+                {
+                    "artifactId": artifact_id,
+                    "reviewer": reviewer.id,
+                    "extractorId": suggestion.get("extractorId"),
+                    "extractorVersion": suggestion.get("extractorVersion"),
+                    "changed": diff["changed"],
+                    "unchanged": diff["unchanged"],
+                    # Recorded, not enforced: whether the reviewer ticked the acknowledgement checkbox for
+                    # *this* suggestion. Only present when the candidate actually carried a suggestion to
+                    # acknowledge (approve gates this call on that); a missing acknowledgedSuggestion in the
+                    # approve request is recorded as False, not omitted.
+                    "acknowledged": acknowledged_suggestion,
+                },
+                LineageActor(kind="user", id=reviewer.id),
+                tenant,
+            )
+        except Exception as e:  # noqa: BLE001 — fail-open; see doc above
+            _notify_promotion_error(
+                self._on_error,
+                PromotionErrorContext(
+                    endpoint="promotion.approve.audit", artifactId=artifact_id, tenant=tenant
+                ),
+                e,
+            )
+
     async def approve(
         self,
         artifact_id: str,
         draft: ComponentDraft,
         reviewer: Principal,
         tenant: str | None = None,
+        *,
+        acknowledged_suggestion: bool = False,
     ) -> PromotionCandidate:
         """Batch-execute the fixed transitions from candidate (or in_use / changes_requested / judge_failed) to
         published.
+
+        `acknowledged_suggestion` carries the reviewer's "I reviewed the machine suggestion" checkbox state
+        (host_rest's approve body field `acknowledgedSuggestion`) through to the `component.schemaEdited`
+        record's `acknowledged` field. It is recorded, not enforced: a missing/false value never blocks
+        approve/publish (LIN-PRM-001's own gate -- a human review.approve -- is unaffected either way); see
+        `summarize_lineage`'s `review.acceptedAsIs` for how it is used downstream.
 
         Recovery from changes_requested / judge_failed: a candidate sent back by review.requestChanges, or one
         that stopped at judge_failed (a blocking judge failure), is also returned to candidate and rejoins the
@@ -976,6 +1147,19 @@ class Promotions:
             )
         if candidate.status == "approved":
             candidate = await self.act(artifact_id, SchemaPropose(draft=draft), reviewer, tenant)
+            # Reviewer edits against the machine suggestion (advisory prefill). Recorded here, next to
+            # component.schemaProposed, because this is the first point where both the suggestion (persisted at
+            # nomination) and the final draft (this approve's argument) are known. Fail-open like the other
+            # audit records on this path: a storage hiccup must not stop the publish below.
+            if candidate.suggestion is not None:
+                await self._record_schema_edit(
+                    artifact_id,
+                    candidate.suggestion,
+                    draft,
+                    reviewer,
+                    tenant,
+                    acknowledged_suggestion,
+                )
         if candidate.status == "schema_proposed":
             candidate = await self.act(
                 artifact_id, Publish(version=draft.version), reviewer, tenant
@@ -1244,6 +1428,8 @@ def create_promotions(
     validate_publish: ValidatePublish | None = None,
     on_unpublish: OnUnpublish | None = None,
     judge: PromotionJudge | None = None,
+    suggest_schema: SuggestSchema | None = None,
+    suggest_concurrency: int = DEFAULT_SUGGEST_CONCURRENCY,
     clock: Clock | None = None,
     on_error: OnError | None = None,
 ) -> Promotions:
@@ -1255,6 +1441,8 @@ def create_promotions(
         validate_publish=validate_publish,
         on_unpublish=on_unpublish,
         judge=judge,
+        suggest_schema=suggest_schema,
+        suggest_concurrency=suggest_concurrency,
         clock=clock if clock is not None else now_iso,
         on_error=on_error,
     )

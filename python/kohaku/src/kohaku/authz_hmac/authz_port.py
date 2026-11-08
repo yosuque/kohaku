@@ -33,8 +33,8 @@ from kohaku.spec import (
 from .revocation_store import create_memory_revocation_store
 from .time import is_expired, now_seconds
 
-# Longest tenant claim `issue_capability` signs and `verify` accepts (TS: MAX_CAPABILITY_TENANT_LENGTH, in
-# UTF-16 code units; identical for the BMP identifiers this is meant for).
+# Longest tenant claim `issue_capability` signs and `verify` accepts (TS: MAX_CAPABILITY_TENANT_LENGTH), counted
+# in UTF-16 code units like TS's `String.length` (an astral-plane character counts as 2).
 MAX_CAPABILITY_TENANT_LENGTH = 256
 
 
@@ -48,10 +48,23 @@ def b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def is_utf8_encodable(s: str) -> bool:
+    """False for a str holding a lone surrogate (which ``str.encode("utf-8")`` rejects). TS encodes such a token
+    with a replacement character, so its signature simply does not match; a token that cannot be encoded must
+    likewise be a denial here, never an exception."""
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def is_valid_tenant_claim(tenant: str) -> bool:
     """A tenant claim is a short identifier: at most 256 characters and no control characters (SPEC
     CAP-TEN-001), the same rule as TS's isValidTenantClaim."""
-    return len(tenant) <= MAX_CAPABILITY_TENANT_LENGTH and not any(
+    return len(
+        tenant.encode("utf-16-le", errors="surrogatepass")
+    ) // 2 <= MAX_CAPABILITY_TENANT_LENGTH and not any(
         ord(ch) < 0x20 or ord(ch) == 0x7F for ch in tenant
     )
 
@@ -59,7 +72,12 @@ def is_valid_tenant_claim(tenant: str) -> bool:
 def _is_number(value: object) -> bool:
     """A finite JSON number (not a bool). ``json.loads`` accepts NaN / Infinity and ``NaN <= now`` is False:
     without the finiteness check a NaN ``exp`` would never expire. Mirrors TS's ``Number.isFinite``."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an int too large for a float: TS would have parsed it as Infinity
+        return False
 
 
 def _claims_well_formed(value: object) -> bool:
@@ -134,6 +152,8 @@ class HmacAuthzPort:
         # The signature is verified against the received payload string itself (not re-serialized), so an
         # externally (TS) issued token verifies. Compare bytes: compare_digest on two str raises TypeError for
         # a non-ASCII value.
+        if not (is_utf8_encodable(signature) and is_utf8_encodable(payload)):
+            return None, "invalid signature"
         if not hmac.compare_digest(signature.encode("utf-8"), self._sign(payload).encode("utf-8")):
             return None, "invalid signature"
 
@@ -251,6 +271,9 @@ def create_hmac_authz_port(
     generate_jti: Callable[[], str] | None = None,
 ) -> HmacAuthzPort:
     """Creates the HMAC capability AuthzPort (TS: createHmacAuthzPort).
+
+    ``now`` and ``generate_jti`` are TEST-ONLY injection points (TS has none): never set them in production -- a
+    non-random ``generate_jti`` collides jti values, which breaks revocation, and a skewed ``now`` shifts every expiry.
 
     ``ttl_seconds``: default capability lifetime when `issue_capability` is given none (600).
     ``revocation``: the store consulted by `verify` / `revoke_capability` for pre-expiry revocation; defaults to

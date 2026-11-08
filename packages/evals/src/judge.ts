@@ -130,11 +130,8 @@ export const l2PromotionRubric: Rubric = {
  * the whole of `suggestion_fidelity`'s 0.1 weight out of (and, symmetrically, back into) `schema_inferability`
  * alone, leaving every other criterion's weight unchanged between the two versions.
  *
- * **Cross-language note:** this is currently also the Python port's live default rubric. The Python mirror
- * (`kohaku.evals.judge.l2_promotion_rubric`) is still at version "0.3" and has not been updated to match this
- * file's "0.4" rebalance (`suggestion_fidelity` does not exist on the Python side at all yet) — the two
- * languages' "current" promotion rubrics currently disagree, an open cross-language gap this note exists to
- * make visible rather than silently drift further.
+ * Mirrored in Python as `kohaku.evals.judge.l2_promotion_rubric_v0_3`; both languages' current rubric is
+ * version "0.4", and the judge's prompt text is pinned by the cross-language golden (`judgePrompts`).
  *
  * Sibling of `l2PromotionRubricV0_1`/`l2PromotionRubricV0_2` below (the same pinning strategy, one
  * version further along).
