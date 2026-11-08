@@ -299,6 +299,31 @@ describe("staleness detection of fixation (host-rest /compose)", () => {
     expect(errors.map((e) => e.endpoint)).toContain("fixation.check");
   });
 
+  it("/fixations/approve answers 409 CONFLICT when lineage refuses to pin a fixation delivery whose fixation vanished", async () => {
+    const spy = spyFixations();
+    const gone = Object.assign(new Error("a fixation delivery cannot be fixated again"), {
+      name: "FixationNotAllowedError",
+      reason: "fixated-delivery",
+    });
+    const fixations: FixationsApi = {
+      ...spy.api,
+      async fixate() {
+        throw gone;
+      },
+    };
+    const app = createKohakuRoutes({
+      ...deps(await makeFixation(validPinned()), fixations),
+      fixationLookup: async () => null,
+    });
+    const res = await app.request("/fixations/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ intent: { canonical: "sales.trend", params: {} } }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CONFLICT");
+  });
+
   it("drift-stale (resolved-URI set drifts even with a fingerprint match) calls invalidate('stale') and falls back to normal compose", async () => {
     const spy = spyFixations();
     // At fixation time 2 refs were resolved (REF + an old URI), but the stub's resolveQuery returns only the current REF.

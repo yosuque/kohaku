@@ -1453,3 +1453,89 @@ def test_an_l1_pin_with_binds_whose_describe_filters_raises_is_not_invalidated_a
         for f in harness.client.get(_url("/fixations")).json()["fixations"]
     )
     assert "fixation.check" in [i.endpoint for i in seen]
+
+
+def _injected_pin(harness: Any) -> str:
+    """Approve a fixation through the route, then give its (L1) pinned Spec injected-style binds."""
+    from kohaku.spec import UISpec, compute_structure_hash
+
+    harness.client.post(_url("/compose"), json={"intent": INTENT_BODY})
+    approve = harness.client.post(_url("/fixations/approve"), json={"intent": INTENT_BODY})
+    assert approve.status_code == 200
+    intent_hash: str = approve.json()["fixation"]["intentHash"]
+    fixation = asyncio.run(harness.storage.get_fixation(intent_hash, None))
+    assert fixation is not None and fixation.pinnedSpec.provenance.tier == "L1"
+    wire = fixation.pinnedSpec.to_wire()
+    for c in wire["components"]:
+        if c["type"] == "presentSpreadsheet":
+            c["data"]["bind"] = {
+                "groupBy": {"$state": "groupBy", "values": ["region", "product", "channel"]}
+            }
+    wire["state"] = {"groupBy": "region"}
+    pinned = UISpec.model_validate(wire)
+    asyncio.run(
+        harness.storage.put_fixation(
+            dataclasses.replace(
+                fixation, pinnedSpec=pinned, structureHash=compute_structure_hash(pinned)
+            )
+        )
+    )
+    return intent_hash
+
+
+def test_re_approving_a_fixated_intent_does_not_launder_the_l1_pin_into_l0(tmp_path: Path) -> None:
+    """fixate, re-fixate (idempotent), narrow the descriptor -> the L1 pin is stale (port of the host-rest
+    fixation-refixate.test.ts case)."""
+    from kohaku.spec import FilterDescriptor, FilterOption
+
+    harness = build_harness(tmp_path)
+    intent_hash = _injected_pin(harness)
+    first = asyncio.run(harness.storage.get_fixation(intent_hash, None))
+    assert first is not None
+
+    options = [
+        FilterOption("region", "R"),
+        FilterOption("product", "P"),
+        FilterOption("channel", "C"),
+    ]
+
+    def descriptor(opts: list[FilterOption]) -> FilterDescriptor:
+        return FilterDescriptor(
+            param="groupBy", queryParam="groupBy", paths=["summary"], label="G", options=opts
+        )
+
+    async def full(*_a: Any, **_k: Any) -> list[FilterDescriptor]:
+        return [descriptor(options)]
+
+    async def narrowed(*_a: Any, **_k: Any) -> list[FilterDescriptor]:
+        return [descriptor(options[:2])]
+
+    harness.ctx.semantic.describe_filters = full  # type: ignore[attr-defined]
+
+    again = harness.client.post(_url("/fixations/approve"), json={"intent": INTENT_BODY})
+    assert again.status_code == 200
+    assert again.json()["fixation"]["revision"] == first.revision
+    stored = asyncio.run(harness.storage.get_fixation(intent_hash, None))
+    assert stored is not None and stored.pinnedSpec.provenance.tier == "L1"
+
+    harness.ctx.semantic.describe_filters = narrowed  # type: ignore[attr-defined]
+    spec = harness.client.post(_url("/compose"), json={"intent": INTENT_BODY}).json()["spec"]
+    assert spec["provenance"]["cache"] != "fixated"
+    assert asyncio.run(harness.storage.get_fixation(intent_hash, None)) is None
+
+
+def test_fixations_approve_answers_409_when_lineage_refuses_to_pin_a_vanished_delivery(
+    tmp_path: Path,
+) -> None:
+    from kohaku.lineage import FixationNotAllowedError
+
+    harness = build_harness(tmp_path)
+
+    async def _refuse(*_a: Any, **_k: Any) -> None:
+        raise FixationNotAllowedError("fixated-delivery", "gone")
+
+    assert harness.deps.fixations is not None
+    harness.deps.fixations.fixate = _refuse  # type: ignore[method-assign]
+    res = harness.client.post(_url("/fixations/approve"), json={"intent": INTENT_BODY})
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "CONFLICT"

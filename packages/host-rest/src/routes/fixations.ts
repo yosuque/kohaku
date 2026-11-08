@@ -139,6 +139,18 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
         // fixate is an unconditional overwrite so it cannot lose a compare-and-set race itself, but a
         // wrapped port may still raise one; answer it with the contract's CONFLICT rather than a 500.
         if (isStorageConflictError(e)) return storageConflictResponse(c, deps, e);
+        // lineage's FixationNotAllowedError("fixated-delivery") (discriminated structurally: depending on lineage
+        // is forbidden): the intent was already fixated when the candidate was composed and the fixation was
+        // removed before it could be returned unchanged, so a pin must not be made from the delivery. Retryable.
+        if (
+          (e as { name?: unknown }).name === "FixationNotAllowedError" &&
+          (e as { reason?: unknown }).reason === "fixated-delivery"
+        ) {
+          return c.json(
+            errorBody("CONFLICT", "the fixation changed while it was being approved; retry", requestId),
+            409,
+          );
+        }
         await reportHostError(deps, call.endpoint, call.requestId, e);
         // An arbitrary exception's message never reaches the client (it may leak internals); a typed host error
         // (SpecError/ComposeError) still passes its own message through. The original error still reaches

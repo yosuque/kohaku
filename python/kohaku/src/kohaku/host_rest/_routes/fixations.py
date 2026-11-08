@@ -134,6 +134,18 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 )
             return _json({"fixation": record})
         except BaseException as e:
+            # lineage's FixationNotAllowedError("fixated-delivery"): the intent was already fixated when the
+            # candidate was composed and the fixation was removed before it could be returned unchanged, so a
+            # pin must not be made from the delivery. Retryable.
+            if getattr(e, "name", None) == "FixationNotAllowedError" and (
+                getattr(e, "reason", None) == "fixated-delivery"
+            ):
+                return _error(
+                    "CONFLICT",
+                    "the fixation changed while it was being approved; retry",
+                    409,
+                    request_id,
+                )
             await report_host_error(deps, "fixations/approve", request_id, e)
             # An arbitrary exception's message never reaches the client (it may leak internals); a typed host
             # error (SpecError/ComposeError/etc.) still passes its own message through.

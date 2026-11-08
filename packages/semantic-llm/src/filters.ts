@@ -66,20 +66,20 @@ function currentValue(filter: FilterDescriptor, handles: readonly QueryHandle[])
  * combination (or a facet option the schema does not accept) would otherwise be reachable through a filter.
  *
  *  0. The Intent's own params are validated first (`check`); rejected params offer no filters.
- *  1. A filter the composer would NOT inject is dropped: no ref of the Intent carries its query param on its
- *     `paths`, the carriers disagree, or the carried value is not among its options (injectFilters' skip rule).
- *     Such a param stays at its un-vetted value in the signed product, so the product below must not range
- *     over it; the vetted product is exactly the signed one.
- *  2. Each remaining option is validated on its own: `check({ ...params, [param]: option })`; a rejected option
- *     is dropped.
+ *  1. Each option is validated on its own: `check({ ...params, [param]: option })`; a rejected option is dropped.
+ *  2. A filter the composer would NOT inject is dropped: no ref of the Intent carries its query param on its
+ *     `paths`, the carriers disagree, or the carried value is not among its (vetted) options (injectFilters'
+ *     skip rule). Such a param stays at its un-vetted value in the signed product, so the product below must
+ *     not range over it.
  *  3. A filter left with fewer than 2 options is dropped (nothing to choose).
  *  4. The cartesian product of what remains (bounded by `maxVariants`) is validated the same way. If any
  *     combination fails, or the product exceeds the budget (not provable), NO filter is returned for the
  *     Intent -- fail-safe, never worse than not injecting.
  *
- * The budget counts the product over ALL remaining filters, a superset of any one component's product that
- * the composer counts (its `totalVariants` is a per-component product summed over components): it is
- * deliberately conservative.
+ * The vetted product is a SUPERSET of the signed product (the composer may still skip a filter for its own
+ * reasons, e.g. an id collision, which only shrinks what is signed), and every combination in it is validated.
+ * The budget counts it over ALL remaining filters, a superset of any one component's product that the composer
+ * counts (its `totalVariants` is a per-component product summed over components): deliberately conservative.
  */
 export function vetFilters(
   def: IntentDef,
@@ -98,12 +98,14 @@ export function vetFilters(
   }
   const accepts = (overrides: Record<string, string>): boolean => check({ ...base, ...overrides }) != null;
 
+  // Per-option vetting first, then injectFilters' own rule on what is left: the composer sees the vetted
+  // options, so the carried value must still be among them (and the filter must still have a choice).
   const vetted = filters
+    .map((f) => ({ ...f, options: f.options.filter((o) => accepts({ [f.param]: o.value })) }))
     .filter((f) => {
       const value = currentValue(f, handles);
       return value != null && f.options.some((o) => o.value === value);
     })
-    .map((f) => ({ ...f, options: f.options.filter((o) => accepts({ [f.param]: o.value })) }))
     .filter((f) => f.options.length >= 2);
   if (vetted.length === 0) return vetted;
 

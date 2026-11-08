@@ -76,19 +76,20 @@ def vet_filters(
 
     0. The Intent's own params are validated first (`check`, default the bare schema); rejected params offer
        no filters.
-    1. A filter the composer would NOT inject is dropped: no ref of the Intent carries its query param on its
-       `paths`, the carriers disagree, or the carried value is not among its options (inject_filters' skip
-       rule). Such a param stays at its un-vetted value in the signed product, so the product below must not
-       range over it; the vetted product is exactly the signed one.
-    2. Each remaining option is validated on its own: `check({**params, param: option})`; a rejected option is
-       dropped.
+    1. Each option is validated on its own: `check({**params, param: option})`; a rejected option is dropped.
+    2. A filter the composer would NOT inject is dropped: no ref of the Intent carries its query param on its
+       `paths`, the carriers disagree, or the carried value is not among its (vetted) options (inject_filters'
+       skip rule). Such a param stays at its un-vetted value in the signed product, so the product below must
+       not range over it.
     3. A filter left with fewer than 2 options is dropped (nothing to choose).
     4. The cartesian product of what remains (bounded by `max_variants`) is validated the same way. If any
        combination fails, or the product exceeds the budget (not provable), NO filter is returned for the
        Intent -- fail-safe, never worse than not injecting.
 
-    The budget counts the product over ALL remaining filters, a superset of any one component's product that
-    the composer counts (its `totalVariants` is a per-component product summed over components): it is
+    The vetted product is a SUPERSET of the signed product (the composer may still skip a filter for its own
+    reasons, e.g. an id collision, which only shrinks what is signed), and every combination in it is
+    validated. The budget counts it over ALL remaining filters, a superset of any one component's product that
+    the composer counts (its `totalVariants` is a per-component product summed over components):
     deliberately conservative.
     """
     validate = check if check is not None else params_check_for(None, def_)
@@ -103,14 +104,16 @@ def vet_filters(
     def accepts(overrides: dict[str, str]) -> bool:
         return validate({**base, **overrides}) is not None
 
-    governed = [
-        f
-        for f in filters
-        if (value := _current_value(f, handles)) is not None
-        and any(o.value == value for o in f.options)
+    # Per-option vetting first, then inject_filters' own rule on what is left: the composer sees the vetted
+    # options, so the carried value must still be among them (and the filter must still have a choice).
+    vetted = [
+        replace(f, options=[o for o in f.options if accepts({f.param: o.value})]) for f in filters
     ]
     vetted = [
-        replace(f, options=[o for o in f.options if accepts({f.param: o.value})]) for f in governed
+        f
+        for f in vetted
+        if (value := _current_value(f, handles)) is not None
+        and any(o.value == value for o in f.options)
     ]
     vetted = [f for f in vetted if len(f.options) >= 2]
     if len(vetted) == 0:
