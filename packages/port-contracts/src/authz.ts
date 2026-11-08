@@ -86,6 +86,14 @@ export function describeAuthzPortContract<P extends AuthzPort = AuthzPort>(
       expect((await authz.verify("not-a-token", { kind: "read", ref: "query://s/x" })).ok).toBe(false);
     });
 
+    it("denies a token holding a lone surrogate instead of throwing", async () => {
+      const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }]);
+      const payload = cap.split(".")[0] as string;
+      for (const bad of ["\ud800", `${payload}.\ud800`, `\ud800${payload}.sig`, `${cap}\udfff`]) {
+        expect((await authz.verify(bad, { kind: "read", ref: "query://s/x" })).ok).toBe(false);
+      }
+    });
+
     it("rejects an expired capability", async () => {
       const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
         ttlSeconds: 1,

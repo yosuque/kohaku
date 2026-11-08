@@ -15,10 +15,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from kohaku.authz_hmac import create_hmac_authz_port
 from kohaku.spec import IntentInput, LineageFilter, compute_intent_hash
 from kohaku.storage import FileStoragePort
 from sales_api.app import SalesApp, create_app
-from sales_api.authz_port import create_hmac_authz_port
 from sales_api.fake_llm import create_deterministic_fake_llm
 
 # A real Intent from sales-api's catalog whose `metric` param is a closed enum (revenue/units).

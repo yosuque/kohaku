@@ -101,8 +101,8 @@ STEPS
 1. DomainPort (kohaku.spec): list_operations() and invoke(op, args, ctx) wrap EXISTING data access.
 2. The Python library has no one-call facade, so write the other Ports by hand, following
    https://github.com/yosuque/kohaku/tree/main/python/examples/sales-api/src/sales_api/ :
-   authz_port.py (HmacAuthzPort: fail when the secret is unset, do not copy its dev
-   fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
+   __main__.py (kohaku.authz_hmac.create_hmac_authz_port(secret): fail when the secret is unset,
+   do not copy its dev fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
    (define_intent from kohaku.intents), fixed_specs.py (L0 Specs: no model, no key).
    Storage: kohaku.storage.FileStoragePort.
 3. Compose context: ComposeContext(catalog=resolve_catalog(core_catalog()), semantic=...,
@@ -147,6 +147,8 @@ python/
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
 │  │  ├─ evals/            # ← packages/evals(judge / スキーマ抽出 / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
+│  │  ├─ authz_hmac/       # ← packages/authz-hmac(jti 失効つきの HMAC capability AuthzPort と、approval
+│  │  │                    #   トークンの ApprovalPort。TS のファイルごとに 1 モジュール、依存先は spec のみ)
 │  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
 │  │  │                    #   (← intent.ts)+ allowed_actions.py(← allowed-actions.ts)+
 │  │  │                    #   action_effects.py(← action-effects.ts)+ view_recorder.py
@@ -502,17 +504,25 @@ canonical-JSON sha256 である。`packages/spec-core/src/action-params.ts` に�
 `ApprovalIssuedRecorder.approval_issued` フックで、`getattr` で探すため、これを持たない recorder は
 飛ばされる。
 
-ステートレスな HMAC `ApprovalPort` の参照実装(`HmacApprovalPort` / `create_hmac_approval_port` /
-`MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v2."` prefix の
-トークン)は、共有の `kohaku` ライブラリではなく
-`python/examples/sales-api/src/sales_api/approval_port.py` に置かれている — `sales_api/authz_port.py`
-がすでに HMAC `AuthzPort`/capability トークン対を置いているのと同じ場所である。これは、この port が
-Python 側ではそもそも独立パッケージ境界を持たないため(TS の多パッケージ構成と異なり、Python は
-参照*アダプタ*をサンプルアプリの一部として移植しており、個別にインポート可能なパッケージとしては
-移植していない)。`python/examples/sales-api` の `annotate`(`"confirm"` tier)と `publish`
-(`"approve"` tier)operation、および `sales_api_tests/test_governed_actions.py` /
-`test_approval_port.py` は、TS サンプル自身の統制された Action デモを写している(全体の手順は
-[ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。
+HMAC の参照 port は、ライブラリの `kohaku.authz_hmac`(TS の `packages/authz-hmac` のミラーで、依存先は
+`kohaku.spec` のみ)にある。`create_hmac_authz_port(secret, *, require_jti=False, require_tenant=False,
+revocation=None)` は capability トークン(claim は `sub / scopes / exp / jti [/ tenant]`)を発行・検証し、
+`revoke_capability` を提供する(`CapabilityRevocationStore` を背後に持ち、既定は
+`create_memory_revocation_store()`。`CapabilityRevocationStore` と `RevokeCapabilityResult` は TS の
+spec-core と同じく `kohaku.spec` で定義する)。`create_hmac_approval_port(secret, *, store=None)` は
+ステートレスな `ApprovalPort` である(`"kohaku-approval.v2."` prefix のトークン、秘密鍵から導出した MAC 鍵、
+TTL の上限での切り詰め、自己承認の拒否、`create_memory_approval_store()` を渡したときの 1 回限りの使用)。
+どちらも TS の port とバイト単位で wire 互換であり、言語間 golden の `authzHmac` セクションが、TS が発行した
+capability と approval のトークン一式を固定して、Python の port が検証でき、同一の文字列を再発行できることを
+保証する。さらに、TS の AuthzPort / ApprovalPort / revocation store の契約テスト群の Python 版
+(`python/kohaku/tests/authz_hmac/_contract.py`)も通る。テストと golden で固定できるよう、port は `now` と
+`generate_jti` を**テスト専用**の注入点として受け取る(TS は壁時計と `randomBytes` を直接参照する)。本番では
+決して設定しないこと(乱数でない `generate_jti` は jti が衝突して失効と 1 回限りの承認を壊し、ずれた `now` は
+あらゆる期限をずらす)。TS と同じく、ファクトリは秘密鍵を必須とし、開発用の fallback を与えるのは sales
+サンプルの入口だけである(`KOHAKU_CAPABILITY_SECRET`)。`python/examples/sales-api` の
+`annotate`(`"confirm"` tier)と `publish`(`"approve"` tier)operation、および
+`sales_api_tests/test_governed_actions.py` は、TS サンプル自身の統制された Action デモを写している(全体の
+手順は[ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。
 
 ## MCP サーバーを DomainPort にする(`kohaku.domain_mcp`、TS と対称)
 
@@ -615,7 +625,6 @@ failed catalog/structure validation」という文言とは別物にし、この
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):**
-  `CapabilityRevocationStore` と jti ベースの capability 失効、
   `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、
   `admin-react`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。

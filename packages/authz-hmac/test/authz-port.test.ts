@@ -222,9 +222,10 @@ describe("createHmacAuthzPort tenant claim (SPEC CAP-TEN-001)", () => {
 });
 
 describe("createHmacAuthzPort cross-language wire token (SPEC CAP-TEN-001)", () => {
-  // The identical literal is verified by the Python test python/examples/sales-api/sales_api_tests/
-  // test_authz_port.py ("TS-issued wire token"): payload {sub, scopes, exp, jti, tenant}, HMAC-SHA256 over the
-  // payload string, secret "interop-secret".
+  // The identical literal is verified by the Python test python/kohaku/tests/authz_hmac/test_authz_port.py
+  // ("TS-issued wire token"): payload {sub, scopes, exp, jti, tenant}, HMAC-SHA256 over the payload string,
+  // secret "interop-secret". The byte-level issue-side golden for the current Python port (`authzHmac` in
+  // spec/test/fixtures/cross-language-canonical.json) is asserted by spec/test/cross-language.test.ts.
   const WIRE_TOKEN =
     "eyJzdWIiOiJpbnRlcm9wLXVzZXIiLCJzY29wZXMiOlt7ImtpbmQiOiJyZWFkIiwicmVmIjoicXVlcnk6Ly9zYWxlcy9zdW1tYXJ5P2Z5PTIwMjYifV0sImV4cCI6NDEwMjQ0NDgwMCwianRpIjoiaW50ZXJvcC1qdGkiLCJ0ZW5hbnQiOiJhY21lIn0.pT4L2fW_JAjOiuJ-e6S_kuhepszrDrl7fJZwHhY6hj4";
 
@@ -294,9 +295,10 @@ describe("createHmacAuthzPort tenant claim validation and the Python-issued wire
     );
   });
 
-  it("verifies a token issued by the Python sales-api port (secret interop-secret, tenant acme)", async () => {
-    // Issued by python/examples/sales-api's HmacAuthzPort (no jti; claims sub/scopes/exp/tenant), which
-    // test_authz_port.py verifies back -- together the two literals make the interop bidirectional.
+  it("verifies a jti-less token with the tenant claim, as the former Python sales-api port issued (secret interop-secret, tenant acme)", async () => {
+    // Issued by the Python sales-api port before it moved into kohaku.authz_hmac (no jti; claims
+    // sub/scopes/exp/tenant). Kept as a regression for the pre-upgrade (jti-less) shape; the current Python
+    // port's issued bytes are pinned by the `authzHmac` cross-language golden instead.
     const token =
       "eyJzdWIiOiJweS11c2VyIiwic2NvcGVzIjpbeyJraW5kIjoicmVhZCIsInJlZiI6InF1ZXJ5Oi8vc2FsZXMvc3VtbWFyeT9meT0yMDI2In1dLCJleHAiOjQxMDI0NDQ4MDAsInRlbmFudCI6ImFjbWUifQ.vf71x9NdeJ2ilagq-UuWcnUBzwzfT6zuFCqA8q-sKEk";
     const authz = createHmacAuthzPort("interop-secret");

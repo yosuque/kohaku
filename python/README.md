@@ -105,8 +105,8 @@ STEPS
 1. DomainPort (kohaku.spec): list_operations() and invoke(op, args, ctx) wrap EXISTING data access.
 2. The Python library has no one-call facade, so write the other Ports by hand, following
    https://github.com/yosuque/kohaku/tree/main/python/examples/sales-api/src/sales_api/ :
-   authz_port.py (HmacAuthzPort: fail when the secret is unset, do not copy its dev
-   fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
+   __main__.py (kohaku.authz_hmac.create_hmac_authz_port(secret): fail when the secret is unset,
+   do not copy its dev fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
    (define_intent from kohaku.intents), fixed_specs.py (L0 Specs: no model, no key).
    Storage: kohaku.storage.FileStoragePort.
 3. Compose context: ComposeContext(catalog=resolve_catalog(core_catalog()), semantic=...,
@@ -151,6 +151,8 @@ python/
 │  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
 │  │  ├─ evals/            # ← packages/evals (judge / schema extractor / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
+│  │  ├─ authz_hmac/       # ← packages/authz-hmac (HMAC capability AuthzPort with jti revocation + the
+│  │  │                    #   approval-token ApprovalPort; one module per TS file, depends on spec only)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
 │  │  │                    #   (← intent.ts) + allowed_actions.py (← allowed-actions.ts) +
 │  │  │                    #   action_effects.py (← action-effects.ts) + view_recorder.py
@@ -539,15 +541,23 @@ in the same request) and `"approve"` (a bound `ApprovalPort.verify_approval` tok
 event (recorded by `POST /approvals`, actor = the approver) is the optional
 `ApprovalIssuedRecorder.approval_issued` hook, looked up with `getattr` so a recorder without it is skipped.
 
-The stateless HMAC `ApprovalPort` reference implementation (`HmacApprovalPort` /
-`create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v2."`-prefixed token TS's
-`packages/authz-hmac` package ships) lives in `python/examples/sales-api/src/sales_api/approval_port.py`
-rather than in the shared `kohaku` library — the same place `sales_api/authz_port.py` already keeps the
-HMAC `AuthzPort`/capability-token counterpart, since this port has no standalone-package boundary on the
-Python side to begin with (unlike TS's many-packages layout, Python ports the reference *adapters* as
-part of the sample app, not as separately importable packages). `python/examples/sales-api`'s `annotate`
-(`"confirm"` tier) and `publish` (`"approve"` tier) operations, and `sales_api_tests/test_governed_actions.py`
-/ `test_approval_port.py`, mirror the TS sample's own governed-actions demo (see the [user
+The HMAC reference ports live in the library as `kohaku.authz_hmac` (the mirror of TS's `packages/authz-hmac`,
+depending on `kohaku.spec` only): `create_hmac_authz_port(secret, *, require_jti=False, require_tenant=False,
+revocation=None)` issues and verifies the capability token (claims `sub / scopes / exp / jti [/ tenant]`) and
+exposes `revoke_capability` (backed by a `CapabilityRevocationStore`, default `create_memory_revocation_store()`;
+`CapabilityRevocationStore` and `RevokeCapabilityResult` are defined in `kohaku.spec`, like TS's spec-core);
+`create_hmac_approval_port(secret, *, store=None)` is the stateless `ApprovalPort` (the `"kohaku-approval.v2."`-prefixed
+token, a MAC key derived from the secret, the TTL clamped to a maximum, self-approval refused, single use when
+given `create_memory_approval_store()`). Both are wire-compatible with the TS ports byte for byte — the
+`authzHmac` section of the cross-language golden pins a TS-issued capability and approval token set that the Python
+port verifies and re-issues identically — and both pass the Python mirrors of the TS AuthzPort / ApprovalPort /
+revocation-store contract suites (`python/kohaku/tests/authz_hmac/_contract.py`). The ports also take
+`now` and `generate_jti` (TS reads the wall clock and `randomBytes` directly) as **test-only** injection points so
+tests and the golden can pin them: never set them in production (a non-random `generate_jti` collides jti values,
+which breaks revocation and single-use approvals, and a skewed `now` shifts every expiry). As in TS the factories
+require a secret; only the sales sample's entry points supply a dev fallback (`KOHAKU_CAPABILITY_SECRET`). `python/examples/sales-api`'s
+`annotate` (`"confirm"` tier) and `publish` (`"approve"` tier) operations, and
+`sales_api_tests/test_governed_actions.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
 
 ## MCP server as a DomainPort (`kohaku.domain_mcp`, symmetric with TS)
@@ -660,7 +670,6 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
-  `CapabilityRevocationStore` and jti-based capability revocation;
   the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
   and `admin-react`. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
