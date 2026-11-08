@@ -142,6 +142,10 @@ python/
 │  │  ├─ composer/         # ← packages/composer (L0/L1/L2 / single-flight / repair loop; unlike TS,
 │  │  │                    #   the tier ladder + single-flight + result assembly are not split out of
 │  │  │                    #   compose.py into separate modules — same behavior, coarser file layout)
+│  │  ├─ domain_mcp/       # ← packages/domain-mcp (an MCP server as a DomainPort: port.py,
+│  │  │                    #   schema_projection.py, coerce.py, tabular.py, shape.py, intents.py,
+│  │  │                    #   data_version.py, types.py; the MCP client is passed in, `mcp` is not
+│  │  │                    #   imported here; see "MCP server as a DomainPort" below)
 │  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation);
 │  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
 │  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
@@ -545,6 +549,31 @@ part of the sample app, not as separately importable packages). `python/examples
 (`"confirm"` tier) and `publish` (`"approve"` tier) operations, and `sales_api_tests/test_governed_actions.py`
 / `test_approval_port.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
+
+## MCP server as a DomainPort (`kohaku.domain_mcp`, symmetric with TS)
+
+`kohaku.domain_mcp` mirrors `@kohaku-ui/domain-mcp`: an existing MCP server becomes the host's `DomainPort`. A tool
+with `annotations.read_only_hint is True` is a `query://` op (the result becomes `TabularData`); every other tool is
+an Action with `tier="approve"` (`tier_for` overrides) whose `paramsSchema` is its `inputSchema` projected onto the
+closed `ActionParamsSchema` subset (or absent when it uses an `anyOf` other than the nullable `Optional[X]` form, `oneOf`, `$ref` or `additionalProperties: true`).
+It lives under the existing `mcp` extra (`pip install 'kohaku-ui[mcp]'`) and imports nothing from `mcp` itself: the
+official SDK's `Client` is passed in (any object with `list_tools(cursor=...)` / `call_tool(name, arguments)` works).
+
+```python
+from mcp import Client
+from kohaku.domain_mcp import create_mcp_domain_port, create_mcp_intents
+
+async with Client("http://upstream.example/mcp") as client:
+    domain = await create_mcp_domain_port(client=client)
+    intents = create_mcp_intents(domain, source="orders")  # one Intent per read-only tool
+    # domain.describe_shape(ref) -> DataShape | None, domain.data_version() -> "mcp:<bucket>"
+```
+
+`mcp_data_version()` is a time bucket (`mcp:<floor(now / 300)>`; its `now` takes epoch **seconds**, where the TS
+`now` takes milliseconds). The projection, string-ref-param coercion, result → `TabularData` conversion and
+`outputSchema` → `DataShape` are pinned to the TS output by the `domainMcp` section of the cross-language golden
+fixture. `query_ops` / `action_ops` are `frozenset`s (TS: `ReadonlySet`); `tools` is a read-only mapping in listing order, which
+is the order Intents are made in. `call_timeout_ms` is in milliseconds as in TS. See [docs/user-guide.md](../docs/user-guide.md) ("Starting from an existing MCP server").
 
 ## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
 

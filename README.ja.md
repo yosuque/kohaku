@@ -127,6 +127,7 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/intents` | Intent DSL(`defineVocabulary` / `defineIntent`)— 値集合とラベルの単一源から SemanticPort 用定義・GUI ファセット・MCP ツール入力を導出(spec-core + data-binding のみの環境中立リーフ) |
 | `packages/llm` | LLM プロバイダ抽象(5 種切替・構造化出力の自動フォールバック) |
 | `packages/semantic-llm` | 既定 SemanticPort(`createLlmSemanticPort`): `@kohaku-ui/intents` で定義した Intent カタログに GUI/NL 入力を構造化出力でマッピングする。出発点であり、`cli` の `kohaku init` はこの上にプロジェクトを生成する。sample-api もこれを土台にしている |
+| `packages/domain-mcp` | 既存の MCP サーバーを DomainPort にする(`createMcpDomainPort`): 読み取り専用ツールは `query://` 参照に、それ以外のツールは `approve` tier の統制付き Action になる。`createMcpIntents` と時間の区切りの `mcpDataVersion` も提供(MCP クライアントは引数で渡す。パッケージは SDK を import しない)。Python 版: `kohaku.domain_mcp` |
 | `packages/composer` | UI Composition Service(L0/L1/L2・修復ループ・決定的後処理・Spec キャッシュ) |
 | `packages/renderer-core` | レンダラー共有核(framework-free / DOM-free の環境中立ロジック: `resolveEmit` / presenter 群)。renderer-react / renderer-wc が同一核を消費 |
 | `packages/renderer-react` | Spec→React 描画エンジン + コア部品実装(`./core`) |

@@ -87,6 +87,7 @@ import {
   SEMANTIC_LOCALE_TAGS,
   SEMANTIC_PROMPT_CASES,
 } from "../test/semantic-gui-catalog.js";
+import { buildDomainMcpFixtures } from "./domain-mcp-fixtures.js";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../test/fixtures");
 mkdirSync(OUT_DIR, { recursive: true });
@@ -773,6 +774,10 @@ async function main(): Promise<void> {
     styleProps: [...ALLOWED_STYLE_PROPS].sort(),
   };
 
+  // Pins @kohaku-ui/domain-mcp's pure functions (schema projection, argument coercion, tabular conversion,
+  // outputSchema -> DataShape) against their Python mirror kohaku.domain_mcp. See domain-mcp-fixtures.ts.
+  const domainMcp = buildDomainMcpFixtures();
+
   writeFileSync(
     join(OUT_DIR, "cross-language-canonical.json"),
     JSON.stringify(
@@ -788,6 +793,7 @@ async function main(): Promise<void> {
         distillation,
         fallback: fallbackCases,
         promptFragments,
+        domainMcp,
         semanticGui: semanticGuiCases,
         semanticPrompts: semanticPromptCases,
         semanticLocale: semanticLocaleCases,
@@ -798,7 +804,7 @@ async function main(): Promise<void> {
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, domainMcp=${domainMcp.schemaProjection.length}+${domainMcp.argumentCoercion.length}+${domainMcp.tabular.length}+${domainMcp.shape.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

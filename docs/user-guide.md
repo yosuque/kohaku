@@ -378,6 +378,63 @@ No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtu
 
 **Measuring "time to first compose"** (the quickstart's KPI, target ≤ 15 minutes): start a stopwatch before `npx @kohaku-ui/cli init`, stop it when the Dashboard shows the Summary view (L0) and, with a key configured, when the first Chat answer renders (L1). Record both on a clean machine with a warm npm cache; the CI `pack-smoke` job runs the same generation end to end (`scripts/pack-smoke.mjs`, step 7b).
 
+### Starting from an existing MCP server (`@kohaku-ui/domain-mcp`)
+
+If your data already sits behind an MCP server, `@kohaku-ui/domain-mcp` turns it into the `DomainPort` so you write no Port code. It reads the server's `tools/list` once and sorts every tool by one MCP hint:
+
+| The tool says | kohaku exposes it as |
+|---|---|
+| `annotations.readOnlyHint: true` | a `query://<source>/<tool>` ref. The result becomes `TabularData` (an array, `{ rows: [...] }` or a single wrapped array, read from `structuredContent` or the first JSON text block). |
+| anything else, including no annotation (MCP's default is `false`) | a governed Action with `tier: "approve"`. Override with `tierFor(tool)`. |
+
+> **Use it only with MCP servers you trust.** `readOnlyHint` is a hint the server makes about itself: a server that marks a write tool read-only gets it resolved as a plain read, with no approval gate. Pass `isReadOnly(tool)` and/or `include(tool)` to decide yourself.
+
+```bash
+npm install @kohaku-ui/domain-mcp @kohaku-ui/host @kohaku-ui/authz-hmac @kohaku-ui/llm zod @modelcontextprotocol/client
+```
+
+```ts
+import { createHmacApprovalPort } from "@kohaku-ui/authz-hmac";
+import { createMcpDomainPort, createMcpIntents } from "@kohaku-ui/domain-mcp";
+import { createGovernancePolicy, createKohakuHost } from "@kohaku-ui/host";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+
+// You bring and connect the MCP client; this package never imports the SDK.
+const client = new Client({ name: "my-kohaku-host", version: "1.0.0" });
+await client.connect(new StreamableHTTPClientTransport(new URL("https://upstream.example/mcp")));
+
+const domain = await createMcpDomainPort({
+  client,
+  onSchemaProjection: (r) => console.warn("paramsSchema", r), // what was dropped / omitted, per tool
+});
+const host = createKohakuHost({
+  domain,
+  querySource: "orders",
+  llm: createLlmFromEnv(),
+  intents: createMcpIntents(domain, { source: "orders" }), // one Intent per read-only tool
+  describeShape: (ref) => domain.describeShape(ref), //   columns from the tool's outputSchema
+  dataVersion: domain.dataVersion, //                     the same function the port stamps on the data
+  routes: {
+    approvals: createHmacApprovalPort(process.env.KOHAKU_CAPABILITY_SECRET!),
+    authorizeGovernance: createGovernancePolicy({ roles: { approver: ["action.approve"] } }),
+    // plus `auth`, so requests carry a principal (see "Governed actions" in Demo 5)
+  },
+});
+```
+
+What to know before you point it at a real server:
+
+- **Writes need an approval port.** An `approve`-tier Action is refused with 403 `APPROVAL_REQUIRED` until someone other than the requester mints a token (`POST /approvals`, see "Governed actions" in Demo 5). Wire `routes.approvals` and `routes.authorizeGovernance` as above, otherwise every write stays refused.
+- **The Action's `paramsSchema` is a projection.** The tool's `inputSchema` is mapped onto kohaku's closed JSON Schema subset: `description`, `title`, `default`, `format`, `pattern` and a few other constraints are dropped (reported through `onSchemaProjection`, and counted in the operation's description the approver sees), and every object is closed with `additionalProperties: false`, so a key the server would have accepted is refused. A property written as `anyOf: [X, null]` (Pydantic's `Optional[X]`) becomes the optional property `X`. A schema that uses any other `anyOf` / `oneOf` / `$ref`, a type array, `additionalProperties: true` or an unknown keyword is **omitted**, so kohaku does not validate that Action's payload and the approver judges the raw payload; check the `omitted` reports and `include` or `tierFor` accordingly.
+- **A write tool can never be read.** `createMcpIntents` only creates Intents for read-only tools, and a read capability is only issued for an Intent's resolved refs, so `query://orders/refund_order` has no capability behind it. A hand-written Intent must never point at an action op (`domain.actionOps`). An optional parameter an Intent cannot carry (boolean, array, object) is silently left out, and a tool that requires one is skipped (`onSkip`, which also reports tool names outside `[A-Za-z0-9_.-]{1,128}` and duplicates).
+- **MCP has no data version.** `mcpDataVersion` (the default of the port) is a time bucket, `mcp:<floor(now / 300 s)>`. A Spec composed just before a boundary is stale once after it, and a successful write does not change the version until the next bucket. Pass `dataVersion` to the port to use a real version (an ETag-like tool of your own).
+- **Ref parameters are strings.** The port converts them by the tool's `inputSchema` type (`number`, `integer`, `boolean`; a bad value raises an error coded `MCP_ARGUMENT_INVALID` before the tool is called, which REST reports like any failed read, as 404 `REF_NOT_FOUND`), drops `_cursor` / `_sort` / `_dir`, and maps `_limit` onto the tool's own numeric `limit`: `_limit` can only lower the signed `limit`, and `maxLimit` (default 1000) caps it.
+- **Bounds.** One upstream call has `callTimeoutMs` (default 30 s): it is aborted, never retried, and a timed-out write is reported as "effect is unknown". A query result is limited to `maxRows` (10 000) and `maxResultBytes` (10 MiB). Columns are inferred from the first 50 rows.
+- **Not followed or provided:** `tools/list_changed` (restart the host to pick up a new tool), reconnection (you own the client), caching (every `/binding/resolve` calls the server), and the caller's identity (the MCP client's transport authenticates once, so every caller shares one upstream credential; the principal is not forwarded).
+
+The Python port is `kohaku.domain_mcp` (`create_mcp_domain_port` / `create_mcp_intents` / `mcp_data_version`), under the existing `mcp` extra.
+
 ### Step 0 — Server-Driven UI without an LLM
 
 ```bash

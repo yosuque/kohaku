@@ -82,7 +82,8 @@ containers = ["kohaku"]
 # siblings within a layer (no mutual imports). spec is the bottom layer, and llm is an independent
 # sibling at the same layer, mechanically guaranteeing "llm does not depend on spec". data_binding
 # sits one above spec because intents / host_* depend on it. registry / intents / lineage / storage
-# are the middle layer used by composer / host_*. composer is above them. host_core sits one layer
+# are the middle layer used by composer / host_*. composer is above them, with domain_mcp (an MCP server as a
+# DomainPort; depends on spec + intents only, like TS domain-mcp beside composer / semantic-llm) as its sibling. host_core sits one layer
 # above composer: the framework-free shared host core (fixation delivery + self-healing, capability
 # issuance, error-hook helpers) consumed by host_rest and host_mcp as thin adapters — the same
 # relationship renderer-core has with renderer-react/renderer-wc on the TS side. host_rest / host_mcp /
@@ -92,7 +93,7 @@ containers = ["kohaku"]
 layers = [
     "host_rest | host_mcp | evals",
     "host_core",
-    "composer | semantic_llm",
+    "composer | semantic_llm | domain_mcp",
     "registry | intents | lineage | storage",
     "data_binding",
     "llm | spec",
@@ -120,6 +121,7 @@ source_modules = [
     "kohaku.intents",
     "kohaku.lineage",
     "kohaku.storage",
+    "kohaku.domain_mcp",
 ]
 forbidden_modules = [
     "kohaku.llm",

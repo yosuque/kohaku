@@ -378,6 +378,63 @@ Chat は生成された Intent カタログの範囲内でのみ回答し、範�
 
 **「最初の compose までの時間」の計測**(クイックスタートの KPI、目標 15 分以内): `npx @kohaku-ui/cli init` の前にストップウォッチを開始し、Dashboard に Summary ビュー(L0)が表示された時点と、キーを設定した状態で最初の Chat の回答が描画された時点(L1)で止めます。クリーンなマシン・温まった npm キャッシュで両方を記録してください。CI の `pack-smoke` ジョブは同じ生成処理をエンドツーエンドで実行します(`scripts/pack-smoke.mjs` の step 7b)。
 
+### 既存の MCP サーバーから始める(`@kohaku-ui/domain-mcp`)
+
+データがすでに MCP サーバーの後ろにあるなら、`@kohaku-ui/domain-mcp` がそれを `DomainPort` にするので、Port のコードを書く必要はありません。サーバーの `tools/list` を一度だけ読み、全てのツールを MCP のヒント 1 つで振り分けます。
+
+| ツールの宣言 | kohaku での扱い |
+|---|---|
+| `annotations.readOnlyHint: true` | `query://<source>/<ツール名>` 参照。結果は `TabularData` になります(配列、`{ rows: [...] }`、または配列 1 つだけを包んだオブジェクトを、`structuredContent` か最初の JSON テキストブロックから読みます)。 |
+| それ以外。アノテーション無しも含む(MCP の既定は `false`) | `tier: "approve"` の統制付き Action。`tierFor(tool)` で上書きできます。 |
+
+> **信頼できる MCP サーバーにだけ使ってください。** `readOnlyHint` はサーバーが自分について述べるヒントです。書き込みツールを read-only と宣言するサーバーでは、そのツールが承認ゲートなしの通常の読み取りとして解決されます。自分で分類するには `isReadOnly(tool)` や `include(tool)` を渡します。
+
+```bash
+npm install @kohaku-ui/domain-mcp @kohaku-ui/host @kohaku-ui/authz-hmac @kohaku-ui/llm zod @modelcontextprotocol/client
+```
+
+```ts
+import { createHmacApprovalPort } from "@kohaku-ui/authz-hmac";
+import { createMcpDomainPort, createMcpIntents } from "@kohaku-ui/domain-mcp";
+import { createGovernancePolicy, createKohakuHost } from "@kohaku-ui/host";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+
+// MCP クライアントは自分で用意して接続します。このパッケージは SDK を import しません。
+const client = new Client({ name: "my-kohaku-host", version: "1.0.0" });
+await client.connect(new StreamableHTTPClientTransport(new URL("https://upstream.example/mcp")));
+
+const domain = await createMcpDomainPort({
+  client,
+  onSchemaProjection: (r) => console.warn("paramsSchema", r), // ツールごとに何を捨てた/省いたか
+});
+const host = createKohakuHost({
+  domain,
+  querySource: "orders",
+  llm: createLlmFromEnv(),
+  intents: createMcpIntents(domain, { source: "orders" }), // 読み取り専用ツールごとに Intent を 1 つ
+  describeShape: (ref) => domain.describeShape(ref), //   列はツールの outputSchema から
+  dataVersion: domain.dataVersion, //                     port がデータに刻むのと同じ関数
+  routes: {
+    approvals: createHmacApprovalPort(process.env.KOHAKU_CAPABILITY_SECRET!),
+    authorizeGovernance: createGovernancePolicy({ roles: { approver: ["action.approve"] } }),
+    // さらに `auth` でリクエストに principal を持たせます(Demo 5 の「統制付き Action」を参照)
+  },
+});
+```
+
+実際のサーバーに向ける前に知っておくこと:
+
+- **書き込みには承認 Port が要ります。** `approve` tier の Action は、依頼者以外の誰かがトークンを発行する(`POST /approvals`。Demo 5 の「統制付き Action」を参照)まで 403 `APPROVAL_REQUIRED` で拒否されます。上のように `routes.approvals` と `routes.authorizeGovernance` を配線しないと、書き込みは全て拒否されたままです。
+- **Action の `paramsSchema` は射影です。** ツールの `inputSchema` を kohaku の閉じた JSON Schema 部分集合へ写します。`description`・`title`・`default`・`format`・`pattern` などの制約は捨て(`onSchemaProjection` で報告され、承認者が見る operation の description にも件数が付きます)、全てのオブジェクトを `additionalProperties: false` で閉じるので、サーバーが受け付けるキーでも拒否されることがあります。`anyOf: [X, null]`(Pydantic の `Optional[X]`)と書かれたプロパティは、省略可能なプロパティ `X` になります。それ以外の `anyOf` / `oneOf` / `$ref`、型の配列、`additionalProperties: true`、未知のキーワードを使う schema は**丸ごと省かれ**、その Action の payload を kohaku は検証せず、承認者が生の payload を見て判断します。`omitted` の報告を確認し、`include` や `tierFor` で調整してください。
+- **書き込みツールが読み取られることはありません。** `createMcpIntents` は読み取り専用ツールにしか Intent を作らず、read capability は Intent が解決した参照にしか発行されないので、`query://orders/refund_order` に対応する capability は存在しません。手書きの Intent が action の op(`domain.actionOps`)を指してはいけません。Intent が運べない型(boolean・配列・オブジェクト)の省略可能パラメタは黙って除かれ、それを必須とするツールはスキップされます(`onSkip`。`[A-Za-z0-9_.-]{1,128}` に合わない名前と重複もここで報告されます)。
+- **MCP には data version がありません。** port の既定の `mcpDataVersion` は時間の区切り `mcp:<floor(now / 300 秒)>` です。境界の直前に compose した Spec は、境界を越えた後に一度だけ stale になり、書き込みに成功しても次の区切りまでバージョンは変わりません。本物のバージョン(ETag のような自前のツール)を使うなら port に `dataVersion` を渡します。
+- **参照のパラメタは文字列です。** port はツールの `inputSchema` の型(`number`・`integer`・`boolean`)で変換します。不正な値はツールを呼ぶ前に `MCP_ARGUMENT_INVALID` のコードを持つエラーになり、REST では他の失敗した読み取りと同じく 404 `REF_NOT_FOUND` で報告されます。`_cursor` / `_sort` / `_dir` は捨て、`_limit` はツールの数値の `limit` へ写します。`_limit` は署名された `limit` を下げることしかできず(小さい方が勝ちます)、`maxLimit`(既定 1000)が上限になります。
+- **上限。** upstream への 1 回の呼び出しには `callTimeoutMs`(既定 30 秒)があり、タイムアウトすると中断され、再試行はされません。書き込みがタイムアウトした場合は「効果は不明」と報告されます。クエリ結果は `maxRows`(10 000)と `maxResultBytes`(10 MiB)までです。列は最初の 50 行から推定します。
+- **追従・提供しないもの:** `tools/list_changed`(新しいツールはホストの再起動で反映)、再接続(クライアントは呼び出し側が管理)、キャッシュ(`/binding/resolve` のたびにサーバーを呼びます)、呼び出し元の ID(サーバーへの認証は MCP クライアントのトランスポートが 1 度行うので、全ての呼び出し元が 1 つの upstream 資格情報を共有し、principal は転送されません)。
+
+Python 版は `kohaku.domain_mcp`(`create_mcp_domain_port` / `create_mcp_intents` / `mcp_data_version`)で、既存の `mcp` extra に含まれます。
+
 ### Step 0 — LLM なしの Server-Driven UI
 
 ```bash
