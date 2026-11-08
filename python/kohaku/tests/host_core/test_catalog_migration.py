@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -278,13 +279,17 @@ def test_reports_a_revalidation_failure_in_blocked_never_in_steps() -> None:
     assert "kpi2:" in blocked.issues[0]
 
 
-def test_migrate_props_receives_the_nodes_props_and_the_original_is_left_untouched() -> None:
-    # Python-only: pins the call contract (migrate_props gets the node's own props dict) and that the
-    # fixation's stored pinnedSpec is not mutated by planning (TS gets this from object spread).
+def test_migrate_props_receives_a_copy_of_the_nodes_props_and_the_original_is_left_untouched() -> (
+    None
+):
+    # Pins the call contract: migrate_props gets the node's props (equal content, but a private deep copy),
+    # and the fixation's stored pinnedSpec is not touched by planning.
     seen: list[dict[str, Any]] = []
+    received: list[dict[str, Any]] = []
 
     def migrate(props: dict[str, Any]) -> dict[str, Any]:
         seen.append(dict(props))
+        received.append(props)
         return {"label": props["label"], "format": "percent"}
 
     old = replace(_old_clean_type_def(), migrate_props=migrate)
@@ -297,9 +302,85 @@ def test_migrate_props_receives_the_nodes_props_and_the_original_is_left_untouch
 
     plan = asyncio.run(run())
     assert seen == [{"label": "Revenue"}]
+    assert (
+        received[0] is not fixation.pinnedSpec.components[0].props
+    )  # a copy, never the stored dict
     assert plan.steps[0].pinnedSpec.components[0].props == {"label": "Revenue", "format": "percent"}
     assert fixation.pinnedSpec.components[0].props == {"label": "Revenue"}
     assert fixation.pinnedSpec.components[0].type == OLD_CLEAN_TYPE
+
+
+def _nested_fixation() -> FixationRecord:
+    """A fixation whose node carries nested props, so a shallow copy would not be enough."""
+    return _fixation(
+        INTENT_HASH_CLEAN,
+        _fixed_spec(
+            INTENT_HASH_CLEAN,
+            [
+                {
+                    "id": "kpi1",
+                    "type": OLD_CLEAN_TYPE,
+                    "props": {"label": "Revenue", "meta": {"tags": ["a"]}},
+                    "data": {"$ref": "query://sales/revenue"},
+                }
+            ],
+        ),
+    )
+
+
+def _mutating(result: Any) -> Callable[[dict[str, Any]], Any]:
+    """A hook that scribbles on its argument at every level, then hands back `result(props)`."""
+
+    def migrate(props: dict[str, Any]) -> Any:
+        props["format"] = "percent"
+        props["meta"]["tags"].append("mutated")
+        return result(props)
+
+    return migrate
+
+
+def _plan_nested(migrate: Any, stored: FixationRecord) -> CatalogMigrationPlan:
+    old = replace(_old_clean_type_def(), migrate_props=migrate)
+    catalog = resolve_catalog(core_catalog(), Catalog(components=[_new_type_def(), old]))
+    storage = _StubStorage({None: [stored]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    return asyncio.run(run())
+
+
+def test_a_mutating_migrate_props_cannot_change_the_stored_fixation_valid_plan() -> None:
+    stored = _nested_fixation()
+    before = stored.pinnedSpec.model_dump()
+    plan = _plan_nested(_mutating(lambda props: props), stored)
+    assert len(plan.steps) == 1
+    assert plan.steps[0].pinnedSpec.components[0].props == {
+        "label": "Revenue",
+        "meta": {"tags": ["a", "mutated"]},
+        "format": "percent",
+    }
+    assert stored.pinnedSpec.model_dump() == before
+
+
+def test_a_mutating_migrate_props_cannot_change_the_stored_fixation_blocked_plan() -> None:
+    stored = _nested_fixation()
+    before = stored.pinnedSpec.model_dump()
+    plan = _plan_nested(_mutating(lambda _props: None), stored)
+    assert plan.steps == []
+    assert len(plan.blocked) == 1
+    assert stored.pinnedSpec.model_dump() == before
+
+
+def test_a_mutating_migrate_props_cannot_change_the_stored_fixation_when_it_raises() -> None:
+    def boom(_props: dict[str, Any]) -> None:
+        raise RuntimeError("migrate exploded")
+
+    stored = _nested_fixation()
+    before = stored.pinnedSpec.model_dump()
+    with pytest.raises(RuntimeError, match="migrate exploded"):
+        _plan_nested(_mutating(boom), stored)
+    assert stored.pinnedSpec.model_dump() == before
 
 
 def test_rewrites_type_and_version_even_without_migrate_props() -> None:

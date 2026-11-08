@@ -120,7 +120,10 @@ function rewriteNode(
     ...node,
     type: to.type,
     version: to.version,
-    props: migrateProps != null ? migrateProps(node.props) : node.props,
+    // The hook gets a private copy: the storage ports (memory, file) hand back live records, so a hook that
+    // mutates its argument would otherwise rewrite the stored fixation during planning -- even when the plan
+    // ends up blocked or the hook throws.
+    props: migrateProps != null ? migrateProps(structuredClone(node.props)) : node.props,
   };
 }
 

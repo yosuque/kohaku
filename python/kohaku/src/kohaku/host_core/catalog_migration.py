@@ -26,6 +26,7 @@ Two-phase, mirroring the promotion pipeline's own separation of "compute what wo
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -105,7 +106,10 @@ def _rewrite_node(
     not caught (as in TS): it propagates out of plan_catalog_migration."""
     update: dict[str, Any] = {"type": to["type"], "version": to.get("version")}
     if migrate_props is not None:
-        migrated = migrate_props(node.props)
+        # The hook gets a private deep copy: the storage ports (memory, file) hand back live records, so a hook
+        # that mutates its argument would otherwise rewrite the stored fixation during planning -- even when
+        # the plan ends up blocked or the hook raises.
+        migrated = migrate_props(copy.deepcopy(node.props))
         if not isinstance(migrated, dict):
             return node, (
                 f"{node.id}: migrate_props returned {type(migrated).__name__}, expected an object"
