@@ -140,7 +140,7 @@ describe("deprecating a part changes the catalog fingerprint; unrelated parts st
   });
 });
 
-describe("migrateProps: a TS-only optional function field", () => {
+describe("migrateProps: an optional function field on a component definition", () => {
   it("can be attached to a component definition and invoked directly", () => {
     const def = defineComponent({
       type: "sales.kpiCard",
