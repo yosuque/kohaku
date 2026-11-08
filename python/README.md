@@ -85,6 +85,8 @@ python/
 │  │  ├─ data_binding/     # ← packages/data-binding (reserved-parameter splitting)
 │  │  ├─ intents/          # ← packages/intents (Intent DSL)
 │  │  ├─ llm/              # ← packages/llm (OpenAI-compatible adapter / FakeLlm)
+│  │  ├─ semantic_llm/     # ← packages/semantic-llm (default SemanticPort: create_llm_semantic_port +
+│  │  │                    #   IntentCatalog; one module per TS file — the sales sample is built on it)
 │  │  ├─ composer/         # ← packages/composer (L0/L1/L2 / single-flight / repair loop; unlike TS,
 │  │  │                    #   the tier ladder + single-flight + result assembly are not split out of
 │  │  │                    #   compose.py into separate modules — same behavior, coarser file layout)
@@ -584,14 +586,9 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   design.md #74 / #73; the `review` block stays unported); rubric 0.4 on the TS side (Python's
   `kohaku.evals.judge.l2_promotion_rubric` is still at version "0.3", missing
   `suggestion_fidelity`); `CapabilityRevocationStore` and jti-based capability revocation;
-  the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`;
+  the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
   `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
-  (`semantic-llm`'s own `validateIntent` behavior is not left behind by this gap, though: since
-  the package itself has no Python mirror, its logic lives directly in `examples/sales-api`'s
-  `semantic_port.py` / `intents_catalog.py`, and that sample implements `validate_intent` /
-  `IntentCatalog.validate_params` matching TS's `createLlmSemanticPort` — see
-  `kohaku.spec.ports.SupportsValidateIntent` and `kohaku.host_core.intent.resolve_intent`.)
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile
