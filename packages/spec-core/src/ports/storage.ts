@@ -101,6 +101,13 @@ export interface PromotionState {
    * pipelines).
    */
   tenant?: string;
+  /**
+   * A per-write token (optional = compatible with records that predate it). The lineage promotion service stamps
+   * a fresh one on every write and passes the one it read back as `expectedRevision` (see
+   * {@link PutPromotionStateOptions}), which is what lets a `supportsCompareAndSet` adapter reject a write based
+   * on a stale read. A StoragePort stores and returns it verbatim and never generates one itself.
+   */
+  revision?: string;
 }
 
 /** The record of L1→L0 fixation. Even with the structure fixed, data stays current via $ref reference-passing. */
@@ -135,24 +142,64 @@ export interface FixationRecord {
 }
 
 /**
+ * Conditional-write option of `putPromotionState` (the optional compare-and-set extension, see
+ * `StoragePort.supportsCompareAndSet`). Tri-state: omitted = unconditional; `null` = the state must not
+ * exist yet; a string = the stored state's `revision` must equal it. A mismatch throws
+ * `StorageConflictError`.
+ */
+export interface PutPromotionStateOptions {
+  expectedRevision?: string | null;
+}
+
+/**
+ * Conditional-write options of `putFixation`. `ifPresent` (no-op unless a fixation exists) and
+ * `expectedRevision` (same tri-state as {@link PutPromotionStateOptions}) combine: `ifPresent` is applied
+ * first, so an absent record is a silent no-op even when `expectedRevision` is a string; `ifPresent: true`
+ * with `expectedRevision: null` is contradictory ("must exist" and "must not exist") and always throws
+ * `StorageConflictError` on a CAS adapter.
+ */
+export interface PutFixationOptions {
+  ifPresent?: boolean;
+  expectedRevision?: string | null;
+}
+
+/** Conditional-delete option of `deleteFixation`: the stored fixation's `revision` must equal this. */
+export interface DeleteFixationOptions {
+  expectedRevision?: string;
+}
+
+/**
  * The persistence target for cache / lineage / promotion state (RLS multi-tenancy, etc., are the product's choice).
  *
- * **Concurrency contract**: StoragePort itself carries no locking or versioning. Serializing the
+ * **Concurrency contract**: the base StoragePort carries no locking or versioning. Serializing the
  * read-modify-write of a given (tenant, key) — so that two concurrent writers cannot each read the same base
  * state and lose one another's update — is the **host's** responsibility, not the implementation's; the
  * reference host-rest does this with an in-process keyed mutex (`createKeyedMutex` in this package,
  * re-exported by `@kohaku-ui/host-core`, shared by the promotion lock and the fixation lock) and
  * host-mcp-apps wires the same mutex (keyed by
  * `intentHash` alone, since the MCP profile never resolves a tenant) into its fixation self-heal path. That
- * mutex only orders calls **within one process** — running multiple instances/processes against the same
- * backing store concurrently (e.g. two hosts sharing one data directory) is not supported by this contract;
- * a lost update between processes can still occur. The optional conditional-write parameters below
- * (`ifPresent` on `putFixation`) are additive hooks a StoragePort MAY use to narrow one specific race (a
- * stale self-heal resurrecting a fixation deleted by another writer); implementations that ignore them keep
- * unconditional (legacy) write behavior. A full compare-and-swap contract (arbitrary conditional writes across
- * all record kinds) is out of scope for v0.1 and left to future extension.
+ * mutex only orders calls **within one process**.
+ *
+ * **Optional compare-and-set (CAS)**: an adapter that sets `supportsCompareAndSet: true` additionally
+ * honors `expectedRevision` on `putPromotionState`, `putFixation` and `deleteFixation`, which makes the
+ * read-modify-write safe **across processes** sharing one backend (several host instances on one redis /
+ * postgres). `expectedRevision` is tri-state: omitted (`undefined`) = no check (the legacy unconditional
+ * write, and what a caller passes for a record that predates `revision`); `null` = the record MUST NOT exist
+ * yet; a string = the stored record's `revision` MUST equal it. A mismatch (including a record that is absent
+ * when a string was expected) MUST throw `StorageConflictError` and MUST NOT modify anything; the check
+ * and the write are one atomic step. An adapter that does not declare `supportsCompareAndSet` MAY ignore the
+ * option (unconditional write, as before), so the in-process mutex stays the only protection there; hosts
+ * warn about such an adapter at start-up. The conditional-write option `ifPresent` on `putFixation` is an
+ * older, independent hook that narrows one specific race (a stale self-heal resurrecting a fixation deleted
+ * by another writer).
  */
 export interface StoragePort {
+  /**
+   * Declares that this adapter honors `expectedRevision` on `putPromotionState` / `putFixation` /
+   * `deleteFixation` atomically across processes (see the concurrency contract above and
+   * `describeStoragePortContract`'s `requireCompareAndSet`). Absent = the adapter ignores the option.
+   */
+  readonly supportsCompareAndSet?: true;
   getSpecCache(key: string): Promise<UISpec | null>;
   putSpecCache(key: string, spec: UISpec, ttlSeconds?: number): Promise<void>;
   appendLineage(event: LineageEventRecord): Promise<void>;
@@ -187,8 +234,12 @@ export interface StoragePort {
    * responsibility, e.g. RLS).
    */
   getPromotionState(artifactId: string, tenant?: string): Promise<PromotionState | null>;
-  /** Saves promotion state. Reads state.tenant to key-separate as (tenant, artifactId) (signature unchanged). */
-  putPromotionState(state: PromotionState): Promise<void>;
+  /**
+   * Saves promotion state. Reads state.tenant to key-separate as (tenant, artifactId). With
+   * `options.expectedRevision` (honored only by a `supportsCompareAndSet` adapter) the write is conditional
+   * on the stored record's `revision`; a mismatch throws `StorageConflictError`.
+   */
+  putPromotionState(state: PromotionState, options?: PutPromotionStateOptions): Promise<void>;
   /**
    * Saves several promotion states in one call (an optional v0.1 extension; performance only, no new
    * semantics over calling `putPromotionState` once per state). A batch nomination pass (e.g.
@@ -196,7 +247,9 @@ export interface StoragePort {
    * re-read, re-stringify, and re-write the whole snapshot file once per candidate; a StoragePort that
    * implements this MAY instead fold every state into a single read-modify-write. Implementations that omit
    * it keep the legacy behavior (the caller falls back to looping `putPromotionState`), so this is purely
-   * additive and never widens what a caller could already do without it.
+   * additive and never widens what a caller could already do without it. The batch write carries no
+   * `expectedRevision` (it is unconditional even on a `supportsCompareAndSet` adapter): its only caller,
+   * the policy-driven `in_use` -> `candidate` nomination pass, is idempotent and re-derived on the next scan.
    */
   putPromotionStates?(states: PromotionState[]): Promise<void>;
   /** Lists promotion states. When tenant is specified, only that tenant's (unspecified = all = legacy behavior). */
@@ -214,13 +267,18 @@ export interface StoragePort {
    * get→put that races with a concurrent delete does not resurrect an already-removed fixation. An
    * implementation that ignores the second parameter keeps the legacy unconditional-write behavior (the
    * option narrows one race; it never widens what the caller could already do without it).
+   * `options.expectedRevision` (honored only by a `supportsCompareAndSet` adapter): see
+   * {@link PutFixationOptions}.
    */
-  putFixation(record: FixationRecord, options?: { ifPresent?: boolean }): Promise<void>;
+  putFixation(record: FixationRecord, options?: PutFixationOptions): Promise<void>;
   /** Lists fixations. When tenant is specified, only that tenant's (unspecified = all = legacy behavior). */
   listFixations(tenant?: string): Promise<FixationRecord[]>;
   /**
    * Removes a fixation (an optional v0.1 extension). If unimplemented, unfixate fails (fail-fast; no
-   * audit event is recorded either). When tenant is specified, deletes that tenant's fixation.
+   * audit event is recorded either). When tenant is specified, deletes that tenant's fixation. With
+   * `options.expectedRevision` (honored only by a `supportsCompareAndSet` adapter) the delete is conditional
+   * on the stored fixation's `revision` and throws `StorageConflictError` on a mismatch (an absent
+   * fixation also mismatches a string expectation).
    */
-  deleteFixation?(intentHash: string, tenant?: string): Promise<void>;
+  deleteFixation?(intentHash: string, tenant?: string, options?: DeleteFixationOptions): Promise<void>;
 }
