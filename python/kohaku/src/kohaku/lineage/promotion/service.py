@@ -167,6 +167,12 @@ def _remember_revision(candidate: PromotionCandidate, revision: ExpectedRevision
     setattr(candidate, _LOADED_REVISION_ATTR, revision)
 
 
+_ATTEMPTED_REVISION_ATTR = "_attempted_revision"
+"""Name of the private attribute `_persist` / `_persist_many` stamp, before the write, with the revision of the
+snapshot they are about to write. After a non-conflict error the outcome is ambiguous (a timeout after commit, a
+redis transaction whose later command failed), so `_persist_many` reads the state back and compares it with this."""
+
+
 @dataclass
 class PromotionCandidate:
     """A promotion candidate (state + usage aggregation + preview material). The act path updates status/verdict/draft."""
@@ -532,7 +538,8 @@ class Promotions:
             updatedAt=state.updatedAt if state is not None else generated[0].ts,
         )
         # What the next write must be conditional on: None when no record exists, otherwise the stored revision,
-        # with "" meaning "exists but carries none" (a record that predates `revision`). That last state is
+        # with "" meaning "exists but carries none" (a record that predates `revision`, or whose revision is not a
+        # string, as every adapter reads it). That last state is
         # guarded too (never left unconditional), or every instance that read the legacy record would write
         # over whatever the first of them committed. A record that exists but failed validation is "absent" to
         # the candidate, yet must not read back as None here: a conditional create would then conflict with
@@ -600,6 +607,7 @@ class Promotions:
         predates `revision` is guarded too (`expected_revision=""`). Only a candidate that was not loaded
         through `_load_candidate` is written unconditionally."""
         state = self._build_promotion_state(candidate, tenant)
+        setattr(candidate, _ATTEMPTED_REVISION_ATTR, state.revision)
         expected = _loaded_revision(candidate)
         if supports_compare_and_set(self._storage) and expected is not UNSET:
             await self._storage.put_promotion_state(state, expected_revision=expected)
@@ -655,8 +663,10 @@ class Promotions:
         stay durable, so they are returned beside the error (`_PersistManyResult.error`) rather than lost to
         the raise: the caller audits them before re-raising. Dropping them would leave candidates stored as
         `candidate` that no retry ever audits, because the retry sees them as already nominated and skips
-        them. The batch call (`put_promotion_states`) is one write, so nothing is known to be durable when it
-        fails; the legacy per-state loop keeps the same partial-progress rule as the compare-and-set loop."""
+        them. The failing write itself is ambiguous (the error may have struck after the state was stored), so
+        after such an error the state is read back (`_landed`) and a candidate whose stored revision is the one
+        this pass just wrote counts as persisted too. That applies to the compare-and-set loop, to the legacy
+        per-state loop, and to a failed `put_promotion_states` batch (every state is read back)."""
         if not candidates:
             return _PersistManyResult(persisted=[])
         persisted: list[PromotionCandidate] = []
@@ -665,25 +675,53 @@ class Promotions:
                 try:
                     await self._persist(candidate, tenant)
                 except Exception as e:
-                    if not is_storage_conflict_error(e):
-                        return _PersistManyResult(persisted=persisted, error=e)
+                    if is_storage_conflict_error(e):
+                        continue
+                    if await self._landed(candidate, tenant):
+                        persisted.append(candidate)
+                    return _PersistManyResult(persisted=persisted, error=e)
                 else:
                     persisted.append(candidate)
             return _PersistManyResult(persisted=persisted)
         states = [self._build_promotion_state(c, tenant) for c in candidates]
+        for candidate, state in zip(candidates, states, strict=True):
+            setattr(candidate, _ATTEMPTED_REVISION_ATTR, state.revision)
         if isinstance(self._storage, SupportsBatchPromotionStates):
             try:
                 await self._storage.put_promotion_states(states)
             except Exception as e:
-                return _PersistManyResult(persisted=[], error=e)
+                # One call. The reference adapters store the whole batch or none of it, but a failure can
+                # still strike after the commit, so read every state back to see which landed.
+                for candidate in candidates:
+                    if await self._landed(candidate, tenant):
+                        persisted.append(candidate)
+                return _PersistManyResult(persisted=persisted, error=e)
             return _PersistManyResult(persisted=list(candidates))
         for candidate, state in zip(candidates, states, strict=True):
             try:
                 await self._storage.put_promotion_state(state)
             except Exception as e:
+                if await self._landed(candidate, tenant):
+                    persisted.append(candidate)
                 return _PersistManyResult(persisted=persisted, error=e)
             persisted.append(candidate)
         return _PersistManyResult(persisted=persisted)
+
+    async def _landed(self, candidate: PromotionCandidate, tenant: str | None) -> bool:
+        """Whether the snapshot `_persist` / `_persist_many` last tried to write for this candidate is what is
+        stored now (same revision). A read failure counts as "not known to have landed", so the original error
+        stays the one reported."""
+        attempted = getattr(candidate, _ATTEMPTED_REVISION_ATTR, None)
+        if attempted is None:
+            return False
+        try:
+            current = await self._storage.get_promotion_state(candidate.artifactId, tenant)
+        except Exception:  # noqa: BLE001 — best-effort read-back; see doc above
+            return False
+        if current is None or current.revision != attempted:
+            return False
+        _remember_revision(candidate, attempted)
+        return True
 
     async def _gather_candidates(
         self, auto_nominate: bool, tenant: str | None = None

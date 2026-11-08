@@ -515,6 +515,26 @@ export function describeStoragePortContract(
       );
 
       casIt(
+        'putPromotionState / putFixation / deleteFixation: a stored revision that is not a string reads as unversioned ("")',
+        async () => {
+          if (port.deleteFixation == null) throw missingExtension("deleteFixation");
+          const odd: unknown[] = [7, true, { v: 1 }];
+          for (const [i, revision] of odd.entries()) {
+            const id = `odd${i}`;
+            await port.putPromotionState({ ...promotion("x", id), revision } as never);
+            await port.putPromotionState(promotion("x", id, "r1"), { expectedRevision: "" });
+            expect((await port.getPromotionState("x", id))?.revision).toBe("r1");
+            await port.putFixation({ ...fixation(id, "a"), revision } as never);
+            await port.putFixation(fixation(id, "a", "r1"), { expectedRevision: "" });
+            expect((await port.getFixation(id, "a"))?.revision).toBe("r1");
+            await port.putFixation({ ...fixation(id, "b"), revision } as never);
+            await port.deleteFixation(id, "b", { expectedRevision: "" });
+            expect(await port.getFixation(id, "b")).toBeNull();
+          }
+        },
+      );
+
+      casIt(
         'putPromotionState: of two concurrent writes from the same unversioned base ("") exactly one wins',
         async () => {
           await port.putPromotionState(promotion("x", "a"));

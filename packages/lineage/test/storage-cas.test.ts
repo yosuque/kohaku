@@ -337,6 +337,7 @@ describe("a storage error in the middle of a bulk nomination does not lose the a
     const storage = casStorage();
     seedGenerated(storage, "a1");
     seedGenerated(storage, "a2");
+    seedGenerated(storage, "a3");
     const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
     const realPut = storage.putPromotionState.bind(storage);
     let failA2 = true;
@@ -349,11 +350,69 @@ describe("a storage error in the middle of a bulk nomination does not lose the a
 
     expect(storage.states.get("a1")?.status).toBe("candidate");
     expect(storage.states.has("a2")).toBe(false);
+    // The pass stopped at the failure: the item after it was neither written nor audited (it stays in_use).
+    expect(storage.states.has("a3")).toBe(false);
     expect(nominatedIds(storage)).toEqual(["a1"]);
 
     failA2 = false;
     await promotions.evaluateAndList();
     expect(storage.states.get("a2")?.status).toBe("candidate");
+    expect(storage.states.get("a3")?.status).toBe("candidate");
+    expect(nominatedIds(storage).sort()).toEqual(["a1", "a2", "a3"]);
+  });
+
+  it("compare-and-set port: a put that stores the state and then throws (ambiguous outcome) is read back, counted as persisted and audited, then the error is rethrown", async () => {
+    const storage = casStorage();
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    seedGenerated(storage, "a3");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    const realPut = storage.putPromotionState.bind(storage);
+    storage.putPromotionState = async (state, options) => {
+      await realPut(state, options);
+      if (state.artifactId === "a2") throw new Error("timeout after commit");
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("timeout after commit");
+
+    expect(storage.states.get("a2")?.status).toBe("candidate");
+    expect(storage.states.has("a3")).toBe(false);
+    expect(nominatedIds(storage)).toEqual(["a1", "a2"]);
+  });
+
+  it("an ambiguous failure whose state did NOT land is not audited, and a failing read-back keeps the original error", async () => {
+    const storage = casStorage();
+    seedGenerated(storage, "a1");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    let writeAttempted = false;
+    storage.putPromotionState = async () => {
+      writeAttempted = true;
+      throw new Error("write failed");
+    };
+    // The verifying read-back (after the failed write) fails too: the original write error is still reported.
+    const realGet = storage.getPromotionState.bind(storage);
+    storage.getPromotionState = async (id, tenant) => {
+      if (writeAttempted) throw new Error("read failed");
+      return realGet(id, tenant);
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("write failed");
+    expect(nominatedIds(storage)).toEqual([]);
+  });
+
+  it("batch port: a putPromotionStates that stores the batch and then throws is read back and audited, then the error is rethrown", async () => {
+    const storage = casStorage({ supportsCompareAndSet: false });
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    const realBatch = storage.putPromotionStates!.bind(storage);
+    storage.putPromotionStates = async (states) => {
+      await realBatch(states);
+      throw new Error("timeout after commit");
+    };
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("timeout after commit");
+
     expect(nominatedIds(storage).sort()).toEqual(["a1", "a2"]);
   });
 
@@ -369,6 +428,23 @@ describe("a storage error in the middle of a bulk nomination does not lose the a
 
     expect(storage.states.size).toBe(0);
     expect(nominatedIds(storage)).toEqual([]);
+  });
+
+  it("legacy per-item fallback: a put that stores the state and then throws is read back and audited", async () => {
+    const storage = casStorage({ supportsCompareAndSet: false });
+    delete (storage as { putPromotionStates?: unknown }).putPromotionStates;
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    const realPut = storage.putPromotionState.bind(storage);
+    storage.putPromotionState = async (state, options) => {
+      await realPut(state, options);
+      if (state.artifactId === "a2") throw new Error("timeout after commit");
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("timeout after commit");
+
+    expect(nominatedIds(storage)).toEqual(["a1", "a2"]);
   });
 
   it("legacy per-item fallback (no putPromotionStates): the 2nd put fails, the 1st stays persisted AND audited", async () => {

@@ -104,7 +104,7 @@ def _check_revision(
     """The compare-and-set check against the raw stored body (None = absent), the same four states as
     `StoragePort`'s `expected_revision`: UNSET = no check; None = must be absent; "" = must be present and carry
     no `revision` (it predates the field); any other str = must be present with exactly that `revision`. For a
-    present record that is `(revision or "") == expected`; an absent one never matches a str."""
+    present record that is the stored revision (read as `""` when absent or not a string) `== expected`; an absent one never matches a str."""
     if expected is UNSET:
         return
     if expected is None:

@@ -142,6 +142,12 @@ export function createCandidateStore(opts: {
    * revision is storage bookkeeping, not part of that wire shape.
    */
   const loadedRevision = new WeakMap<PromotionCandidate, string | null | undefined>();
+  /**
+   * The revision of the snapshot `persist` / `persistMany` most recently tried to write for a candidate, set
+   * before the write. After a non-conflict error the outcome is ambiguous (a timeout after commit, a redis
+   * transaction whose later command failed), so `persistMany` re-reads the state and compares it with this.
+   */
+  const attemptedRevision = new WeakMap<PromotionCandidate, string>();
 
   /**
    * Validates a promotion-state record read back from storage against PromotionStateSchema, treating a
@@ -230,7 +236,8 @@ export function createCandidateStore(opts: {
       updatedAt: state?.updatedAt ?? generated[0]?.ts ?? new Date(0).toISOString(),
     };
     // What the next write must be conditional on: `null` when no record exists, otherwise the stored revision,
-    // with `""` meaning "exists but carries none" (a record that predates `revision`). That last state is
+    // with `""` meaning "exists but carries none" (a record that predates `revision`, or whose revision is not
+    // a string, as every adapter reads it). That last state is
     // guarded too (never left unconditional), or every instance that read the legacy record would write over
     // whatever the first of them committed. A record that exists but failed validation is "absent" to the
     // candidate, yet must not read back as `null` here: a conditional create would then conflict with that
@@ -290,6 +297,7 @@ export function createCandidateStore(opts: {
 
   async function persist(candidate: PromotionCandidate, tenant?: string): Promise<void> {
     const state = buildPromotionState(candidate, tenant);
+    attemptedRevision.set(candidate, state.revision!);
     const expected = loadedRevision.get(candidate);
     if (storage.supportsCompareAndSet === true && expected !== undefined) {
       await storage.putPromotionState(state, { expectedRevision: expected });
@@ -328,6 +336,10 @@ export function createCandidateStore(opts: {
     // durable, so they are returned beside the error rather than lost to the throw: the caller audits them
     // before rethrowing (see `PersistManyResult`). Dropping them would leave candidates stored as `candidate`
     // that no retry ever audits, because the retry sees them as already nominated and skips them.
+    //
+    // The failing write itself is ambiguous: the error may have struck after the state was stored (a timeout
+    // after commit, a redis transaction whose later command failed). So after such an error the state is read
+    // back, and an item whose stored revision is the one this pass just wrote counts as persisted too.
     if (storage.supportsCompareAndSet === true) {
       const persisted: ScopedCandidate[] = [];
       for (const item of items) {
@@ -335,18 +347,26 @@ export function createCandidateStore(opts: {
           await persist(item.candidate, item.tenant);
           persisted.push(item);
         } catch (e) {
-          if (!isStorageConflictError(e)) return { persisted, error: e };
+          if (isStorageConflictError(e)) continue;
+          if (await landed(item)) persisted.push(item);
+          return { persisted, error: e };
         }
       }
       return { persisted };
     }
     const states = items.map(({ candidate, tenant }) => buildPromotionState(candidate, tenant));
+    items.forEach(({ candidate }, i) => {
+      attemptedRevision.set(candidate, states[i]!.revision!);
+    });
     if (storage.putPromotionStates != null) {
-      // One call: it either stored the whole batch or reports failure, so nothing is known to be durable on error.
+      // One call. The reference adapters store the whole batch or none of it, but a failure can still strike
+      // after the commit, so read every state back to see which landed.
       try {
         await storage.putPromotionStates(states);
       } catch (e) {
-        return { persisted: [], error: e };
+        const persisted: ScopedCandidate[] = [];
+        for (const item of items) if (await landed(item)) persisted.push(item);
+        return { persisted, error: e };
       }
       return { persisted: items };
     }
@@ -356,11 +376,30 @@ export function createCandidateStore(opts: {
       try {
         await storage.putPromotionState(states[i]!);
       } catch (e) {
+        if (await landed(item)) persisted.push(item);
         return { persisted, error: e };
       }
       persisted.push(item);
     }
     return { persisted };
+  }
+
+  /**
+   * Whether the snapshot `persist` / `persistMany` last tried to write for this item is what is stored now
+   * (same revision). A read failure counts as "not known to have landed", so the original error stays the one
+   * reported.
+   */
+  async function landed({ candidate, tenant }: ScopedCandidate): Promise<boolean> {
+    const attempted = attemptedRevision.get(candidate);
+    if (attempted === undefined) return false;
+    try {
+      const current = await storage.getPromotionState(candidate.artifactId, tenant);
+      if (current?.revision !== attempted) return false;
+      loadedRevision.set(candidate, attempted);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

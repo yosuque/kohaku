@@ -342,7 +342,7 @@ function revisionOf(raw: string): string | undefined {
  * The compare-and-set check against the raw stored body (`null` = absent), the same four states as
  * `StoragePort`'s `expectedRevision`: `null` = must be absent; `""` = must be present and carry no `revision`
  * (it predates the field); any other string = must be present with exactly that `revision`. For a present
- * record that is `(revision ?? "") === expected`; an absent one never matches a string.
+ * record that is the stored revision (read as `""` when absent or not a string) `=== expected`; an absent one never matches a string.
  */
 function checkRevision(
   kind: "promotion" | "fixation",

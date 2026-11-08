@@ -191,7 +191,7 @@ export interface DeleteFixationOptions {
  * `""` (the empty string) = the record MUST exist and carry no `revision` (it predates the field), so a caller
  * that read such a record is guarded like any other instead of writing unconditionally; any other string = the
  * stored record's `revision` MUST equal it. For a present record the last two are
- * `(stored.revision ?? "") === expectedRevision`. A mismatch (including a record that is absent when a string
+ * `revisionOrEmpty(stored) === expectedRevision`, where a `revision` that is absent or not a string reads as `""`. A mismatch (including a record that is absent when a string
  * was expected) MUST throw `StorageConflictError` and MUST NOT modify anything; the check and the write are
  * one atomic step. An adapter that does not declare `supportsCompareAndSet` MAY ignore the
  * option (unconditional write, as before), so the in-process mutex stays the only protection there; hosts

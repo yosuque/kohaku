@@ -647,7 +647,7 @@ type ExpectedRevision = str | None | _Unset
 """Four-state compare-and-set expectation of `put_promotion_state` / `put_fixation`: `UNSET` (default) = no
 check; `None` = the record MUST NOT exist yet; `""` (the empty string) = the record MUST exist and carry no
 `revision` (it predates the field); any other str = the stored record's `revision` MUST equal it. For a present
-record the last two are `(stored.revision or "") == expected`."""
+record the last two are `revision_or_empty(stored) == expected` (a `revision` that is absent or not a string reads as `""`)."""
 
 type ExpectedDeleteRevision = str | _Unset
 """Compare-and-set expectation of `delete_fixation`: `UNSET` (default) = unconditional; a str = the stored
@@ -713,7 +713,7 @@ class StoragePort(Protocol):
     authoritative overwrite); `None` = the record MUST NOT exist yet; `""` = the record MUST exist and carry no
     `revision` (it predates the field, so a caller that read such a record is guarded like any other instead of
     writing unconditionally); any other str = the stored record's `revision` MUST equal it. For a present record
-    the last two are `(stored.revision or "") == expected`. A mismatch (including a record that is absent when a
+    the last two are `revision_or_empty(stored) == expected` (a `revision` that is absent or not a string reads as `""`). A mismatch (including a record that is absent when a
     str was expected) MUST raise `StorageConflictError` and MUST NOT modify anything; the check and the write
     are one atomic step. An adapter that does not
     declare `supports_compare_and_set` MAY ignore the parameter (unconditional write, as before), so the

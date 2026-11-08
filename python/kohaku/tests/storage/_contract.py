@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import pytest
@@ -538,6 +538,25 @@ async def _cas_promotion_empty_string(port: Any) -> None:
         port.put_promotion_state(promotion("x", "b", "r1"), expected_revision="")
     )
     assert await port.get_promotion_state("x", "b") is None
+
+
+@_case(
+    "compare-and-set: put_promotion_state / put_fixation / delete_fixation: a stored revision that is not "
+    'a string reads as unversioned ("")'
+)
+async def _cas_non_string_revision(port: Any) -> None:
+    odd: list[Any] = [7, True, {"v": 1}]
+    for i, revision in enumerate(odd):
+        id_ = f"odd{i}"
+        await port.put_promotion_state(replace(promotion(id_, "x"), revision=revision))
+        await port.put_promotion_state(promotion(id_, "x", "r1"), expected_revision="")
+        assert (await _promo(port, id_, "x")).revision == "r1"
+        await port.put_fixation(replace(fixation(id_, "a"), revision=revision))
+        await port.put_fixation(fixation(id_, "a", "r1"), expected_revision="")
+        assert (await _fix(port, id_, "a")).revision == "r1"
+        await port.put_fixation(replace(fixation(id_, "b"), revision=revision))
+        await port.delete_fixation(id_, "b", expected_revision="")
+        assert await port.get_fixation(id_, "b") is None
 
 
 @_case(
