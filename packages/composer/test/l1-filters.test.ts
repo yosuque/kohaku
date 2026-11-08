@@ -362,6 +362,25 @@ describe("ComposePolicy.l1Filters", () => {
       expect(noBase.trace.filters).toEqual({ injected: ["groupBy"] });
     });
 
+    it("does not describe the variants of a descriptor with more options than l1FiltersMaxVariants (the injection is abandoned anyway)", async () => {
+      const many: FilterDescriptor = {
+        ...GROUP_BY,
+        options: [
+          { value: "region", label: "region" },
+          ...Array.from({ length: 200 }, (_, i) => ({ value: `v${i}`, label: `v${i}` })),
+        ],
+      };
+      const seen: string[] = [];
+      const semantic = {
+        ...semanticWith(async () => [many]),
+        describeShape: shapeByGroupBy(seen),
+      };
+      const { trace } = await compose(GUI_INPUT, makeCtx({ l1Filters: true }, semantic));
+      // Only the initial handles were described (by resolveRefs); no variant ref was.
+      expect(seen.filter((u) => u.includes("groupBy=v"))).toEqual([]);
+      expect(trace.filters).toEqual({ injected: [], skipped: "variant-limit" });
+    });
+
     it("a dropped descriptor changes the cache key (the hash covers the descriptors actually used)", async () => {
       const kept = await compose(
         GUI_INPUT,

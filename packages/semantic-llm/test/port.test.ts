@@ -431,6 +431,87 @@ describe("createLlmSemanticPort describeFilters: the filters never widen what th
     expect(roomy.map((f) => f.param)).toEqual(["a", "b"]);
   });
 
+  it("does not vet a product over a filter the composer would not inject (an absent value stays un-vetted)", async () => {
+    // region is optional and absent from the ref, so injectFilters skips its filter and the signed product holds
+    // region at "absent". The refine forbids (private, detail) exactly there: the vis x level product must be
+    // validated with region absent, not with region ranging over its options.
+    const regional = defineIntent({
+      canonical: "x.regional",
+      description: "Regional",
+      source: "src",
+      params: z
+        .object({
+          vis: z.enum(["public", "private"]).default("public"),
+          level: z.enum(["summary", "detail"]).default("summary"),
+          region: z.enum(["a", "b"]).optional(),
+        })
+        .refine(
+          (p) => !(p.vis === "private" && p.level === "detail" && p.region == null),
+          "private/detail across all regions is forbidden",
+        ),
+      examples: [],
+      facets: [
+        { param: "vis", label: "V" },
+        { param: "level", label: "L" },
+        { param: "region", label: "R", emptyLabel: "All" },
+      ],
+      queries: [{ path: "docs", paramMap: { vis: "vis", level: "level", region: "region" } }],
+    }).toIntentDef();
+    const p = portFor([regional]);
+    expect(await p.describeFilters!(at("x.regional", { vis: "public", level: "summary" }))).toEqual([]);
+    // With region present in the ref it is injected and vetted, and the forbidden pair is no longer reachable
+    // (region is never absent), so all three filters survive.
+    const withRegion = await p.describeFilters!(
+      at("x.regional", { vis: "public", level: "summary", region: "a" }),
+    );
+    expect(withRegion.map((f) => f.param)).toEqual(["vis", "level", "region"]);
+  });
+
+  it("validates through the catalog's own validator when it has one (what compose enforces), not just the schema", async () => {
+    const free = defineIntent({
+      canonical: "x.free",
+      description: "Free",
+      source: "src",
+      params: z.object({
+        vis: z.enum(["public", "private"]).default("public"),
+        level: z.enum(["summary", "detail"]).default("summary"),
+      }),
+      examples: [],
+      facets: [
+        { param: "vis", label: "Visibility" },
+        { param: "level", label: "Level" },
+      ],
+      queries: [{ path: "docs", paramMap: { vis: "vis", level: "level" } }],
+    }).toIntentDef();
+    const inner = createIntentCatalog([free]);
+    // A product catalog layering a cross-field rule on top of the (constraint-free) schema.
+    const strict: IntentCatalogLike = {
+      get: (n) => inner.get(n),
+      list: () => inner.list(),
+      names: () => inner.names(),
+      normalizeParams: (n, p) => inner.normalizeParams(n, p),
+      validateParams: (n, p) => {
+        const base = inner.validateParams(n, p);
+        if (base.ok && base.params["vis"] === "private" && base.params["level"] === "detail") {
+          return { ok: false, issues: [{ path: "", message: "private/detail is forbidden" }] };
+        }
+        return base;
+      },
+    };
+    const mk = (catalog: IntentCatalogLike) =>
+      createLlmSemanticPort({ llm: new FakeLlm(), catalog, dataVersion: () => "v" });
+    const intent = at("x.free", { vis: "public", level: "summary" });
+    expect(await mk(strict).describeFilters!(intent)).toEqual([]);
+    expect((await mk(inner).describeFilters!(intent)).map((f) => f.param)).toEqual(["vis", "level"]);
+    // Without validateParams the catalog's normalizeParams is the validator.
+    const { validateParams: _drop, ...noValidate } = strict;
+    const viaNormalize: IntentCatalogLike = {
+      ...noValidate,
+      normalizeParams: (n, p) => (strict.validateParams!(n, p).ok ? inner.normalizeParams(n, p) : null),
+    };
+    expect(await mk(viaNormalize).describeFilters!(intent)).toEqual([]);
+  });
+
   it("an unknown Intent and an Intent without filters are unaffected", async () => {
     const p = portFor([docs]);
     expect(await p.describeFilters!(at("x.bogus", {}))).toEqual([]);

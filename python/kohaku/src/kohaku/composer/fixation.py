@@ -37,10 +37,15 @@ class FixationCheck:
     - revalidated: the fingerprint mismatches/is missing, but revalidation against the current catalog passes → deliverable.
     - stale: validation against the current catalog fails → not deliverable (the host invalidates the fixation and
       falls back to normal compose).
+    - unavailable: the check itself could not run (the filter descriptor source raised for a pin that carries
+      `data.bind`) → not deliverable THIS time, but the fixation is NOT invalidated: it may well be fine, and the
+      pinned binds must not be signed unchecked. The host falls back to normal compose for this request and
+      reports `cause`.
     """
 
-    kind: Literal["fresh", "revalidated", "stale"]
+    kind: Literal["fresh", "revalidated", "stale", "unavailable"]
     issues: list[str] | None = None
+    cause: BaseException | None = None
 
 
 async def materialize_fixation(
@@ -130,9 +135,18 @@ async def materialize_fixation(
     # read scopes the capability issued for it is built from, and nothing above looks at them. A bind value the
     # Intent's CURRENT descriptors no longer offer (an option removed from a vocabulary, a facet made
     # `filterable=False`, a tenant's narrowed list) must not keep minting capabilities from a pin.
-    filter_drift = await _detect_filter_drift(fixation.pinnedSpec, intent, ctx, tenant)
-    if filter_drift is not None:
-        return None, FixationCheck(kind="stale", issues=[f"filter options drifted: {filter_drift}"])
+    filter_check = await _detect_filter_drift(fixation.pinnedSpec, intent, ctx, tenant)
+    if filter_check is not None:
+        drift_kind, detail = filter_check
+        if drift_kind == "drift":
+            return None, FixationCheck(kind="stale", issues=[f"filter options drifted: {detail}"])
+        return None, FixationCheck(
+            kind="unavailable",
+            issues=[
+                "filter descriptors unavailable: the pinned data.bind values could not be checked"
+            ],
+            cause=detail if isinstance(detail, BaseException) else None,
+        )
 
     # pinnedSpec's refVersions is the old version at fixation time, so always drop it and re-fill with the latest version.
     # Delivering it as-is would make the renderer's per-reference matching always STALE.
@@ -173,29 +187,37 @@ async def materialize_fixation(
 
 async def _detect_filter_drift(
     pinned: UISpec, intent: Intent, ctx: ComposeContext, tenant: str | None
-) -> str | None:
-    """Checks that every `data.bind` of a pinned Spec is still allowed by the Intent's CURRENT filter
-    descriptors, and returns a human-readable description of the first violation (None when there is none, or
-    nothing to check). Port of TS fixation.ts's detectFilterDrift.
+) -> tuple[Literal["drift", "unavailable"], str | BaseException] | None:
+    """Checks that every `data.bind` of a pinned L1 Spec is still allowed by the Intent's CURRENT filter
+    descriptors: ("drift", description of the first violation), ("unavailable", the exception) when the
+    descriptor source raised, or None (no violation, or nothing to check). Port of TS fixation.ts's
+    detectFilterDrift.
 
-    The model cannot author `data.bind` (it is outside the generation vocabulary), so a bind in a fixated L1
-    Spec is one the composer injected from a descriptor: it must still be governed by one -- a descriptor with
-    the same `queryParam` whose `paths` include the carrying component's ref path -- and its `values` must be a
-    SUBSET of that descriptor's option values. Compared by subset of values, not by hash: a label-only change,
-    or options added to the vocabulary, leave the pin deliverable. A bind with no governing descriptor at all
-    (the filter was removed) is drift too.
+    Only L1 pins are checked (`provenance.tier == "L1"`): fixation pins an L1-generated Spec, the model cannot
+    author `data.bind`, and the only source of one on L1 is the composer's own injection from a descriptor (or a
+    product `extra_rules` post rule, which is then subject to this check too). An L0 pin's binds are the
+    template's own hand-written cross-filter (the template owns their drift; out of scope here), so an approved
+    L0 fixation carrying them must not go stale just because the Intent exposes no descriptor for them.
 
-    Without a descriptor source -- a SemanticPort with no `describe_filters` -- or when it raises (fail-open),
-    today's behaviour is kept: nothing is checked. A Spec with no `data.bind` never calls the port.
+    Inside L1, each bind must still be governed by a descriptor -- the same `queryParam`, whose `paths` include
+    the carrying component's ref path -- and its `values` must be a SUBSET of that descriptor's option values.
+    Compared by subset of values, not by hash. A bind with no governing descriptor at all is drift too.
+
+    Without a descriptor source -- a SemanticPort with no `describe_filters` -- nothing is checked (documented).
+    A source that RAISES is different: failing open would sign the pinned binds unchecked, so the result is
+    "unavailable" (fail closed for this request, without destroying the fixation). A Spec with no `data.bind`
+    never calls the port.
     """
+    if pinned.provenance.tier != "L1":
+        return None
     bound = [c for c in pinned.components if c.data is not None and c.data.bind]
     describe_filters = getattr(ctx.semantic, "describe_filters", None)
     if len(bound) == 0 or describe_filters is None:
         return None
     try:
         descriptors: list[FilterDescriptor] = list(await describe_filters(intent, tenant=tenant))
-    except Exception:  # noqa: BLE001 - fail-open, like _resolve_refs
-        return None
+    except Exception as e:  # noqa: BLE001 - fail closed, non-destructively
+        return ("unavailable", e)
     for c in bound:
         assert c.data is not None and c.data.bind is not None
         try:
@@ -207,11 +229,17 @@ async def _detect_filter_drift(
                 (d for d in descriptors if d.queryParam == query_param and path in d.paths), None
             )
             if governing is None:
-                return f'{c.id}: no filter governs "{query_param}" on "{path}" any more'
+                return (
+                    "drift",
+                    f'{c.id}: no filter governs "{query_param}" on "{path}" any more',
+                )
             allowed = {o.value for o in governing.options}
             removed = next((v for v in bind.values if v not in allowed), None)
             if removed is not None:
-                return f'{c.id}: "{query_param}" value "{removed}" is no longer an option'
+                return (
+                    "drift",
+                    f'{c.id}: "{query_param}" value "{removed}" is no longer an option',
+                )
     return None
 
 

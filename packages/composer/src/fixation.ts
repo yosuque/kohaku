@@ -17,8 +17,16 @@ import type { ComposeTrace } from "./trace.js";
  * - fresh: the catalog fingerprint at fixation time matches the current one → deliver as-is, skipping revalidation.
  * - revalidated: the fingerprint mismatches/is missing, but revalidation against the current catalog passes → deliverable (the host re-stamps the fingerprint).
  * - stale: validation against the current catalog fails → not deliverable (the host invalidates the fixation and falls back to normal compose).
+ * - unavailable: the check itself could not run (the filter descriptor source threw for a pin that carries
+ *   `data.bind`) → not deliverable THIS time, but the fixation is NOT invalidated: it may well be fine, and the
+ *   pinned binds must not be signed unchecked. The host falls back to normal compose for this request and
+ *   reports `cause`.
  */
-export type FixationCheck = { kind: "fresh" } | { kind: "revalidated" } | { kind: "stale"; issues: string[] };
+export type FixationCheck =
+  | { kind: "fresh" }
+  | { kind: "revalidated" }
+  | { kind: "stale"; issues: string[] }
+  | { kind: "unavailable"; issues: string[]; cause?: unknown };
 
 /** materializeFixation's return shape: the composed result when deliverable (null when not), plus the staleness verdict. */
 export type FixationMaterialization = { result: ComposeResult | null; check: FixationCheck };
@@ -35,7 +43,7 @@ export type FixationMaterialization = { result: ComposeResult | null; check: Fix
  * value's check hands the host the material to decide:
  * - fresh / revalidated: return with a Spec in result (deliverable).
  * - stale: return with result=null (not deliverable — the host falls back to normal compose).
- * A pinned Spec carrying injected filters (`data.bind`, `ComposePolicy.l1Filters`) is also checked against the
+ * A pinned L1 Spec carrying injected filters (`data.bind`, `ComposePolicy.l1Filters`) is also checked against the
  * CURRENT filter descriptors (`SemanticPort.describeFilters`, when the port has it): see detectFilterDrift.
  * lineage recording (intent.unfixated on invalidate, etc.) is not done in the composer
  * (the dependency direction must not flow backward — recording is the host layer's responsibility).
@@ -122,9 +130,17 @@ export async function materializeFixation(
   // read scopes the capability issued for it is built from, and nothing above looks at them. A bind value the
   // Intent's CURRENT descriptors no longer offer (an option removed from a vocabulary, a facet made
   // `filterable: false`, a tenant's narrowed list) must not keep minting capabilities from a pin.
-  const filterDrift = await detectFilterDrift(fixation.pinnedSpec, intent, ctx, tenant);
-  if (filterDrift != null) {
-    return stale([`filter options drifted: ${filterDrift}`]);
+  const filterCheck = await detectFilterDrift(fixation.pinnedSpec, intent, ctx, tenant);
+  if (filterCheck?.kind === "drift") return stale([`filter options drifted: ${filterCheck.detail}`]);
+  if (filterCheck?.kind === "unavailable") {
+    return {
+      result: null,
+      check: {
+        kind: "unavailable",
+        issues: ["filter descriptors unavailable: the pinned data.bind values could not be checked"],
+        cause: filterCheck.cause,
+      },
+    };
   }
 
   // pinnedSpec's refVersions is the old version at fixation time, so always drop it and re-fill with the latest version.
@@ -157,35 +173,41 @@ export async function materializeFixation(
 }
 
 /**
- * Checks that every `data.bind` of a pinned Spec is still allowed by the Intent's CURRENT filter descriptors,
- * and returns a human-readable description of the first violation (null when there is none, or nothing to check).
+ * Checks that every `data.bind` of a pinned L1 Spec is still allowed by the Intent's CURRENT filter
+ * descriptors: `drift` (with a human-readable description of the first violation), `unavailable` (the
+ * descriptor source threw), or null (no violation, or nothing to check).
  *
- * The model cannot author `data.bind` (it is outside the generation vocabulary), so a bind in a fixated L1 Spec
- * is one the composer injected from a descriptor: it must still be governed by one -- a descriptor with the
- * same `queryParam` whose `paths` include the carrying component's ref path -- and its `values` must be a
- * SUBSET of that descriptor's option values. Compared by subset of values, not by hash: a label-only change, or
- * options added to the vocabulary, leave the pin deliverable (a pinned Spec keeps offering exactly what it was
- * approved with, which the current descriptors still allow). A bind with no governing descriptor at all (the
- * filter was removed) is drift too.
+ * Only L1 pins are checked (`provenance.tier === "L1"`): fixation pins an L1-generated Spec, the model cannot
+ * author `data.bind`, and the only source of one on L1 is the composer's own injection from a descriptor (or a
+ * product `extraRules` post rule, which is then subject to this check too). An L0 pin's binds are the
+ * template's own hand-written cross-filter (the template owns their drift; out of scope here), so an approved
+ * L0 fixation carrying them must not go stale just because the Intent exposes no descriptor for them.
  *
- * Without a descriptor source -- a SemanticPort with no `describeFilters` -- or when it throws (fail-open, like
- * refs.ts), today's behaviour is kept: nothing is checked. A Spec with no `data.bind` never calls the port. The
- * descriptors are the port's own: the composer's shape guard (dropShapeChangingFilters) is not re-run on this
- * delivery fast path.
+ * Inside L1, each bind must still be governed by a descriptor -- the same `queryParam`, whose `paths` include
+ * the carrying component's ref path -- and its `values` must be a SUBSET of that descriptor's option values.
+ * Compared by subset of values, not by hash: a label-only change, or options added to the vocabulary, leave the
+ * pin deliverable. A bind with no governing descriptor at all (the filter was removed) is drift too.
+ *
+ * Without a descriptor source -- a SemanticPort with no `describeFilters` -- nothing is checked (documented,
+ * today's behaviour). A source that THROWS is a different case: failing open would sign the pinned binds
+ * unchecked, so the result is `unavailable` (fail closed for this request, without destroying the fixation).
+ * A Spec with no `data.bind` never calls the port. The descriptors are the port's own: the composer's shape
+ * guard (dropShapeChangingFilters) is not re-run on this delivery fast path.
  */
 async function detectFilterDrift(
   pinned: UISpec,
   intent: CanonicalIntent,
   ctx: ComposeContext,
   tenant?: string,
-): Promise<string | null> {
+): Promise<{ kind: "drift"; detail: string } | { kind: "unavailable"; cause: unknown } | null> {
+  if (pinned.provenance.tier !== "L1") return null;
   const bound = pinned.components.filter((c) => c.data?.bind != null && Object.keys(c.data.bind).length > 0);
   if (bound.length === 0 || ctx.semantic.describeFilters == null) return null;
   let descriptors: FilterDescriptor[];
   try {
     descriptors = await ctx.semantic.describeFilters(intent, tenant != null ? { tenant } : undefined);
-  } catch {
-    return null;
+  } catch (cause) {
+    return { kind: "unavailable", cause };
   }
   for (const c of bound) {
     let path: string;
@@ -198,10 +220,17 @@ async function detectFilterDrift(
       const governing = descriptors.find(
         (d) => d.queryParam === queryParam && Array.isArray(d.paths) && d.paths.includes(path),
       );
-      if (governing == null) return `${c.id}: no filter governs "${queryParam}" on "${path}" any more`;
+      if (governing == null) {
+        return { kind: "drift", detail: `${c.id}: no filter governs "${queryParam}" on "${path}" any more` };
+      }
       const allowed = new Set(governing.options.map((o) => o.value));
       const removed = bind.values.find((v) => !allowed.has(v));
-      if (removed != null) return `${c.id}: "${queryParam}" value "${removed}" is no longer an option`;
+      if (removed != null) {
+        return {
+          kind: "drift",
+          detail: `${c.id}: "${queryParam}" value "${removed}" is no longer an option`,
+        };
+      }
     }
   }
   return null;

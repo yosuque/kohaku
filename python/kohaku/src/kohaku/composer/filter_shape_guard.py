@@ -13,7 +13,9 @@ variant ref of each option is described and compared with the handle's own shape
 equality of the column names). A descriptor is dropped when any variant differs or its shape cannot be
 obtained (a variant that does not resolve is not safe to offer). A descriptor is kept as-is, unchecked, when
 there is nothing to compare against: the governed handle's own shape is unknown (a port without shapes must
-mark shape-changing facets `filterable=False`).
+mark shape-changing facets `filterable=False`). A descriptor with more distinct options than `max_variants` is
+not described either (kept as-is): inject_filters abandons the whole injection for it (`variant-limit`) whatever
+its shapes are, so the fan-out of one `describe_shape` call per option would be wasted.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ async def drop_shape_changing_filters(
     handles: Sequence[QueryHandle],
     shapes_by_ref: Mapping[str, DataShape],
     describe_shape: Callable[[QueryHandle], Awaitable[DataShape | None]],
+    max_variants: int,
 ) -> list[FilterDescriptor]:
     """Returns `descriptors` itself when nothing was dropped."""
     if len(descriptors) == 0:
@@ -62,6 +65,8 @@ async def drop_shape_changing_filters(
 
     async def _keep(descriptor: FilterDescriptor) -> bool:
         paths = descriptor.paths if isinstance(descriptor.paths, list) else []
+        if len({o.value for o in descriptor.options}) > max_variants:
+            return True
         for handle in handles:
             try:
                 ref = parse_query_ref(handle.uri)

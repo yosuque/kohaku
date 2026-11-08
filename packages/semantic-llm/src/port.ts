@@ -12,7 +12,7 @@ import {
   type SessionContext,
 } from "@kohaku-ui/spec-core";
 import type { IntentCatalogLike } from "./catalog.js";
-import { DEFAULT_MAX_FILTER_VARIANTS, vetFilters } from "./filters.js";
+import { DEFAULT_MAX_FILTER_VARIANTS, paramsCheckFor, vetFilters } from "./filters.js";
 import { normalizeGuiAction } from "./gui.js";
 import { normalizeNlQuery } from "./nl.js";
 
@@ -137,12 +137,14 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
     ): Promise<FilterDescriptor[]> {
       // An unknown Intent has no filters (resolveQuery is what reports it); an Intent defined without facets
       // or on the callback path has no `filters` derivation, which is the same "no filters" answer.
-      const def = catalogFor(ctx?.tenant).get(intent.canonical);
+      const catalog = catalogFor(ctx?.tenant);
+      const def = catalog.get(intent.canonical);
       const filters = def?.filters?.(ctx?.locale);
       if (def == null || filters == null || filters.length === 0) return [];
-      // The Intent's params schema is the authority: options it rejects are dropped, and a product containing a
-      // forbidden combination yields no filters at all (the composer signs the whole product).
-      return vetFilters(def, intent, filters, maxFilterVariants);
+      // The Intent's params validation (the catalog's own validator, the one compose enforces) is the
+      // authority: options it rejects are dropped, and a product containing a forbidden combination yields no
+      // filters at all (the composer signs the whole product of the filters it injects).
+      return vetFilters(def, intent, filters, maxFilterVariants, paramsCheckFor(catalog, def));
     },
     async validateIntent(intent: IntentInput, ctx: SessionContext): Promise<IntentInput> {
       const catalog = catalogFor(ctx.tenant);

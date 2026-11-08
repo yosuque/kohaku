@@ -125,17 +125,50 @@ describe("materializeFixation: injected filters are checked against the current 
     }
   });
 
-  it("keeps today's behaviour without a descriptor source, or when describeFilters throws", async () => {
+  it("keeps today's behaviour (no check) when the port has no describeFilters at all", async () => {
     const { fixation, spec } = await injectedFixation();
-    for (const describe of [
-      undefined,
-      async (): Promise<FilterDescriptor[]> => {
-        throw new Error("boom");
-      },
-    ]) {
-      const { result, check } = await materializeFixation(fixation, spec.intent, ctxWith(describe));
+    const { result, check } = await materializeFixation(fixation, spec.intent, ctxWith(undefined));
+    expect(check.kind).toBe("fresh");
+    expect(result).not.toBeNull();
+  });
+
+  it("fails closed when describeFilters throws: not deliverable now, not stale, cause carried for the report", async () => {
+    const { fixation, spec } = await injectedFixation();
+    const boom = new Error("boom");
+    const { result, check } = await materializeFixation(
+      fixation,
+      spec.intent,
+      ctxWith(async () => {
+        throw boom;
+      }),
+    );
+    expect(result).toBeNull();
+    expect(check.kind).toBe("unavailable");
+    if (check.kind === "unavailable") expect(check.cause).toBe(boom);
+  });
+
+  it("an L0 pin with hand-written binds is not checked: fresh with no descriptors, l1Filters off or on", async () => {
+    const { fixation, spec } = await injectedFixation();
+    // Model an approved L0 template Spec carrying its own cross-filter bind: same shape, tier L0.
+    const l0: UISpec = { ...spec, provenance: { ...spec.provenance, tier: "L0" } };
+    const l0Fixation: FixationRecord = {
+      ...fixation,
+      pinnedSpec: l0,
+      structureHash: await computeStructureHash(l0),
+    };
+    for (const policy of [{}, { l1Filters: true }]) {
+      let called = 0;
+      const ctx: ComposeContext = {
+        ...ctxWith(async () => {
+          called++;
+          return [];
+        }),
+        policy,
+      };
+      const { result, check } = await materializeFixation(l0Fixation, spec.intent, ctx);
       expect(check.kind).toBe("fresh");
       expect(result).not.toBeNull();
+      expect(called).toBe(0);
     }
   });
 

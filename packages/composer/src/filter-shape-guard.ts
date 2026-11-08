@@ -42,6 +42,9 @@ function sameColumns(a: DataShape, b: DataShape): boolean {
  * shape cannot be obtained (a variant that does not resolve is not safe to offer). A descriptor is kept as-is,
  * unchecked, when there is nothing to compare against: no `describeShape`, or the governed handle's own shape
  * is unknown (document: a port without `describeShape` must mark shape-changing facets `filterable: false`).
+ * A descriptor with more distinct options than `maxVariants` is not described either (kept as-is): injectFilters
+ * abandons the whole injection for it (`variant-limit`) whatever its shapes are, so the fan-out of one
+ * `describeShape` call per option would be wasted.
  * Returns the input array when nothing was dropped.
  */
 export async function dropShapeChangingFilters(
@@ -49,6 +52,7 @@ export async function dropShapeChangingFilters(
   handles: readonly QueryHandle[],
   shapesByRef: ReadonlyMap<string, DataShape>,
   describeShape: ((handle: QueryHandle) => Promise<DataShape>) | undefined,
+  maxVariants: number,
 ): Promise<FilterDescriptor[]> {
   if (describeShape == null || descriptors.length === 0) return descriptors;
   // One describeShape call per distinct variant ref, whatever the number of descriptors / handles asking.
@@ -68,6 +72,7 @@ export async function dropShapeChangingFilters(
   const verdicts = await Promise.all(
     descriptors.map(async (descriptor): Promise<boolean> => {
       const paths = Array.isArray(descriptor.paths) ? descriptor.paths : [];
+      if (new Set(descriptor.options.map((o) => o.value)).size > maxVariants) return true;
       for (const handle of handles) {
         const ref = parseHandle(handle.uri);
         if (ref == null || !paths.includes(ref.path) || !Object.hasOwn(ref.params, descriptor.queryParam)) {

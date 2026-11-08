@@ -1407,3 +1407,49 @@ def test_intent_normalize_malformed_traceparent_leaves_trace_context_none(tmp_pa
     assert res.status_code == 422
     assert len(captured) == 1
     assert captured[0].trace_context is None
+
+
+def test_an_l1_pin_with_binds_whose_describe_filters_raises_is_not_invalidated_and_reported_as_fixation_check(
+    tmp_path: Path,
+) -> None:
+    """The pin's filter check could not run: this request falls back to normal compose, the approved fixation
+    survives (no invalidate) and the failure reaches on_error as `fixation.check` (port of the host-rest
+    fixation-staleness.test.ts case)."""
+    from kohaku.spec import UISpec, compute_structure_hash
+
+    seen: list[HostErrorInfo] = []
+    harness = build_harness(tmp_path, on_error=seen.append)
+    harness.client.post(_url("/compose"), json={"intent": INTENT_BODY})
+    approve = harness.client.post(_url("/fixations/approve"), json={"intent": INTENT_BODY})
+    assert approve.status_code == 200
+    intent_hash = approve.json()["fixation"]["intentHash"]
+
+    # Give the pinned L1 Spec an injected-style bind (what l1Filters would have produced).
+    fixation = asyncio.run(harness.storage.get_fixation(intent_hash, None))
+    assert fixation is not None and fixation.pinnedSpec.provenance.tier == "L1"
+    wire = fixation.pinnedSpec.to_wire()
+    for c in wire["components"]:
+        if c["type"] == "presentSpreadsheet":
+            c["data"]["bind"] = {"groupBy": {"$state": "groupBy", "values": ["region", "product"]}}
+    wire["state"] = {"groupBy": "region"}
+    pinned = UISpec.model_validate(wire)
+    asyncio.run(
+        harness.storage.put_fixation(
+            dataclasses.replace(
+                fixation, pinnedSpec=pinned, structureHash=compute_structure_hash(pinned)
+            )
+        )
+    )
+
+    async def _boom(*_a: Any, **_k: Any) -> list[Any]:
+        raise RuntimeError("describe_filters down")
+
+    harness.ctx.semantic.describe_filters = _boom  # type: ignore[attr-defined]
+
+    spec = harness.client.post(_url("/compose"), json={"intent": INTENT_BODY}).json()["spec"]
+    assert spec["provenance"]["cache"] != "fixated"
+    assert any(
+        f["intentHash"] == intent_hash
+        for f in harness.client.get(_url("/fixations")).json()["fixations"]
+    )
+    assert "fixation.check" in [i.endpoint for i in seen]

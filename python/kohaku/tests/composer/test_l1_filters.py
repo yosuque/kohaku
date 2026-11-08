@@ -581,6 +581,32 @@ def test_shape_guard_leaves_the_descriptor_alone_when_there_is_nothing_to_compar
     asyncio.run(run())
 
 
+def test_shape_guard_does_not_describe_the_variants_of_a_descriptor_over_the_variant_cap(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        many = FilterDescriptor(
+            param="groupBy",
+            queryParam="groupBy",
+            paths=["summary"],
+            label="Group by",
+            options=[FilterOption("region", "region")]
+            + [FilterOption(f"v{i}", f"v{i}") for i in range(200)],
+        )
+        seen: list[str] = []
+        semantic = _ShapedSemantic(_shape_by_group_by(seen))
+        semantic.describe_filters = _describe([many])
+        result = await compose(
+            _INPUT, _ctx(tmp_path, ComposePolicy(l1Filters=True), semantic=semantic)
+        )
+        assert [u for u in seen if "groupBy=v" in u] == []
+        assert result.trace.filters is not None
+        assert result.trace.filters.injected == []
+        assert result.trace.filters.skipped == "variant-limit"
+
+    asyncio.run(run())
+
+
 def test_shape_guard_a_dropped_descriptor_changes_the_cache_key(tmp_path: Any) -> None:
     async def run() -> None:
         kept = await compose(

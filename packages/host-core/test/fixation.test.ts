@@ -388,6 +388,38 @@ describe("settleFixation: stale", () => {
   });
 });
 
+describe("settleFixation: unavailable (the pin's filter check could not run)", () => {
+  it("returns null WITHOUT invalidating, and reports the cause as fixation.check with the requestId", () => {
+    const fixation = makeFixation(validPinned(), "sha256:stale-fp");
+    const invalidate = vi.fn(async () => {});
+    const onSelfHealError = vi.fn();
+    const host = baseHost({ fixations: { invalidate }, onSelfHealError });
+    const cause = new Error("describeFilters down");
+    const settled = settleFixation(
+      { result: null, check: { kind: "unavailable" as const, issues: ["x"], cause } },
+      { intentHash: INTENT.hash, tenant: "acme", catalogFingerprint: catalog.fingerprint, fixation },
+      host,
+      "req-1",
+    );
+    expect(settled).toBeNull();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(onSelfHealError).toHaveBeenCalledWith("fixation.check", cause, "req-1");
+  });
+
+  it("reports an Error built from the issues when no cause was carried", () => {
+    const fixation = makeFixation(validPinned(), "sha256:stale-fp");
+    const onSelfHealError = vi.fn();
+    settleFixation(
+      { result: null, check: { kind: "unavailable" as const, issues: ["a", "b"] } },
+      { intentHash: INTENT.hash, tenant: undefined, catalogFingerprint: catalog.fingerprint, fixation },
+      baseHost({ onSelfHealError }),
+    );
+    const [endpoint, error] = onSelfHealError.mock.calls[0]!;
+    expect(endpoint).toBe("fixation.check");
+    expect((error as Error).message).toBe("a; b");
+  });
+});
+
 describe("settleFixation: serialize", () => {
   it("wraps both self-heal calls under serialize when provided", async () => {
     const order: string[] = [];

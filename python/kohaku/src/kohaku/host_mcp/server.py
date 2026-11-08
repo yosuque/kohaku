@@ -1681,6 +1681,8 @@ def _fixation_host(deps: McpHostDeps) -> FixationDeliveryHost:
         endpoint = (
             "fixation.refreshFingerprint"
             if kind == "refresh_fingerprint"
+            else "fixation.check"
+            if kind == "check"
             else "fixation.invalidate"
         )
 

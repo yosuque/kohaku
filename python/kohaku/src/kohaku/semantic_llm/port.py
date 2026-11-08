@@ -33,7 +33,7 @@ from kohaku.spec import (
 )
 
 from .catalog import IntentCatalogLike
-from .filters import DEFAULT_MAX_FILTER_VARIANTS, vet_filters
+from .filters import DEFAULT_MAX_FILTER_VARIANTS, params_check_for, vet_filters
 from .gui import normalize_gui_action
 from .nl import normalize_nl_query
 
@@ -186,15 +186,19 @@ class LlmSemanticPort:
         `max_filter_variants`, yields no filters). An unknown Intent has no filters
         (resolve_query is what reports it), nor does an Intent defined without facets or on the callback path
         (no `filters` derivation) -- the same "no filters" answer."""
-        def_ = self._catalog_for(tenant).get(intent.canonical)
+        catalog = self._catalog_for(tenant)
+        def_ = catalog.get(intent.canonical)
         if def_ is None or def_.filters is None:
             return []
         filters = def_.filters(locale)
         if len(filters) == 0:
             return []
-        # The Intent's params schema is the authority: options it rejects are dropped, and a product
-        # containing a forbidden combination yields no filters at all (the composer signs the whole product).
-        return vet_filters(def_, intent, filters, self._max_filter_variants)
+        # The Intent's params validation (the catalog's own validator, the one compose enforces) is the
+        # authority: options it rejects are dropped, and a product containing a forbidden combination yields
+        # no filters at all (the composer signs the whole product of the filters it injects).
+        return vet_filters(
+            def_, intent, filters, self._max_filter_variants, params_check_for(catalog, def_)
+        )
 
     async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput:
         """Validates and normalizes a directly-specified Intent (backs `kohaku.host_core.intent.resolve_intent`'s

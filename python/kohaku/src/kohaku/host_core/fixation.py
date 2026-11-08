@@ -62,7 +62,7 @@ class FixationSelfHealApi(Protocol):
 #: "fixation.refreshFingerprint" / "fixation.invalidate"), and preserving each verbatim (zero behavior change)
 #: means host_core cannot hardcode one shared string. The host's run_self_heal maps `kind` to its own endpoint
 #: string when reporting a failure.
-FixationSelfHealKind = Literal["refresh_fingerprint", "invalidate"]
+FixationSelfHealKind = Literal["refresh_fingerprint", "invalidate", "check"]
 
 FixationLookup = Callable[[str, SessionContext], Awaitable[FixationRecord | None]]
 
@@ -135,6 +135,9 @@ async def settle_fixation(
     - stale: invalidate the fixation and return None = the caller falls back to normal compose. Even if
       invalidate raises, delivery continues (the fixation remains and runs degraded: revalidation fails every
       time -> fallback).
+    - unavailable: the pin's filter check could not run (descriptor source raised). Return None so THIS request
+      falls back to normal compose, but do NOT invalidate (the approved fixation may be fine) and do not
+      deliver the pinned binds unchecked; the failure is reported through run_self_heal with kind "check".
     """
     result, check = materialized
     fixations = host.fixations
@@ -158,6 +161,15 @@ async def settle_fixation(
                 target.tenant, target.intent_hash, _refresh, "refresh_fingerprint"
             )
         return result
+
+    if check.kind == "unavailable":
+        failure = check.cause or RuntimeError("; ".join(check.issues or []))
+
+        async def _report() -> None:
+            raise failure
+
+        await host.run_self_heal(target.tenant, target.intent_hash, _report, "check")
+        return None
 
     # stale: not deliverable. Invalidate the fixation as self-healing (delivery continues via fallback).
     detail = "; ".join(check.issues) if check.kind == "stale" and check.issues else None

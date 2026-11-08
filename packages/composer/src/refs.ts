@@ -3,12 +3,14 @@ import {
   combineDataVersions,
   type DataShape,
   type FilterDescriptor,
+  MAX_BIND_VARIANTS,
   type QueryHandle,
 } from "@kohaku-ui/spec-core";
 import type { ComposeContext } from "./context.js";
 import { isClientSafeCause } from "./error-message.js";
 import { ComposeError } from "./errors.js";
 import { dropShapeChangingFilters } from "./filter-shape-guard.js";
+import { DEFAULT_L1_FILTERS_MAX_VARIANTS } from "./post/inject-filters.js";
 
 export interface ResolvedRefs {
   handles: QueryHandle[];
@@ -118,7 +120,11 @@ export async function resolveRefs(
       // Defence in depth (design.md #78): a filter whose options rename the result's columns would blank the
       // generated chart / table, so it is dropped. The cache key hashes the descriptors actually used.
       const describe = ctx.semantic.describeShape?.bind(ctx.semantic);
-      descriptors = await dropShapeChangingFilters(descriptors, handles, shapesByRef, describe);
+      const maxVariants = Math.min(
+        ctx.policy.l1FiltersMaxVariants ?? DEFAULT_L1_FILTERS_MAX_VARIANTS,
+        MAX_BIND_VARIANTS,
+      );
+      descriptors = await dropShapeChangingFilters(descriptors, handles, shapesByRef, describe, maxVariants);
     } catch {
       descriptors = undefined;
     }

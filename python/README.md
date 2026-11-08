@@ -446,12 +446,16 @@ L1-generated Specs, mirroring TS's `ComposePolicy.l1Filters` (design.md #78):
 - `kohaku.semantic_llm`: the default port implements the optional
   `describe_filters(intent, *, tenant=None, locale=None)`; the composer probes it with
   `getattr` (`SupportsDescribeFilters`) and passes the session's tenant and locale. The port vets what it
-  returns against the Intent's params schema (`vet_filters`: options the schema rejects are dropped; a
-  forbidden combination, or a product over `max_filter_variants` -- default 64 -- yields no filters).
+  returns through the catalog's validator (`params_check_for`: `validate_params`, else `normalize_params`, else
+  the schema -- in Python the only place a cross-field constraint can live, since the params DSL has no
+  `refine`): `vet_filters` leaves out filters the composer would not inject, drops options the validator
+  rejects, and returns no filters when a combination is forbidden or the product exceeds `max_filter_variants`
+  (default 64). A custom SemanticPort must vet its own output.
 - `kohaku.composer`: `drop_shape_changing_filters` (via `describe_shape`) drops a descriptor whose option
-  variants change the column names of the governed ref; `materialize_fixation` marks a pinned Spec stale
+  variants change the column names of the governed ref; `materialize_fixation` marks a pinned **L1** Spec stale
   (`filter options drifted`) when its `data.bind` values are no longer a subset of the current descriptors'
-  options.
+  options (an L0 pin is not checked); if `describe_filters` raises for such a pin, `FixationCheck.kind` is
+  `"unavailable"` (the fixation is kept, the request composes normally, reported as `fixation.check`).
 - `kohaku.composer.inject_filters.inject_filters` is the post-step (run after `normalize_ids`
   and before `canonical_props`; L1 only; `max_variants` defaults to 64 = `ComposePolicy.l1FiltersMaxVariants`).
   The descriptors' hash (`filter_descriptors_hash`) and the cap join `policy_fingerprint` (`l1Filters`

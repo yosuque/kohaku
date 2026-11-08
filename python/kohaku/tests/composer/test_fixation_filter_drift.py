@@ -196,23 +196,67 @@ def test_compares_by_subset_of_values_not_by_hash(tmp_path: Any) -> None:
     asyncio.run(run())
 
 
-def test_keeps_todays_behaviour_without_a_descriptor_source_or_when_it_raises(
+def test_keeps_todays_behaviour_no_check_when_the_port_has_no_describe_filters_at_all(
     tmp_path: Any,
 ) -> None:
     async def run() -> None:
         fixation, intent = await _injected_fixation(tmp_path / "a")
+        result, check = await materialize_fixation(
+            fixation, intent, _ctx(tmp_path / "b", _Semantic())
+        )
+        assert check.kind == "fresh"
+        assert result is not None
 
-        async def boom(
+    asyncio.run(run())
+
+
+def test_fails_closed_when_describe_filters_raises_not_deliverable_not_stale_cause_carried(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        fixation, intent = await _injected_fixation(tmp_path / "a")
+        boom = RuntimeError("boom")
+
+        async def raising(
             intent: Intent, *, tenant: str | None = None, locale: str | None = None
         ) -> list[FilterDescriptor]:
-            raise RuntimeError("boom")
+            raise boom
 
-        for i, semantic in enumerate([_Semantic(), _Semantic(boom)]):
-            result, check = await materialize_fixation(
-                fixation, intent, _ctx(tmp_path / f"b{i}", semantic)
-            )
+        result, check = await materialize_fixation(
+            fixation, intent, _ctx(tmp_path / "b", _Semantic(raising))
+        )
+        assert result is None
+        assert check.kind == "unavailable"
+        assert check.cause is boom
+
+    asyncio.run(run())
+
+
+def test_an_l0_pin_with_hand_written_binds_is_not_checked_fresh_with_l1_filters_off_or_on(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        fixation, intent = await _injected_fixation(tmp_path / "a")
+        # Model an approved L0 template Spec carrying its own cross-filter bind: same shape, tier L0.
+        wire = fixation.pinnedSpec.to_wire()
+        wire["provenance"] = {**wire["provenance"], "tier": "L0"}
+        l0 = UISpec.model_validate(wire)
+        l0_fixation = replace(fixation, pinnedSpec=l0, structureHash=compute_structure_hash(l0))
+        for i, policy in enumerate([ComposePolicy(), ComposePolicy(l1Filters=True)]):
+            called = 0
+
+            async def describe(
+                intent: Intent, *, tenant: str | None = None, locale: str | None = None
+            ) -> list[FilterDescriptor]:
+                nonlocal called
+                called += 1
+                return []
+
+            ctx = replace(_ctx(tmp_path / f"b{i}", _Semantic(describe)), policy=policy)
+            result, check = await materialize_fixation(l0_fixation, intent, ctx)
             assert check.kind == "fresh"
             assert result is not None
+            assert called == 0
 
     asyncio.run(run())
 
