@@ -266,6 +266,68 @@ describe("planCatalogMigration", () => {
       expect(plan.blocked[0]!.issues[0]).toContain("kpi1:");
     });
 
+    describe("planning never mutates the stored fixation, even when the hook mutates its argument", () => {
+      /** A fixation whose node carries nested props, so a shallow copy would not be enough. */
+      function nestedFixation(): FixationRecord {
+        return fixation({
+          intentHash: INTENT_HASH_CLEAN,
+          pinnedSpec: fixedSpec(INTENT_HASH_CLEAN, [
+            {
+              id: "kpi1",
+              type: OLD_CLEAN_TYPE,
+              props: { label: "Revenue", meta: { tags: ["a"] } },
+              data: { $ref: "query://sales/revenue" },
+            },
+          ]),
+        });
+      }
+
+      /** Scribbles on the argument at every level, then hands back `result`. */
+      const mutating = (result: (props: JsonObject) => JsonObject | undefined) => (props: JsonObject) => {
+        props["format"] = "currency";
+        (props["meta"] as { tags: string[] }).tags.push("mutated");
+        return result(props) as JsonObject;
+      };
+
+      it("a valid plan: the step carries the migrated props, the stored record is untouched", async () => {
+        const stored = nestedFixation();
+        const before = structuredClone(stored);
+        const catalog = catalogWithMigrate(mutating((props) => props));
+        const plan = await planCatalogMigration({ storage: stubStorage([stored]), catalogFor: () => catalog });
+        expect(plan.steps).toHaveLength(1);
+        expect(plan.steps[0]!.pinnedSpec.components[0]!.props).toEqual({
+          label: "Revenue",
+          meta: { tags: ["a", "mutated"] },
+          format: "currency",
+        });
+        expect(stored).toEqual(before);
+      });
+
+      it("a blocked plan (the hook returns undefined): the stored record is untouched", async () => {
+        const stored = nestedFixation();
+        const before = structuredClone(stored);
+        const catalog = catalogWithMigrate(mutating(() => undefined));
+        const plan = await planCatalogMigration({ storage: stubStorage([stored]), catalogFor: () => catalog });
+        expect(plan.steps).toEqual([]);
+        expect(plan.blocked).toHaveLength(1);
+        expect(stored).toEqual(before);
+      });
+
+      it("a throwing hook: the stored record is untouched", async () => {
+        const stored = nestedFixation();
+        const before = structuredClone(stored);
+        const catalog = catalogWithMigrate(
+          mutating(() => {
+            throw new Error("migrate exploded");
+          }),
+        );
+        await expect(
+          planCatalogMigration({ storage: stubStorage([stored]), catalogFor: () => catalog }),
+        ).rejects.toThrow("migrate exploded");
+        expect(stored).toEqual(before);
+      });
+    });
+
     it("blocks reshaped props that still fail the replacement's schema", async () => {
       const catalog = catalogWithMigrate((props) => ({ label: [props["label"]] }));
       const plan = await planCatalogMigration({
