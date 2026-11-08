@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -69,5 +69,114 @@ describe.each(SNIPPETS)("$page ⇄ $snippet", ({ page, snippet, maxLines, nth })
 
   it(`fits in ${maxLines} lines`, () => {
     expect(source.split("\n").length).toBeLessThanOrEqual(maxLines);
+  });
+});
+
+/**
+ * Copy-paste onboarding prompts for coding agents (Claude Code / Codex / Cursor). Each prompt is a plain-text
+ * file under snippets/agent-prompts/ that both the EN and JA page show verbatim in a ```text fence, so the
+ * prompt a reader copies is always the one this suite checked. The prompts are English in both languages: they
+ * are instructions for a model, and the repository's own API names, package names and commands are English.
+ */
+const PROMPTS: { page: string; prompt: string }[] = [
+  { page: "docs/paths/react-dashboard.md", prompt: "snippets/agent-prompts/react-dashboard.md" },
+  { page: "docs/paths/mcp-apps.md", prompt: "snippets/agent-prompts/mcp-apps.md" },
+  { page: "docs/paths/full-stack.md", prompt: "snippets/agent-prompts/full-stack.md" },
+  { page: "python/README.md", prompt: "snippets/agent-prompts/python-host.md" },
+];
+
+const PROMPT_MAX_LINES = 40;
+
+/** Every fenced ```text block of a Markdown string, in order. */
+function textBlocks(markdown: string): string[] {
+  return [...markdown.matchAll(/```text\n([\s\S]*?)```/g)].map((m) => m[1] ?? "");
+}
+
+function jaPageOf(page: string): string {
+  return page.replace(/\.md$/, ".ja.md");
+}
+
+describe.each(PROMPTS)("$page ⇄ $prompt (agent prompt)", ({ page, prompt }) => {
+  const source = readFileSync(join(SITE_DIR, prompt), "utf8").trimEnd();
+
+  it("is shown verbatim, once, in the EN page", () => {
+    const blocks = textBlocks(readFileSync(join(REPO_ROOT, page), "utf8"));
+    expect(blocks.map((b) => b.trimEnd())).toEqual([source]);
+  });
+
+  it("is shown verbatim, once, in the JA page", () => {
+    const blocks = textBlocks(readFileSync(join(REPO_ROOT, jaPageOf(page)), "utf8"));
+    expect(blocks.map((b) => b.trimEnd())).toEqual([source]);
+  });
+
+  it(`fits in ${PROMPT_MAX_LINES} lines`, () => {
+    expect(source.split("\n").length).toBeLessThanOrEqual(PROMPT_MAX_LINES);
+  });
+});
+
+/** Source roots a prompt's API names must resolve in: every package, the CLI, the Python port and its sample. */
+function sourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourceFiles(full));
+    else if (/\.(ts|tsx|py)$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+/** Names that look like code but are product / prose words, or illustrative placeholders. */
+const NOT_API_NAMES = new Set(["FastAPI", "sales_summary"]);
+
+describe("agent prompts only name things that exist in this repository", () => {
+  const roots = [
+    ...readdirSync(join(REPO_ROOT, "packages")).map((p) => join(REPO_ROOT, "packages", p, "src")),
+    join(REPO_ROOT, "cli/src"),
+    join(REPO_ROOT, "python/kohaku/src"),
+    join(REPO_ROOT, "python/examples"),
+  ].filter((p) => existsSync(p));
+  const corpus = roots
+    .flatMap((r) => sourceFiles(r))
+    .map((f) => readFileSync(f, "utf8"))
+    .join("\n");
+
+  const workspacePackages = new Set<string>();
+  for (const dir of ["packages", "cli", "spec"]) {
+    const base = join(REPO_ROOT, dir);
+    const manifests =
+      dir === "packages"
+        ? readdirSync(base).map((p) => join(base, p, "package.json"))
+        : [join(base, "package.json")];
+    for (const m of manifests) {
+      if (existsSync(m))
+        workspacePackages.add((JSON.parse(readFileSync(m, "utf8")) as { name: string }).name);
+    }
+  }
+
+  describe.each(PROMPTS)("$prompt", ({ prompt }) => {
+    const source = readFileSync(join(SITE_DIR, prompt), "utf8");
+
+    it("every @kohaku-ui/* package is a workspace package", () => {
+      const named = [...source.matchAll(/@kohaku-ui\/[a-z0-9-]+/g)].map((m) => m[0]);
+      expect([...new Set(named)].filter((n) => !workspacePackages.has(n))).toEqual([]);
+    });
+
+    it("every CamelCase / camelCase / snake_case identifier is defined somewhere in the source", () => {
+      const names = new Set(
+        source.match(/\b(?:[A-Z][a-z0-9]+){2,}\b|\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[a-z]+(?:_[a-z0-9]+)+\b/g) ??
+          [],
+      );
+      const missing = [...names].filter(
+        (n) => !NOT_API_NAMES.has(n) && !new RegExp(`\\b${n}\\b`).test(corpus),
+      );
+      expect(missing).toEqual([]);
+    });
+
+    it("every kohaku.<module> Python path is a module of the port", () => {
+      const modules = [...source.matchAll(/\bkohaku\.([a-z_]+)/g)].map((m) => m[1] ?? "");
+      const missing = modules.filter((m) => !existsSync(join(REPO_ROOT, "python/kohaku/src/kohaku", m)));
+      expect(missing).toEqual([]);
+    });
   });
 });
