@@ -750,7 +750,7 @@ export const myCard = defineComponent({
   type: "myapp.card", version: "1.0.0",
   // … description / propsSchema / capabilities as before …
   deprecated: { reason: "superseded by myapp.cardV2", replacedBy: { type: "myapp.cardV2" } },
-  migrateProps: (props) => ({ title: props.title }), // TS-only: rewrites props for `kohaku migrate`
+  migrateProps: (props) => ({ title: props.title }), // rewrites props for `kohaku migrate` (Python: `migrate_props=`)
 });
 ```
 

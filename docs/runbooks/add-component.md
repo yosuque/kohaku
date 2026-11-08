@@ -97,7 +97,11 @@ semantic equivalence via `CHART_CORPUS` — rather than forcing it into `STRUCTU
 2. A fallback's `mapProps` is a function and can't be JSON-serialized, so hand-port it into
    `_FALLBACK_MAP_PROPS` in `python/kohaku/src/kohaku/registry/core/__init__.py`. Omitting an entry
    here raises a `RuntimeError` at catalog-build time — you can't silently forget this one.
-3. Update the fingerprint pin in `python/kohaku/tests/registry/test_fingerprint.py`. No count pin
+3. Likewise, if the part declares `migrateProps` (a deprecated part with `replacedBy`), hand-port it into
+   `_MIGRATE_PROPS` in the same file (no core part declares one today, so the table is empty). The
+   exporter emits a `hasMigrateProps: true` marker for such a part, and the Python loader raises a
+   `RuntimeError` if the marker and `_MIGRATE_PROPS` disagree (a missing port, or a stale entry).
+4. Update the fingerprint pin in `python/kohaku/tests/registry/test_fingerprint.py`. No count pin
    needs updating in `python/kohaku/tests/registry/test_catalog.py` —
    `test_loads_every_exported_component` derives the expected count from the exported catalog JSON
    itself.

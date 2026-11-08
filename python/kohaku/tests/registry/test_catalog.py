@@ -126,6 +126,91 @@ class TestFallbackMapPropsNullish:
         assert select({"label": "L", "value": "v"}) == {"markdown": "**L**"}
 
 
+class TestCoreMigrateProps:
+    """migrate_props hand-port table (kohaku.registry.core._MIGRATE_PROPS), the counterpart of TS's
+    ComponentDefinition.migrateProps. The JSON export only carries a `hasMigrateProps` marker."""
+
+    @staticmethod
+    def _entry(**extra: Any) -> dict[str, Any]:
+        data = json.loads(
+            resources.files("kohaku.registry._data")
+            .joinpath("core-catalog.json")
+            .read_text("utf-8")
+        )
+        entry: dict[str, Any] = dict(
+            next(e for e in data["components"] if e["type"] == "layout.stack")
+        )
+        entry.update(extra)
+        return entry
+
+    def test_no_core_part_marks_migrate_props_and_none_is_ported(self) -> None:
+        from kohaku.registry.core import _MIGRATE_PROPS
+
+        data = json.loads(
+            resources.files("kohaku.registry._data")
+            .joinpath("core-catalog.json")
+            .read_text("utf-8")
+        )
+        marked = {e["type"] for e in data["components"] if e.get("hasMigrateProps") is True}
+        assert marked == set(_MIGRATE_PROPS)
+        assert all(
+            d.migrate_props is None for d in core_catalog().components if d.type not in marked
+        )
+
+    def test_a_ported_hook_is_attached_to_its_definition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kohaku.registry import core
+
+        monkeypatch.setitem(core._MIGRATE_PROPS, "layout.stack", lambda p: {**p, "migrated": True})
+        definition = core._build_definition(self._entry(hasMigrateProps=True))
+        assert definition.migrate_props is not None
+        assert definition.migrate_props({"a": 1}) == {"a": 1, "migrated": True}
+
+    def test_a_marker_without_a_ported_hook_fails_loudly(self) -> None:
+        from kohaku.registry import core
+
+        with pytest.raises(RuntimeError, match="_MIGRATE_PROPS"):
+            core._build_definition(self._entry(hasMigrateProps=True))
+
+    def test_a_marker_without_a_ported_hook_fails_core_catalog_load(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # End to end through the loader (bypassing the lru cache): the JSON says a part declares
+        # migrateProps, but _MIGRATE_PROPS has no port for it.
+        from kohaku.registry import core
+
+        real_loads = json.loads
+
+        def loads_with_marker(text: str) -> Any:
+            data = real_loads(text)
+            data["components"][0]["hasMigrateProps"] = True
+            return data
+
+        monkeypatch.setattr(json, "loads", loads_with_marker)
+        with pytest.raises(RuntimeError, match="_MIGRATE_PROPS"):
+            core.core_catalog.__wrapped__()
+
+    def test_a_ported_hook_without_a_marker_fails_core_catalog_load(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kohaku.registry import core
+
+        first = core_catalog().components[0].type
+        monkeypatch.setitem(core._MIGRATE_PROPS, first, lambda p: p)
+        with pytest.raises(RuntimeError, match="stale entry"):
+            core.core_catalog.__wrapped__()
+
+    def test_a_ported_hook_without_a_marker_fails_loudly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kohaku.registry import core
+
+        monkeypatch.setitem(core._MIGRATE_PROPS, "layout.stack", lambda p: p)
+        with pytest.raises(RuntimeError, match="stale entry"):
+            core._build_definition(self._entry())
+
+
 class TestDefineComponent:
     def test_rejects_bad_type(self) -> None:
         with pytest.raises(ComponentDefinitionError):
