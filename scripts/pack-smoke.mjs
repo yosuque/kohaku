@@ -45,6 +45,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readCatalog } from "./lib/read-catalog.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -233,12 +234,19 @@ function checkTarballContents(pkg) {
 // Step 4: consumer install (plain npm, outside the workspace)
 // ---------------------------------------------------------------------------------------------------------
 
-/** Parses `key: value` lines out of pnpm-workspace.yaml's catalog block (avoids a yaml dependency). */
+/**
+ * One catalog entry's range (the parser is shared: scripts/lib/read-catalog.mjs). A missing key is fatal: a
+ * silent fallback would loosen the pin this smoke test exists to hold.
+ */
 function readCatalogVersion(workspaceYaml, key) {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = workspaceYaml.match(new RegExp(`^\\s*"?${escaped}"?:\\s*(\\S.*)$`, "m"));
-  if (!match) return null;
-  return match[1].trim().replace(/^"(.*)"$/, "$1");
+  let range;
+  try {
+    range = readCatalog(workspaceYaml).get(key);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  if (range === undefined) fail(`pnpm-workspace.yaml's catalog has no entry for ${key}`);
+  return range;
 }
 
 function collectExternalPeers(packages, workspaceYaml) {
@@ -267,27 +275,27 @@ function collectExternalPeers(packages, workspaceYaml) {
   // catalog's exact react-dom pin (e.g. react 19.3.1 against react-dom 19.3.0). Only pin react when some
   // package actually peer-depends on it.
   if (peers["react"]) {
-    peers["react"] = readCatalogVersion(workspaceYaml, "react") ?? peers["react"];
+    peers["react"] = readCatalogVersion(workspaceYaml, "react");
   }
-  peers["react-dom"] = readCatalogVersion(workspaceYaml, "react-dom") ?? peers["react-dom"] ?? "^19.0.0";
+  peers["react-dom"] = readCatalogVersion(workspaceYaml, "react-dom");
   if (!peers["jsdom"]) {
-    peers["jsdom"] = readCatalogVersion(workspaceYaml, "jsdom") ?? "*";
+    peers["jsdom"] = readCatalogVersion(workspaceYaml, "jsdom");
   }
   if (!peers["zod"]) {
-    peers["zod"] = readCatalogVersion(workspaceYaml, "zod") ?? "^4.0.0";
+    peers["zod"] = readCatalogVersion(workspaceYaml, "zod");
   }
   // @types/react(-dom) are not runtime peers of anything, but the type-check step (6) needs them resolvable
   // for any entry whose .d.ts imports react's types (renderer-react, sandbox/react).
   if (peers["react"]) {
-    peers["@types/react"] = readCatalogVersion(workspaceYaml, "@types/react") ?? "^19.0.0";
-    peers["@types/react-dom"] = readCatalogVersion(workspaceYaml, "@types/react-dom") ?? "^19.0.0";
+    peers["@types/react"] = readCatalogVersion(workspaceYaml, "@types/react");
+    peers["@types/react-dom"] = readCatalogVersion(workspaceYaml, "@types/react-dom");
   }
   // @types/node: not a peer of anything either, but with skipLibCheck: false (step 6 deliberately does not
   // skip it) tsc also checks *dependencies'* .d.ts files -- and @modelcontextprotocol/server's own .d.ts
   // references the ambient `Buffer` type. Any real consumer of a server-side kohaku package (host-core /
   // host-rest / host-mcp-apps / cli all declare "types": ["node"] themselves, per this repo's own
   // convention) is expected to have @types/node in their own project already; this mirrors that.
-  peers["@types/node"] = readCatalogVersion(workspaceYaml, "@types/node") ?? "*";
+  peers["@types/node"] = readCatalogVersion(workspaceYaml, "@types/node");
   return peers;
 }
 
@@ -728,7 +736,7 @@ async function checkInitMcp(packages, tmpRoot, consumerDir, workspaceYaml) {
   // than appDir -- the two processes (this check's client, the spawned server) never share node_modules.
   const mcpClientDir = join(tmpRoot, "init-mcp-client");
   mkdirSync(mcpClientDir, { recursive: true });
-  const clientVersion = readCatalogVersion(workspaceYaml, "@modelcontextprotocol/client") ?? "^2.0.0";
+  const clientVersion = readCatalogVersion(workspaceYaml, "@modelcontextprotocol/client");
   writeFileSync(
     join(mcpClientDir, "package.json"),
     JSON.stringify(
@@ -889,6 +897,13 @@ try {
           headers: { origin: "http://evil.example", "access-control-request-method": "POST" },
         });
         if (preflight.status !== 403) throw new Error(`a foreign-Origin preflight got ${preflight.status}, expected 403`);
+        // Only /mcp is served: any other path is answered 404 by the shared scaffold, not by the MCP handler.
+        const otherPath = await fetch(`http://127.0.0.1:${port}/other`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+          body: listBody,
+        });
+        if (otherPath.status !== 404) throw new Error(`POST /other got ${otherPath.status}, expected 404`);
 
         // The host is built once per process, so the second identical call is served from the Spec cache. If the
         // host were rebuilt per exchange, both calls would report a miss.
@@ -903,7 +918,7 @@ try {
     fail(`generated project's mcp-http server did not answer initialize on :${port}`, String(err));
   }
   log(
-    `  Streamable HTTP MCP server: answers initialize on a free port (:${port}), refuses a foreign Origin (403), and the second identical call is a Spec cache hit`,
+    `  Streamable HTTP MCP server: answers initialize on a free port (:${port}), refuses a foreign Origin (403), answers 404 off /mcp, and the second identical call is a Spec cache hit`,
   );
 
   // --- (c) scripts/claude-desktop.mjs --print against a fake HOME (never a real Claude Desktop config) ---
