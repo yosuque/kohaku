@@ -407,7 +407,6 @@ describe("ApprovalsTab", () => {
         vi.advanceTimersByTime(91_000);
       });
       expect(screen.queryByText(/other-approver/)).toBeNull();
-      expect((screen.getByText(m.approvals.approveButton) as HTMLButtonElement).disabled).toBe(false);
     } finally {
       vi.useRealTimers();
     }

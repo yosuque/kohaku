@@ -232,69 +232,88 @@ class TestJwks:
         resolver = create_jwt_identity_resolver(JwtJwksKey(pair.jwks), audience="kohaku")
         assert _code_of(resolver, pair.sign({"sub": "rs"}, aud="someone-else")) == "INVALID_TOKEN"
 
-    def test_cancelling_one_waiter_of_a_shared_fetch_does_not_fail_the_others(
-        self, jwks_server: tuple[str, type[_JwksHandler]]
-    ) -> None:
-        # The waiters share one in-flight fetch. A cancelled waiter must drop out alone: it must neither cancel
-        # the shared future for its siblings nor make the fetching request fail with InvalidStateError.
-        url, handler = jwks_server
+    @staticmethod
+    def _gated_resolver(
+        pair: RsaKeyPair,
+    ) -> tuple[Any, threading.Event, threading.Event, list[int]]:
+        """A resolver whose JWKS fetch blocks on `release`; `started` is set once the fetch is running. The
+        fetch is stubbed on the resolver's own `_RemoteJwks` client, so no timing is involved."""
+        started, release, hits = threading.Event(), threading.Event(), [0]
+        resolver = create_jwt_identity_resolver(
+            JwtJwksUrlKey("https://issuer.invalid/jwks.json"), audience="kohaku"
+        )
+
+        def fetch_data() -> dict[str, Any]:
+            hits[0] += 1
+            started.set()
+            assert release.wait(10)
+            return pair.jwks
+
+        remote: Any = resolver._jwks  # the resolver's _RemoteJwks (private; the stub needs it)
+        remote._client.fetch_data = fetch_data
+        return resolver, started, release, hits
+
+    def test_cancelling_one_waiter_of_a_shared_fetch_does_not_fail_the_others(self) -> None:
+        # The requests share one in-flight fetch. A cancelled one must drop out alone: it must neither cancel
+        # the shared future for its siblings nor make the fetch end in InvalidStateError.
         pair = RsaKeyPair()
-        handler.body = json.dumps(pair.jwks).encode()
-        handler.delay = 0.3
-        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        resolver, started, release, hits = self._gated_resolver(pair)
 
         async def go() -> list[object]:
-            owner = asyncio.create_task(resolver.resolve(pair.sign({"sub": "owner"}, aud="kohaku")))
-            await asyncio.sleep(0.05)  # the owner is now fetching
-            cancelled = asyncio.create_task(
-                resolver.resolve(pair.sign({"sub": "cancelled"}, aud="kohaku"))
-            )
-            bystander = asyncio.create_task(
-                resolver.resolve(pair.sign({"sub": "bystander"}, aud="kohaku"))
-            )
-            await asyncio.sleep(0.05)  # both are now waiting on the shared fetch
+            def token(sub: str) -> str:
+                return pair.sign({"sub": sub}, aud="kohaku")
+
+            owner = asyncio.create_task(resolver.resolve(token("owner")))
+            assert await asyncio.to_thread(started.wait, 10)
+            cancelled = asyncio.create_task(resolver.resolve(token("cancelled")))
+            bystander = asyncio.create_task(resolver.resolve(token("bystander")))
+            await asyncio.sleep(
+                0
+            )  # both have joined the shared fetch (it cannot finish: it is gated)
+            await asyncio.sleep(0)
             cancelled.cancel()
+            await asyncio.sleep(0)
+            release.set()
             return list(await asyncio.gather(owner, cancelled, bystander, return_exceptions=True))
 
         owner_r, cancelled_r, bystander_r = run(go())
         assert isinstance(cancelled_r, asyncio.CancelledError)
         assert isinstance(owner_r, ResolvedIdentity) and owner_r.principal.id == "owner"
         assert isinstance(bystander_r, ResolvedIdentity) and bystander_r.principal.id == "bystander"
-        assert handler.hits == 1
+        assert hits[0] == 1
 
-    def test_cancelling_the_fetching_request_never_hands_its_cancellation_to_the_waiters(
-        self, jwks_server: tuple[str, type[_JwksHandler]]
-    ) -> None:
-        url, handler = jwks_server
+    def test_cancelling_the_request_that_started_the_fetch_does_not_fail_the_waiters(self) -> None:
+        # The fetch is decoupled from the request that started it: cancelling that request neither orphans the
+        # fetch nor turns the other requests' authentication into an error.
         pair = RsaKeyPair()
-        handler.body = json.dumps(pair.jwks).encode()
-        handler.delay = 0.3
-        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        resolver, started, release, hits = self._gated_resolver(pair)
 
         async def go() -> list[object]:
-            owner = asyncio.create_task(resolver.resolve(pair.sign({"sub": "owner"}, aud="kohaku")))
-            await asyncio.sleep(0.05)
-            waiters = [
-                asyncio.create_task(resolver.resolve(pair.sign({"sub": f"w{i}"}, aud="kohaku")))
-                for i in range(2)
-            ]
-            await asyncio.sleep(0.05)
+            def token(sub: str) -> str:
+                return pair.sign({"sub": sub}, aud="kohaku")
+
+            owner = asyncio.create_task(resolver.resolve(token("owner")))
+            assert await asyncio.to_thread(started.wait, 10)
+            waiters = [asyncio.create_task(resolver.resolve(token(f"w{i}"))) for i in range(2)]
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
             owner.cancel()
+            await asyncio.sleep(0)
+            release.set()
             return list(await asyncio.gather(owner, *waiters, return_exceptions=True))
 
         owner_r, *waiter_rs = run(go())
         assert isinstance(owner_r, asyncio.CancelledError)
-        for r in waiter_rs:
-            # Either outcome is fine -- the identity, or the fetch error (INVALID_TOKEN) -- but never
-            # the owner's CancelledError, and never an InvalidStateError leaking from the shared future.
-            assert isinstance(r, ResolvedIdentity) or (
-                isinstance(r, JwtIdentityError) and r.code == "INVALID_TOKEN"
-            )
-        # The interrupted fetch is not cached: the next resolution fetches again and succeeds.
-        handler.delay = 0.0
+        assert [r.principal.id for r in waiter_rs if isinstance(r, ResolvedIdentity)] == [
+            "w0",
+            "w1",
+        ]
         assert (
-            run(resolver.resolve(pair.sign({"sub": "later"}, aud="kohaku"))).principal.id == "later"
-        )
+            hits[0] == 1
+        )  # one fetch served everybody: the cancelled owner's fetch was not orphaned
+        # ... and its result was cached.
+        run(resolver.resolve(pair.sign({"sub": "later"}, aud="kohaku")))
+        assert hits[0] == 1
 
     def test_a_single_key_without_kid_verifies_a_token_without_kid(self) -> None:
         pair = RsaKeyPair()

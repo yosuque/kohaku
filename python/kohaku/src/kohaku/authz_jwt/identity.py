@@ -244,40 +244,48 @@ class _RemoteJwks:
         fetched_at = self._fetched_at
         return fetched_at is not None and _monotonic() < fetched_at + seconds
 
-    async def _reload(self) -> None:
-        with self._lock:
-            inflight = self._inflight
-            owner = inflight is None
-            if inflight is None:
-                inflight = self._inflight = Future()
-                # Mark it RUNNING at once: a RUNNING future cannot be cancelled, so `asyncio.wrap_future`'s
-                # cancel-propagation (a cancelled waiter calls `cancel()` on the future it wraps) is a no-op
-                # instead of cancelling the fetch for every sibling waiter -- and `set_result` /
-                # `set_exception` below can never hit InvalidStateError on a cancelled future. (Fixing it at
-                # the shared future's source makes every present and future awaiter safe, whereas
-                # `asyncio.shield` would have to be remembered at each await site.)
-                inflight.set_running_or_notify_cancel()
-        if not owner:
-            await asyncio.wrap_future(inflight)
-            return
+    def _fetch_job(self, inflight: Future[None]) -> None:
+        """Fetch, parse and cache-store as ONE job whose completion fulfils `inflight`. It runs on its own
+        thread, owned by neither the request that started it nor any event loop, so cancelling that request (or
+        any waiter) can neither orphan the fetch nor hand the others an error that was not theirs."""
         try:
-            payload = await asyncio.to_thread(self._client.fetch_data)
-            entries = _parse_jwk_set(payload)
+            entries = _parse_jwk_set(self._client.fetch_data())
             with self._lock:
                 self._entries = entries
                 self._fetched_at = _monotonic()
+                self._inflight = None
             inflight.set_result(None)
-        except Exception as e:
-            inflight.set_exception(e)
-            raise
-        except BaseException:
-            # Cancelled (or interrupted) mid-fetch: the waiters must not hang, and must not inherit a cancellation
-            # that was not theirs.
-            inflight.set_exception(RuntimeError("the JWKS fetch was interrupted"))
-            raise
-        finally:
+        except BaseException as e:
             with self._lock:
                 self._inflight = None
+            inflight.set_exception(e)
+
+    async def _reload(self) -> None:
+        with self._lock:
+            inflight = self._inflight
+            if inflight is None:
+                inflight = self._inflight = Future()
+                # Mark it RUNNING at once: a RUNNING future cannot be cancelled, so `asyncio.wrap_future`'s
+                # cancel-propagation (a cancelled awaiter calls `cancel()` on the future it wraps) is a no-op
+                # instead of cancelling the fetch for every sibling, and `set_result` / `set_exception` can
+                # never hit InvalidStateError. (Fixing it at the shared future's source makes every present
+                # and future awaiter safe, whereas `asyncio.shield` would have to be remembered at each await
+                # site.)
+                inflight.set_running_or_notify_cancel()
+                try:
+                    threading.Thread(
+                        target=self._fetch_job,
+                        args=(inflight,),
+                        name="kohaku-jwks-fetch",
+                        daemon=True,
+                    ).start()
+                except BaseException as e:
+                    self._inflight = None
+                    inflight.set_exception(e)
+                    raise
+        # The request that started the fetch awaits it exactly like every other: its cancellation only
+        # drops that one request.
+        await asyncio.wrap_future(inflight)
 
     async def candidates(self, alg: str, kid: object) -> list[jwt.PyJWK]:
         if self._entries is None or not self._fresh_for(JWKS_CACHE_MAX_AGE_SECONDS):

@@ -69,10 +69,10 @@ export interface ComponentDefinition<P extends z.ZodObject = z.ZodObject> {
   fallback?: FallbackDecl;
   /**
    * Migration hook: rewrites props from this part's shape into replacedBy's shape (used by host-core's
-   * planCatalogMigration). The hook must not mutate its argument; return the new props instead (planning hands it
-   * a private deep copy, so a mutation cannot reach the stored fixation, but it is still a contract violation). A function value can't survive JSON export — export-core-catalog emits only a
-   * `hasMigrateProps` marker and it is never present in the wire /catalog response. The Python port's
-   * equivalent is `ComponentDefinition.migrate_props`; a core part's hook is hand-ported into its
+   * planCatalogMigration). The hook must not mutate its argument; return the new props instead (planning hands
+   * it a private deep copy, so a mutation cannot reach the stored fixation, but it is still a contract
+   * violation). A function value can't survive JSON export — export-core-catalog emits only a `hasMigrateProps`
+   * marker and it is never present in the wire /catalog response. The Python port's equivalent is `ComponentDefinition.migrate_props`; a core part's hook is hand-ported into its
    * `_MIGRATE_PROPS` table.
    */
   migrateProps?: (props: JsonObject) => JsonObject;

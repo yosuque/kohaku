@@ -285,9 +285,11 @@ def test_migrate_props_receives_a_copy_of_the_nodes_props_and_the_original_is_le
     # Pins the call contract: migrate_props gets the node's props (equal content, but a private deep copy),
     # and the fixation's stored pinnedSpec is not touched by planning.
     seen: list[dict[str, Any]] = []
+    received: list[dict[str, Any]] = []
 
     def migrate(props: dict[str, Any]) -> dict[str, Any]:
         seen.append(dict(props))
+        received.append(props)
         return {"label": props["label"], "format": "percent"}
 
     old = replace(_old_clean_type_def(), migrate_props=migrate)
@@ -300,6 +302,9 @@ def test_migrate_props_receives_a_copy_of_the_nodes_props_and_the_original_is_le
 
     plan = asyncio.run(run())
     assert seen == [{"label": "Revenue"}]
+    assert (
+        received[0] is not fixation.pinnedSpec.components[0].props
+    )  # a copy, never the stored dict
     assert plan.steps[0].pinnedSpec.components[0].props == {"label": "Revenue", "format": "percent"}
     assert fixation.pinnedSpec.components[0].props == {"label": "Revenue"}
     assert fixation.pinnedSpec.components[0].type == OLD_CLEAN_TYPE

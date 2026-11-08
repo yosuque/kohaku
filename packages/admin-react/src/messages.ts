@@ -327,7 +327,7 @@ export const defaultAdminMessages: AdminMessages = {
     approveDisabledMismatch:
       "The recorded payload does not match the payload hash, so this request cannot be approved from here.",
     approveDisabledIssued:
-      "A token for this request was just issued on this page and has not expired yet. Re-issue it after it expires, or re-issue it through the API.",
+      "A token for this request was issued on this page and has not expired yet. Re-issue it after it expires, or re-issue it through the API.",
     issuedNotice: (action) =>
       `Approval token issued for ${action}. Copy it and hand it to the requester; it is a bearer secret.`,
     tokenLabel: "Approval token",
@@ -336,7 +336,7 @@ export const defaultAdminMessages: AdminMessages = {
         remainingSeconds < 60
           ? `${remainingSeconds}s`
           : `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
-      } (advisory; the real expiry may be earlier)`,
+      } (advisory). That token may still be valid; approving again issues a second token that works independently.`,
     issuedAge: (seconds, ttlSeconds) => `issued ${seconds}s ago (TTL ${ttlSeconds}s)`,
     copyButton: "Copy",
     copied: "Copied",
