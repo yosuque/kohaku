@@ -565,16 +565,24 @@ The JWT / OIDC identity side is `kohaku.authz_jwt` (the mirror of TS's `packages
 issuer=, audience=, clock_tolerance_seconds=, algorithms=, claims=JwtClaimNames(...), map_claims=, require_tenant=)`
 verifies a bearer token and maps `sub / name / roles / tenant` to a `Principal` + tenant (`resolve(token)` /
 `from_authorization_header(header)`, failing with `JwtIdentityError` codes `MISSING_TOKEN / INVALID_TOKEN /
-MISSING_SUBJECT / MISSING_TENANT`); the same construction-time rules as TS apply (a secret of at least 32 bytes,
-`audience` mandatory for a JWKS, `https:` or local `http:` JWKS URLs only). `create_jwt_authz_port(key,
+MISSING_SUBJECT / MISSING_TENANT / INVALID_TENANT`; a tenant claim over 256 UTF-16 code units or holding a control
+character is `INVALID_TENANT`, the rule `authz_hmac` applies when binding a tenant into a capability); the same
+construction-time rules as TS apply (a secret of at least 32 bytes, `audience` mandatory for a JWKS, `https:` or local
+`http:` JWKS URLs only). `create_jwt_authz_port(key,
 capability_secret=, ..., require_capability_tenant=False)` pairs that resolver (`.identity`) with `authz_hmac`'s
-capability tokens, which it delegates to entirely, so a TS-issued capability verifies in it and the reverse. Remote
-JWKS fetching is PyJWT's `PyJWKClient` (run off the event loop, 5 s timeout, 30 s cooldown on unknown-`kid` refetches),
-hence the `PyJWT>=2.14.0` floor; PyJWT's extra default checks (`sub` / `jti` type, `iat` in the future, `aud` when none is
-configured) are switched off so a token gets the same verdict as under jose. The sales sample's
-`KOHAKU_AUTHZ=jwt` mode (`KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` / `KOHAKU_JWT_AUDIENCE` / `KOHAKU_JWT_ISSUER` /
-`KOHAKU_JWT_REQUIRE_TENANT` / `KOHAKU_DEMO_ADMIN_ROUTES`, as in the TS sample) is REST-only: the Python MCP entry points
-stay HMAC-only and refuse `KOHAKU_AUTHZ=jwt`. `python/examples/sales-api`'s
+capability tokens, which it delegates to entirely, so a TS-issued capability verifies in it and the reverse. A token
+gets the same verdict as under jose: JWKS key selection is jose's (`kty` / `crv` / `alg` / `use` / `key_ops` / `kid`
+filter, every candidate tried, a token without `kid` allowed), the key is handed to PyJWT as a `PyJWK` so the header
+`alg` is bound to it, `exp` / `nbf` / `iat` must be JSON numbers, and PyJWT's extra default checks (`sub` / `jti` type,
+`iat` in the future, `aud` when none is configured) are switched off. A remote JWKS is fetched with PyJWT's
+`PyJWKClient` (the fetcher only: it refuses non-http(s) schemes and redirects; run off the event loop, 5 s timeout)
+under this module's own jose-style cache: trusted for 10 minutes, refetched at most once per 30 seconds on an unknown
+`kid`, and concurrent resolutions share one in-flight fetch. The first release with the redirect refusal is
+`PyJWT` 2.14.0, hence the `>=2.14.0` floor. The sales sample's `KOHAKU_AUTHZ=jwt` mode (`KOHAKU_JWT_SECRET` /
+`KOHAKU_JWT_JWKS_URL` / `KOHAKU_JWT_AUDIENCE` / `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_REQUIRE_TENANT` /
+`KOHAKU_DEMO_ADMIN_ROUTES`, as in the TS sample) works on both the REST entry and the MCP entries (the MCP profile
+resolves each tool call's principal from that call's own HTTP bearer token, fail-closed; stdio has no HTTP request, so
+every stdio call fails with `MISSING_TOKEN` under jwt). `python/examples/sales-api`'s
 `annotate` (`"confirm"` tier) and `publish` (`"approve"` tier) operations, and
 `sales_api_tests/test_governed_actions.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).

@@ -362,8 +362,9 @@ class _JwksHandler(http.server.BaseHTTPRequestHandler):
         if type(self).delay:
             time.sleep(type(self).delay)
         self.send_response(type(self).status)
-        if type(self).location:
-            self.send_header("location", type(self).location)
+        location = type(self).location
+        if location:
+            self.send_header("location", location)
         self.send_header("content-type", "application/json")
         self.end_headers()
         self.wfile.write(type(self).body)

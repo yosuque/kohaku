@@ -19,7 +19,6 @@ from urllib.parse import quote
 
 from kohaku.authz_hmac import (
     create_hmac_approval_port,
-    create_hmac_authz_port,
     create_memory_approval_store,
 )
 from kohaku.composer import ComposeTrace
@@ -41,7 +40,7 @@ from kohaku.storage import FileStoragePort
 
 from .action_effects import sales_action_effects
 from .app import admit_fixation_for_locale, create_app
-from .authz_from_env import capability_secret_from_env
+from .authz_from_env import create_authz_from_env
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _RENDERER_PATH = _REPO_ROOT / "apps/sample-mcp/dist/renderer/index.html"
@@ -135,17 +134,18 @@ async def create_kohaku_mcp_setup(
         else Path(os.environ.get("KOHAKU_DATA_DIR", _DEFAULT_DATA_DIR))
     )
     storage = FileStoragePort(resolved_data_dir)
-    # The MCP profile resolves no per-call principal, so there is nothing to feed a bearer JWT into: fail closed
-    # rather than silently running the HMAC-only authz when the environment asked for jwt (the REST entry,
-    # __main__.py, supports it via authz_from_env).
-    authz_kind = os.environ.get("KOHAKU_AUTHZ", "hmac")
-    if authz_kind != "hmac":
-        raise RuntimeError(
-            f'KOHAKU_AUTHZ="{authz_kind}" is not supported by the Python MCP profile, which is HMAC-only '
-            "(KOHAKU_AUTHZ=jwt is supported by the REST entry point, python -m sales_api)"
-        )
-    capability_secret = capability_secret_from_env(os.environ)
-    authz = create_hmac_authz_port(capability_secret)
+    # KOHAKU_AUTHZ selects the AuthzPort (hmac / jwt), exactly as the REST entry does. The MCP profile never resolves
+    # a tenant, so its capabilities are tenant-less and `require_capability_tenant` stays off (the default).
+    authz_env = create_authz_from_env(os.environ)
+    capability_secret = authz_env.capability_secret
+    authz = authz_env.authz
+    # Under jwt, the caller's principal comes from each tool call's own HTTP bearer token (McpHostDeps.
+    # resolve_principal is fail-closed). Unwired under hmac: every call runs as the anonymous principal.
+    resolve_principal = None
+    if authz_env.identity is not None:
+        from .request_identity_jwt import create_jwt_mcp_resolve_principal
+
+        resolve_principal = create_jwt_mcp_resolve_principal(authz_env.identity)
     # Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish") needs an
     # ApprovalPort to ever be allowed on the MCP profile too (symmetric with __main__.py's REST-side
     # wiring). Reuses the same KOHAKU_CAPABILITY_SECRET as the AuthzPort -- see kohaku.authz_hmac.approval_port's docstring
@@ -224,6 +224,9 @@ async def create_kohaku_mcp_setup(
                 # Governed actions (design.md #62/#63): verifies approval tokens for "approve"-tier
                 # actions (the demo's "publish"). Shared with the REST side (not duplicated).
                 approvals=approvals,
+                # Per-tool-call principal resolution under KOHAKU_AUTHZ=jwt (see above); None (every call runs as
+                # the anonymous principal) otherwise.
+                resolve_principal=resolve_principal,
             ),
             AttachOptions(
                 renderer_html=load_renderer_html,
