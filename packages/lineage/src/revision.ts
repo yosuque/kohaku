@@ -12,3 +12,14 @@
 export function generateRevision(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+/**
+ * The `expectedRevision` token for a stored record's `revision` on a compare-and-set port: the revision itself,
+ * or `""` ("the record exists but carries no revision") for a record that predates the field. The empty string
+ * is the wire value `StoragePort` gives that state, so a legacy record is guarded by a compare-and-set write
+ * exactly like a versioned one instead of being written unconditionally. (An absent record is `null`, which
+ * callers decide before they get here.)
+ */
+export function revisionToken(revision: unknown): string {
+  return typeof revision === "string" ? revision : "";
+}

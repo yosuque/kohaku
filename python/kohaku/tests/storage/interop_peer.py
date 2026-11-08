@@ -20,6 +20,7 @@ import asyncio
 import json
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,27 @@ def _fixation(
         catalogFingerprint=fingerprint,
         tenant=TENANT,
         revision=revision,
+    )
+
+
+LEGACY_TENANT = "acme-legacy"
+"""Tenant of the records that carry no `revision` (they predate the field), apart from the main fixtures."""
+
+
+def _legacy_promotion(revision: str | None = None, status: str = "candidate") -> PromotionState:
+    return PromotionState(
+        artifactId="lp",
+        status=status,
+        updatedAt=EVENT_TS,
+        data={},
+        tenant=LEGACY_TENANT,
+        revision=revision,
+    )
+
+
+def _legacy_fixation(revision: str | None = None) -> FixationRecord:
+    return replace(
+        _fixation("unused", "fp-legacy", "sha256:legacy"), tenant=LEGACY_TENANT, revision=revision
     )
 
 
@@ -180,6 +202,35 @@ async def adopt(backend: Backend) -> dict[str, Any]:
         [_batch_state("b1", "py-batch"), _batch_state("b2", "py-batch")]
     )
 
+    # Records the TS host wrote with no revision at all: expected_revision "" matches them (once), then conflicts.
+    legacy_promotion = await storage.get_promotion_state("lp", LEGACY_TENANT)
+    legacy_fixation = await storage.get_fixation("sha256:legacy", LEGACY_TENANT)
+    if legacy_promotion is None or legacy_fixation is None:
+        _fail("the TS host's unversioned records are missing")
+    legacy: dict[str, Any] = {
+        "promotionRevisionBefore": legacy_promotion.revision,
+        "fixationRevisionBefore": legacy_fixation.revision,
+    }
+    await storage.put_promotion_state(
+        _legacy_promotion("py-legacy", "approved"), expected_revision=""
+    )
+    await storage.put_fixation(_legacy_fixation("py-legacy"), expected_revision="")
+    legacy["promotionEmptyAgainConflict"] = False
+    legacy["fixationEmptyAgainConflict"] = False
+    legacy["fixationDeleteEmptyConflict"] = False
+    try:
+        await storage.put_promotion_state(_legacy_promotion("py-legacy-2"), expected_revision="")
+    except StorageConflictError:
+        legacy["promotionEmptyAgainConflict"] = True
+    try:
+        await storage.put_fixation(_legacy_fixation("py-legacy-2"), expected_revision="")
+    except StorageConflictError:
+        legacy["fixationEmptyAgainConflict"] = True
+    try:
+        await storage.delete_fixation("sha256:legacy", LEGACY_TENANT, expected_revision="")
+    except StorageConflictError:
+        legacy["fixationDeleteEmptyConflict"] = True
+
     # Records of our own, for the TS host to read.
     await storage.append_lineage(_event("py-event", "py-corr"))
     await storage.put_spec_cache("py-spec", example_spec())
@@ -190,6 +241,7 @@ async def adopt(backend: Backend) -> dict[str, Any]:
         "staleConflict": stale_conflict,
         "deleteStaleConflict": delete_stale_conflict,
         "pageIds": [e.id for e in page.events],
+        "legacy": legacy,
     }
 
 
@@ -202,6 +254,9 @@ async def seed(backend: Backend) -> dict[str, Any]:
     await storage.put_promotion_states(
         [_batch_state("b1", "py-batch"), _batch_state("b2", "py-batch")]
     )
+    # Records with no revision at all (written unconditionally, as a pre-`revision` writer would have).
+    await storage.put_promotion_state(_legacy_promotion())
+    await storage.put_fixation(_legacy_fixation())
     await storage.put_spec_cache("py-spec", example_spec())
     await storage.append_lineage(_event("py-event", "py-corr"))
     await backend.revocations.revoke("py-jti", int(time.time()) + 3600)
@@ -229,6 +284,12 @@ async def verify(backend: Backend) -> dict[str, Any]:
         batch = await storage.get_promotion_state(artifact_id, TENANT)
         if batch is None or batch.status != "ts-batch":
             _fail(f"the TS host's batch write is not visible for {artifact_id}: {batch}")
+    legacy_p = await storage.get_promotion_state("lp", LEGACY_TENANT)
+    if legacy_p is None or legacy_p.revision != "ts-legacy" or legacy_p.status != "approved":
+        _fail(f"the TS host's write over an unversioned promotion is not visible: {legacy_p}")
+    legacy_f = await storage.get_fixation("sha256:legacy", LEGACY_TENANT)
+    if legacy_f is None or legacy_f.revision != "ts-legacy":
+        _fail(f"the TS host's write over an unversioned fixation is not visible: {legacy_f}")
     ids = [e.id for e in await storage.list_lineage()]
     if ids != ["py-event", "ts-event"]:
         _fail(f"unexpected lineage order {ids}")

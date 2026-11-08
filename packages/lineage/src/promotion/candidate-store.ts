@@ -9,7 +9,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import { GENERATED_SCAN_WINDOW } from "../constants.js";
 import { notifyFailOpen } from "../fail-open.js";
-import { generateRevision } from "../revision.js";
+import { generateRevision, revisionToken } from "../revision.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import type { PromotionCandidate, PromotionOrigin, ScopedCandidate } from "./candidate.js";
 import type { PromotionErrorContext } from "./errors.js";
@@ -58,8 +58,9 @@ export interface CandidateStore {
   /**
    * Writes the candidate's snapshot with a fresh `revision`. On a `supportsCompareAndSet` port the write is
    * conditional on the revision the candidate was loaded with (see `assertUnchanged`), so it throws
-   * `StorageConflictError` instead of overwriting a concurrent writer's state. A candidate that was not
-   * loaded through this store, or whose stored record predates `revision`, is written unconditionally.
+   * `StorageConflictError` instead of overwriting a concurrent writer's state; a stored record that predates
+   * `revision` is guarded too (`expectedRevision: ""`). Only a candidate that was not loaded through this store
+   * is written unconditionally.
    */
   persist(candidate: PromotionCandidate, tenant?: string): Promise<void>;
   /**
@@ -67,7 +68,8 @@ export interface CandidateStore {
    * throws `StorageConflictError` when its revision differs from the one the candidate was loaded with, so a
    * transition that is already doomed to lose its conditional `persist` does not leave an orphan audit event
    * behind. A no-op on a port that does not declare `supportsCompareAndSet`, and for a candidate with no
-   * known loaded revision (never loaded, or loaded from a legacy record without one).
+   * known loaded revision (never loaded through this store). A legacy record without a `revision` is compared
+   * as `""`, like on the write.
    */
   assertUnchanged(candidate: PromotionCandidate, tenant?: string): Promise<void>;
   /**
@@ -76,8 +78,12 @@ export interface CandidateStore {
    * the whole batch); otherwise falls back to calling `persist` once per candidate (legacy behavior, unchanged).
    * A no-op for an empty list. Returns the items actually persisted: on a `supportsCompareAndSet` port each
    * candidate is written conditionally on its loaded revision and one that lost the race is left out.
+   *
+   * It never throws away what it already committed: a non-conflict storage error stops the pass and comes back
+   * as `error` next to the `persisted` items written before it, so the caller can audit those (they are durable,
+   * and a retry skips them because they are no longer `in_use`) and only then rethrow `error`.
    */
-  persistMany(items: ScopedCandidate[]): Promise<ScopedCandidate[]>;
+  persistMany(items: ScopedCandidate[]): Promise<PersistManyResult>;
   scan(tenant?: string): Promise<PromotionCandidate[]>;
   /**
    * Same population as `scan`, but each candidate is paired with its own owning tenant (the tenant recorded on
@@ -93,6 +99,16 @@ export interface CandidateStore {
    * returns a loader for the N+1-avoiding callers — see the `bulkLoader` implementation below.
    */
   bulkLoader(tenant?: string): Promise<BulkCandidateLoader>;
+}
+
+/**
+ * Result of `CandidateStore.persistMany`. `persisted` are the items that are durably stored (in input order);
+ * `error` is present exactly when the pass stopped on a non-conflict storage error (the failing item and every
+ * item after it are not in `persisted`). Checked with `"error" in result`, since a thrown value may be falsy.
+ */
+export interface PersistManyResult {
+  persisted: ScopedCandidate[];
+  error?: unknown;
 }
 
 /** Result of `CandidateStore.bulkLoader`: the latest `component.generated` event per `(tenant, artifactId)` key and a per-candidate `load` that reuses the bulk indexes. */
@@ -119,12 +135,19 @@ export function createCandidateStore(opts: {
 
   /**
    * The revision each loaded candidate was read with, for the optional StoragePort compare-and-set: `null` =
-   * no state was stored, a string = the stored `revision`, `undefined` (also: not in the map) = the stored
-   * record predates `revision` or was unreadable, so the next write is unconditional (and stamps one). Kept
+   * no state was stored, `""` = a state exists but carries no `revision` (it predates the field), any other
+   * string = the stored `revision`; `undefined` (not in the map) = the candidate was never loaded through this
+   * store, so the next write is unconditional (and stamps one). Kept
    * beside the candidate rather than on it: `PromotionCandidate` is what the REST API serializes, and the
    * revision is storage bookkeeping, not part of that wire shape.
    */
   const loadedRevision = new WeakMap<PromotionCandidate, string | null | undefined>();
+  /**
+   * The revision of the snapshot `persist` / `persistMany` most recently tried to write for a candidate, set
+   * before the write. After a non-conflict error the outcome is ambiguous (a timeout after commit, a redis
+   * transaction whose later command failed), so `persistMany` re-reads the state and compares it with this.
+   */
+  const attemptedRevision = new WeakMap<PromotionCandidate, string>();
 
   /**
    * Validates a promotion-state record read back from storage against PromotionStateSchema, treating a
@@ -212,9 +235,14 @@ export function createCandidateStore(opts: {
       ...(origin != null ? { origin } : {}),
       updatedAt: state?.updatedAt ?? generated[0]?.ts ?? new Date(0).toISOString(),
     };
-    // A record that exists but failed validation is "absent" to the candidate, yet must not read back as
-    // `null` here: a conditional create would then conflict with that corrupt row forever instead of repairing it.
-    loadedRevision.set(candidate, rawState == null ? null : state?.revision);
+    // What the next write must be conditional on: `null` when no record exists, otherwise the stored revision,
+    // with `""` meaning "exists but carries none" (a record that predates `revision`, or whose revision is not
+    // a string, as every adapter reads it). That last state is
+    // guarded too (never left unconditional), or every instance that read the legacy record would write over
+    // whatever the first of them committed. A record that exists but failed validation is "absent" to the
+    // candidate, yet must not read back as `null` here: a conditional create would then conflict with that
+    // corrupt row forever instead of repairing it, so its raw revision (if any) is used the same way.
+    loadedRevision.set(candidate, rawState == null ? null : revisionToken(rawState.revision));
     return candidate;
   }
 
@@ -269,6 +297,7 @@ export function createCandidateStore(opts: {
 
   async function persist(candidate: PromotionCandidate, tenant?: string): Promise<void> {
     const state = buildPromotionState(candidate, tenant);
+    attemptedRevision.set(candidate, state.revision!);
     const expected = loadedRevision.get(candidate);
     if (storage.supportsCompareAndSet === true && expected !== undefined) {
       await storage.putPromotionState(state, { expectedRevision: expected });
@@ -284,7 +313,7 @@ export function createCandidateStore(opts: {
     const expected = loadedRevision.get(candidate);
     if (expected === undefined) return;
     const current = await storage.getPromotionState(candidate.artifactId, tenant);
-    const currentRevision = current == null ? null : (current.revision ?? undefined);
+    const currentRevision = current == null ? null : revisionToken(current.revision);
     if (currentRevision !== expected) throw new StorageConflictError("promotion", candidate.artifactId);
   }
 
@@ -293,8 +322,8 @@ export function createCandidateStore(opts: {
    * `putPromotionStates` call (StoragePort implements the batch extension) or falls back to the legacy
    * one-`putPromotionState`-call-per-state loop. A no-op for an empty list.
    */
-  async function persistMany(items: ScopedCandidate[]): Promise<ScopedCandidate[]> {
-    if (items.length === 0) return [];
+  async function persistMany(items: ScopedCandidate[]): Promise<PersistManyResult> {
+    if (items.length === 0) return { persisted: [] };
     // Compare-and-set port: the batch write has no per-item expectation, and an unconditional batch would
     // overwrite a decision another instance recorded after this scan loaded the candidate (an approve moving
     // it past `candidate` would be rolled back to `candidate`). So write each candidate on its own, conditional
@@ -302,6 +331,15 @@ export function createCandidateStore(opts: {
     // the race: someone else changed it, so this pass must not nominate it. The caller audits only the
     // returned (persisted) items. Chosen over adding a per-item expectation to `putPromotionStates`, which
     // would complicate every adapter's batch path for a pass that is cheap to repeat.
+    //
+    // A non-conflict error (a transient storage failure) stops the pass, but the items already written stay
+    // durable, so they are returned beside the error rather than lost to the throw: the caller audits them
+    // before rethrowing (see `PersistManyResult`). Dropping them would leave candidates stored as `candidate`
+    // that no retry ever audits, because the retry sees them as already nominated and skips them.
+    //
+    // The failing write itself is ambiguous: the error may have struck after the state was stored (a timeout
+    // after commit, a redis transaction whose later command failed). So after such an error the state is read
+    // back, and an item whose stored revision is the one this pass just wrote counts as persisted too.
     if (storage.supportsCompareAndSet === true) {
       const persisted: ScopedCandidate[] = [];
       for (const item of items) {
@@ -309,18 +347,59 @@ export function createCandidateStore(opts: {
           await persist(item.candidate, item.tenant);
           persisted.push(item);
         } catch (e) {
-          if (!isStorageConflictError(e)) throw e;
+          if (isStorageConflictError(e)) continue;
+          if (await landed(item)) persisted.push(item);
+          return { persisted, error: e };
         }
       }
-      return persisted;
+      return { persisted };
     }
     const states = items.map(({ candidate, tenant }) => buildPromotionState(candidate, tenant));
+    items.forEach(({ candidate }, i) => {
+      attemptedRevision.set(candidate, states[i]!.revision!);
+    });
     if (storage.putPromotionStates != null) {
-      await storage.putPromotionStates(states);
-    } else {
-      for (const state of states) await storage.putPromotionState(state);
+      // One call. The reference adapters store the whole batch or none of it, but a failure can still strike
+      // after the commit, so read every state back to see which landed.
+      try {
+        await storage.putPromotionStates(states);
+      } catch (e) {
+        const persisted: ScopedCandidate[] = [];
+        for (const item of items) if (await landed(item)) persisted.push(item);
+        return { persisted, error: e };
+      }
+      return { persisted: items };
     }
-    return items;
+    // Legacy per-item fallback: the same partial-progress rule as the compare-and-set loop above.
+    const persisted: ScopedCandidate[] = [];
+    for (const [i, item] of items.entries()) {
+      try {
+        await storage.putPromotionState(states[i]!);
+      } catch (e) {
+        if (await landed(item)) persisted.push(item);
+        return { persisted, error: e };
+      }
+      persisted.push(item);
+    }
+    return { persisted };
+  }
+
+  /**
+   * Whether the snapshot `persist` / `persistMany` last tried to write for this item is what is stored now
+   * (same revision). A read failure counts as "not known to have landed", so the original error stays the one
+   * reported.
+   */
+  async function landed({ candidate, tenant }: ScopedCandidate): Promise<boolean> {
+    const attempted = attemptedRevision.get(candidate);
+    if (attempted === undefined) return false;
+    try {
+      const current = await storage.getPromotionState(candidate.artifactId, tenant);
+      if (current?.revision !== attempted) return false;
+      loadedRevision.set(candidate, attempted);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

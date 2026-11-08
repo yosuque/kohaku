@@ -198,7 +198,7 @@ class TestPromotionWritesCarryTheRevisionTheyRead:
 
         asyncio.run(run())
 
-    def test_legacy_record_without_revision_is_written_unconditionally_then_stamped(
+    def test_legacy_record_without_revision_is_guarded_with_the_empty_string_then_stamped(
         self, tmp_path: Path
     ) -> None:
         async def run() -> None:
@@ -212,9 +212,44 @@ class TestPromotionWritesCarryTheRevisionTheyRead:
 
             await promotions.act("a1", JudgeStart(), ACTOR)
 
-            assert storage.promotion_writes[0][1] is UNSET
+            assert storage.promotion_writes[0][1] == ""
             stored = await storage.get_promotion_state("a1")
             assert stored is not None and isinstance(stored.revision, str)
+
+        asyncio.run(run())
+
+    def test_a_stale_transition_cannot_overwrite_a_decision_committed_to_a_legacy_record(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path)
+            await _seed_generated(storage, "a1")
+            await FileStoragePort.put_promotion_state(
+                storage, PromotionState(artifactId="a1", status="candidate", updatedAt="x", data={})
+            )
+            promotions = _promotions(storage)
+
+            # Instance B has read the unversioned record when instance A commits a decision (stamping a revision).
+            async def other() -> None:
+                await FileStoragePort.put_promotion_state(
+                    storage,
+                    PromotionState(
+                        artifactId="a1",
+                        status="rejected",
+                        updatedAt="2026-01-01T00:00:00.000Z",
+                        data={},
+                        revision="reject-writer",
+                    ),
+                )
+
+            storage.hooks["after_promotion_read"] = other
+
+            with pytest.raises(StorageConflictError):
+                await promotions.act("a1", JudgeStart(), ACTOR)
+
+            stored = await storage.get_promotion_state("a1")
+            assert stored is not None
+            assert (stored.status, stored.revision) == ("rejected", "reject-writer")
 
         asyncio.run(run())
 
@@ -324,6 +359,238 @@ class TestPromotionWritesCarryTheRevisionTheyRead:
             assert batch_calls == 1
             stored = await storage.get_promotion_state("a1")
             assert stored is not None and isinstance(stored.revision, str)
+
+        asyncio.run(run())
+
+
+class TestStorageErrorInTheMiddleOfBulkNomination:
+    """A non-conflict storage error mid-pass must not lose the audit of what was already stored (mirror of the
+    TS "a storage error in the middle of a bulk nomination" describe block)."""
+
+    @staticmethod
+    async def _nominated(storage: FileStoragePort) -> list[str]:
+        return sorted(
+            e.payload["artifactId"]
+            for e in await storage.list_lineage()
+            if e.type == "component.nominated"
+        )
+
+    def test_cas_port_the_2nd_put_fails_the_1st_stays_persisted_and_audited_then_the_retry_audits_the_rest(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path)
+            await _seed_generated(storage, "a1")
+            await _seed_generated(storage, "a2")
+            await _seed_generated(storage, "a3")
+            promotions = _promotions(storage)
+            fail_a2 = True
+            real_put = FileStoragePort.put_promotion_state
+
+            async def flaky(
+                state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+            ) -> None:
+                if state.artifactId == "a2" and fail_a2:
+                    raise RuntimeError("transient storage failure")
+                await real_put(storage, state, expected_revision=expected_revision)
+
+            storage.put_promotion_state = flaky  # type: ignore[method-assign]
+
+            with pytest.raises(RuntimeError, match="transient storage failure"):
+                await promotions.evaluate_and_list()
+
+            a1 = await storage.get_promotion_state("a1")
+            assert a1 is not None and a1.status == "candidate"
+            assert await storage.get_promotion_state("a2") is None
+            # The pass stopped at the failure: the item after it was neither written nor audited (in_use).
+            assert await storage.get_promotion_state("a3") is None
+            assert await self._nominated(storage) == ["a1"]
+
+            fail_a2 = False
+            await promotions.evaluate_and_list()
+            for artifact_id in ("a2", "a3"):
+                state = await storage.get_promotion_state(artifact_id)
+                assert state is not None and state.status == "candidate"
+            assert await self._nominated(storage) == ["a1", "a2", "a3"]
+
+        asyncio.run(run())
+
+    def test_batch_port_a_failing_put_promotion_states_stores_and_audits_nothing_and_raises(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path, declares_cas=False)
+            await _seed_generated(storage, "a1")
+
+            async def failing(states: list[PromotionState]) -> None:
+                raise RuntimeError("batch failed")
+
+            storage.put_promotion_states = failing  # type: ignore[method-assign]
+            promotions = _promotions(storage)
+
+            with pytest.raises(RuntimeError, match="batch failed"):
+                await promotions.evaluate_and_list()
+
+            assert await storage.get_promotion_state("a1") is None
+            assert await self._nominated(storage) == []
+
+        asyncio.run(run())
+
+    def test_legacy_per_state_fallback_the_2nd_put_fails_the_1st_stays_persisted_and_audited(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path, declares_cas=False)
+            await _seed_generated(storage, "a1")
+            await _seed_generated(storage, "a2")
+            real_put = FileStoragePort.put_promotion_state
+
+            async def flaky(
+                state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+            ) -> None:
+                if state.artifactId == "a2":
+                    raise RuntimeError("transient storage failure")
+                await real_put(storage, state, expected_revision=expected_revision)
+
+            storage.put_promotion_state = flaky  # type: ignore[method-assign]
+            promotions = _promotions(storage)
+            # No batch write on this port: the loop over put_promotion_state is the path under test.
+            monkey = pytest.MonkeyPatch()
+            monkey.setattr(
+                "kohaku.lineage.promotion.service.SupportsBatchPromotionStates",
+                type("NeverBatch", (), {}),
+            )
+            try:
+                with pytest.raises(RuntimeError, match="transient storage failure"):
+                    await promotions.evaluate_and_list()
+            finally:
+                monkey.undo()
+
+            a1 = await storage.get_promotion_state("a1")
+            assert a1 is not None and a1.status == "candidate"
+            assert await storage.get_promotion_state("a2") is None
+            assert await self._nominated(storage) == ["a1"]
+
+        asyncio.run(run())
+
+
+class TestAmbiguousWriteFailure:
+    """A write that stores the state and then raises (a timeout after commit): the outcome is read back, and a
+    state that is what this pass wrote counts as persisted and audited (mirror of the TS tests)."""
+
+    @staticmethod
+    async def _nominated(storage: FileStoragePort) -> list[str]:
+        return sorted(
+            e.payload["artifactId"]
+            for e in await storage.list_lineage()
+            if e.type == "component.nominated"
+        )
+
+    def test_cas_port_a_put_that_stores_then_raises_is_audited_and_the_error_is_reraised(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path)
+            for artifact_id in ("a1", "a2", "a3"):
+                await _seed_generated(storage, artifact_id)
+            real_put = FileStoragePort.put_promotion_state
+
+            async def after_commit(
+                state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+            ) -> None:
+                await real_put(storage, state, expected_revision=expected_revision)
+                if state.artifactId == "a2":
+                    raise RuntimeError("timeout after commit")
+
+            storage.put_promotion_state = after_commit  # type: ignore[method-assign]
+
+            with pytest.raises(RuntimeError, match="timeout after commit"):
+                await _promotions(storage).evaluate_and_list()
+
+            a2 = await storage.get_promotion_state("a2")
+            assert a2 is not None and a2.status == "candidate"
+            assert await storage.get_promotion_state("a3") is None
+            assert await self._nominated(storage) == ["a1", "a2"]
+
+        asyncio.run(run())
+
+    def test_a_failed_write_that_did_not_land_is_not_audited_and_a_failing_read_back_keeps_the_error(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path)
+            await _seed_generated(storage, "a1")
+            attempted = False
+
+            async def failing(
+                state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+            ) -> None:
+                nonlocal attempted
+                attempted = True
+                raise RuntimeError("write failed")
+
+            real_get = FileStoragePort.get_promotion_state
+
+            async def get(artifact_id: str, tenant: str | None = None) -> PromotionState | None:
+                if attempted:
+                    raise RuntimeError("read failed")
+                return await real_get(storage, artifact_id, tenant)
+
+            storage.put_promotion_state = failing  # type: ignore[method-assign]
+            storage.get_promotion_state = get  # type: ignore[method-assign]
+
+            with pytest.raises(RuntimeError, match="write failed"):
+                await _promotions(storage).evaluate_and_list()
+            assert await self._nominated(storage) == []
+
+        asyncio.run(run())
+
+    def test_batch_port_a_put_promotion_states_that_stores_then_raises_is_audited(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path, declares_cas=False)
+            await _seed_generated(storage, "a1")
+            await _seed_generated(storage, "a2")
+            real_batch = storage.put_promotion_states
+
+            async def after_commit(states: list[PromotionState]) -> None:
+                await real_batch(states)
+                raise RuntimeError("timeout after commit")
+
+            storage.put_promotion_states = after_commit  # type: ignore[method-assign]
+
+            with pytest.raises(RuntimeError, match="timeout after commit"):
+                await _promotions(storage).evaluate_and_list()
+            assert await self._nominated(storage) == ["a1", "a2"]
+
+        asyncio.run(run())
+
+    def test_legacy_per_state_fallback_a_put_that_stores_then_raises_is_audited(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path, declares_cas=False)
+            await _seed_generated(storage, "a1")
+            await _seed_generated(storage, "a2")
+            real_put = FileStoragePort.put_promotion_state
+
+            async def after_commit(
+                state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+            ) -> None:
+                await real_put(storage, state, expected_revision=expected_revision)
+                if state.artifactId == "a2":
+                    raise RuntimeError("timeout after commit")
+
+            storage.put_promotion_state = after_commit  # type: ignore[method-assign]
+            with pytest.MonkeyPatch.context() as monkey:
+                monkey.setattr(
+                    "kohaku.lineage.promotion.service.SupportsBatchPromotionStates",
+                    type("NeverBatch", (), {}),
+                )
+                with pytest.raises(RuntimeError, match="timeout after commit"):
+                    await _promotions(storage).evaluate_and_list()
+            assert await self._nominated(storage) == ["a1", "a2"]
 
         asyncio.run(run())
 
@@ -560,7 +827,7 @@ class TestFixationWritesCarryTheRevisionTheyRead:
 
         asyncio.run(run())
 
-    def test_a_legacy_fixation_without_a_revision_is_rewritten_and_deleted_unconditionally(
+    def test_a_legacy_fixation_without_a_revision_is_rewritten_and_deleted_conditionally_on_the_empty_string(
         self, tmp_path: Path
     ) -> None:
         async def run() -> None:
@@ -571,8 +838,30 @@ class TestFixationWritesCarryTheRevisionTheyRead:
             await fixations.refresh_fingerprint(HASH, "fp2")
             await fixations.unfixate(HASH, ACTOR)
 
-            assert [(w[1], w[2]) for w in storage.fixation_writes] == [(True, UNSET)]
-            assert storage.fixation_deletes == [UNSET]
+            assert [(w[1], w[2]) for w in storage.fixation_writes] == [(True, "")]
+            assert storage.fixation_deletes == [""]
+
+        asyncio.run(run())
+
+    def test_a_stale_unfixate_of_a_legacy_fixation_loses_to_a_replace_that_landed_after_its_read(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path)
+            await FileStoragePort.put_fixation(storage, _fixation("old"))
+            fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
+
+            async def other() -> None:
+                await storage.other_writer_sets_fixation(_fixation("new", "r-new"))
+
+            storage.hooks["after_fixation_read"] = other
+
+            with pytest.raises(StorageConflictError):
+                await fixations.unfixate(HASH, ACTOR)
+
+            stored = await storage.get_fixation(HASH)
+            assert stored is not None and stored.revision == "r-new"
+            assert "intent.unfixated" not in _types(await storage.list_lineage())
 
         asyncio.run(run())
 

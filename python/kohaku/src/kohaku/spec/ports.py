@@ -647,17 +647,20 @@ class _Unset(Enum):
 
 
 UNSET = _Unset.UNSET
-"""Sentinel for "no `expected_revision` given" (the tri-state's omitted case). `None` cannot play that role:
+"""Sentinel for "no `expected_revision` given" (the omitted case of the four states). `None` cannot play that role:
 TS distinguishes `expectedRevision: undefined` (no check) from `expectedRevision: null` (the record must not
 exist yet), and so does Python -- `None` is the latter."""
 
 type ExpectedRevision = str | None | _Unset
-"""Tri-state compare-and-set expectation of `put_promotion_state` / `put_fixation`: `UNSET` (default) = no
-check; `None` = the record MUST NOT exist yet; a str = the stored record's `revision` MUST equal it."""
+"""Four-state compare-and-set expectation of `put_promotion_state` / `put_fixation`: `UNSET` (default) = no
+check; `None` = the record MUST NOT exist yet; `""` (the empty string) = the record MUST exist and carry no
+`revision` (it predates the field); any other str = the stored record's `revision` MUST equal it. For a present
+record the last two are `revision_or_empty(stored) == expected` (a `revision` that is absent or not a string reads as `""`)."""
 
 type ExpectedDeleteRevision = str | _Unset
 """Compare-and-set expectation of `delete_fixation`: `UNSET` (default) = unconditional; a str = the stored
-fixation's `revision` MUST equal it (deleting has no "must not exist" case, so `None` is not accepted)."""
+fixation's `revision` MUST equal it, with `""` meaning "present and carrying no `revision`" exactly as for
+`ExpectedRevision` (deleting has no "must not exist" case, so `None` is not accepted)."""
 
 
 def is_single_process(storage: object) -> bool:
@@ -713,11 +716,14 @@ class StoragePort(Protocol):
     Optional compare-and-set (CAS): an adapter that sets a class/instance attribute
     `supports_compare_and_set = True` (checked with `supports_compare_and_set(storage)`) additionally honors
     `expected_revision` on `put_promotion_state`, `put_fixation` and `delete_fixation`, which makes the
-    read-modify-write safe *across processes* sharing one backend. `expected_revision` is tri-state: omitted
-    (`UNSET`) = no check (the legacy unconditional write, and what a caller passes for a record that predates
-    `revision`); `None` = the record MUST NOT exist yet; a str = the stored record's `revision` MUST equal it.
-    A mismatch (including a record that is absent when a str was expected) MUST raise `StorageConflictError`
-    and MUST NOT modify anything; the check and the write are one atomic step. An adapter that does not
+    read-modify-write safe *across processes* sharing one backend. `expected_revision` has four states: omitted
+    (`UNSET`) = no check (the legacy unconditional write; a caller that has not read the record, e.g. an
+    authoritative overwrite); `None` = the record MUST NOT exist yet; `""` = the record MUST exist and carry no
+    `revision` (it predates the field, so a caller that read such a record is guarded like any other instead of
+    writing unconditionally); any other str = the stored record's `revision` MUST equal it. For a present record
+    the last two are `revision_or_empty(stored) == expected` (a `revision` that is absent or not a string reads as `""`). A mismatch (including a record that is absent when a
+    str was expected) MUST raise `StorageConflictError` and MUST NOT modify anything; the check and the write
+    are one atomic step. An adapter that does not
     declare `supports_compare_and_set` MAY ignore the parameter (unconditional write, as before), so the
     in-process lock stays the only protection there; hosts warn about such an adapter at start-up. The
     conditional-write parameter `if_present` on put_fixation is an older, independent hook that narrows one
@@ -750,6 +756,19 @@ class StoragePort(Protocol):
     # so a `__getattr__`-based proxy or `Mock` matching `hasattr` when a real implementation would not is an
     # accepted, harmless gap here). See kohaku.storage.file.FileStoragePort.page_lineage for the reference
     # implementation and kohaku.spec.lineage_page for the shared cursor codec.
+    #
+    # Paging contract (same as TS `pageLineage`): it walks the whole log from an opaque `cursor` in ascending
+    # append order. The cursor is a position in *allocation* order (a sequence number handed out at append
+    # time), which is not always *visibility* order: an append still in flight when a page is read (in a
+    # database, allocated a lower number but not yet committed; on Redis, a sequence number reserved with
+    # INCR just before the MULTI that stores the event) can become visible behind a cursor that has already
+    # passed it, and that cursor will not return it. A caller that needs a complete pack under concurrent
+    # writes bounds the read with `until` at a time safely in the past. An implementation MUST return events
+    # strictly after `req.cursor` (or from the beginning when omitted), in append order, and MUST omit
+    # `LineagePage.nextCursor` only when there is nothing further to read; it MAY return a page shorter than
+    # `req.pageSize` (or empty) with a `nextCursor` when it stops scanning early. `req.pageSize` defaults to
+    # 500 and is clamped to at most 1000. A malformed `cursor` MUST raise rather than silently restart from
+    # the beginning or skip to the end.
     #
     # async def page_lineage(self, req: LineagePageRequest) -> LineagePage: ...
 
@@ -801,7 +820,7 @@ class StoragePort(Protocol):
         get->put that races with a concurrent delete does not resurrect an already-removed fixation. An
         implementation that ignores the parameter keeps the legacy unconditional-write behavior.
 
-        expected_revision (honored only by a `supports_compare_and_set` adapter): the tri-state compare-and-set
+        expected_revision (honored only by a `supports_compare_and_set` adapter): the four-state compare-and-set
         expectation described on this Protocol; a mismatch raises `StorageConflictError`.
         """
         ...

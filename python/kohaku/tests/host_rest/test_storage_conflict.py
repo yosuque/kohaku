@@ -26,6 +26,7 @@ from kohaku.spec import (
     LineageActor,
     LineageEventRecord,
     Principal,
+    PromotionState,
     StorageConflictError,
     UISpec,
 )
@@ -209,6 +210,40 @@ def test_an_unrelated_failure_is_still_a_500_internal_with_a_fixed_message(tmp_p
 # across the two apps, so only the storage's compare-and-set can make one of them lose.
 
 
+class _RendezvousStorage(MemoryStoragePort):
+    """A MemoryStoragePort whose reads of the contested record wait until BOTH instances have performed one.
+
+    Without this the tests below are a race of their own: if one instance runs its whole read -> write
+    sequence before the other has read, the second sees the first's result (a deleted fixation is a silent
+    no-op, a nominated artifact is an invalid transition), answers 200 / 4xx instead of 409, and the test fails
+    depending on scheduling. With every read held at a two-party barrier, both instances act on the SAME base
+    state, so only the storage's compare-and-set decides who loses -- which is what the tests are about.
+    `asyncio.Barrier` resets after each trip, so several reads per request pair up in order."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._barrier = asyncio.Barrier(2)
+        self.armed = True
+
+    async def _rendezvous(self) -> None:
+        if self.armed:
+            await asyncio.wait_for(self._barrier.wait(), timeout=10)
+
+    async def get_fixation(
+        self, intent_hash: str, tenant: str | None = None
+    ) -> FixationRecord | None:
+        result = await super().get_fixation(intent_hash, tenant)
+        await self._rendezvous()
+        return result
+
+    async def get_promotion_state(
+        self, artifact_id: str, tenant: str | None = None
+    ) -> PromotionState | None:
+        result = await super().get_promotion_state(artifact_id, tenant)
+        await self._rendezvous()
+        return result
+
+
 def _two_instances(storage: MemoryStoragePort) -> list[FastAPI]:
     apps = []
     for _ in range(2):
@@ -244,7 +279,7 @@ async def _post_both(apps: list[FastAPI], path: str, body: Any = None) -> list[h
 
 def test_two_concurrent_promotion_transitions_exactly_one_succeeds_the_other_is_409() -> None:
     async def run() -> None:
-        storage = MemoryStoragePort()
+        storage = _RendezvousStorage()
         await storage.append_lineage(
             LineageEventRecord(
                 id="g-1",
@@ -258,6 +293,7 @@ def test_two_concurrent_promotion_transitions_exactly_one_succeeds_the_other_is_
             _two_instances(storage), "/promotions/art-1/actions", {"action": {"kind": "nominate"}}
         )
 
+        storage.armed = False
         assert sorted(r.status_code for r in responses) == [200, 409]
         _expect_conflict(next(r for r in responses if r.status_code == 409))
         state = await storage.get_promotion_state("art-1")
@@ -268,7 +304,7 @@ def test_two_concurrent_promotion_transitions_exactly_one_succeeds_the_other_is_
 
 def test_two_concurrent_fixation_removals_exactly_one_succeeds_the_other_is_409() -> None:
     async def run() -> None:
-        storage = MemoryStoragePort()
+        storage = _RendezvousStorage()
         spec: UISpec = l1_spec()
         await storage.put_fixation(
             FixationRecord(
@@ -285,6 +321,7 @@ def test_two_concurrent_fixation_removals_exactly_one_succeeds_the_other_is_409(
             _two_instances(storage), f"/fixations/{spec.intent.hash}/remove"
         )
 
+        storage.armed = False
         assert sorted(r.status_code for r in responses) == [200, 409]
         _expect_conflict(next(r for r in responses if r.status_code == 409))
         assert await storage.get_fixation(spec.intent.hash) is None

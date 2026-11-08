@@ -70,6 +70,18 @@ function fixation(
   };
 }
 
+/** Records that predate `revision` (no field at all), in a tenant of their own so the lists above stay unchanged. */
+const LEGACY_TENANT = "acme-legacy";
+
+function legacyPromotion(): PromotionState {
+  return { artifactId: "lp", status: "candidate", updatedAt: EVENT_TS, data: {}, tenant: LEGACY_TENANT };
+}
+
+function legacyFixation(): FixationRecord {
+  const { revision: _omit, ...record } = fixation("unused", "fp-legacy", "sha256:legacy");
+  return { ...record, tenant: LEGACY_TENANT };
+}
+
 function batchState(artifactId: string, status: string): PromotionState {
   return { artifactId, status, updatedAt: EVENT_TS, data: {}, tenant: TENANT } as PromotionState;
 }
@@ -120,6 +132,10 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         await ts.storage.putFixation(fixation("x-1", "fp-ifp", "sha256:ifp"), { expectedRevision: null });
         await ts.storage.putFixation(fixation("x-1", "fp-del", "sha256:del"), { expectedRevision: null });
         await putBatch(ts.storage, [batchState("b1", "ts-batch"), batchState("b2", "ts-batch")]);
+        // Records that carry no revision at all: Python must treat them as expected_revision "" (present and
+        // unversioned), not as an unconditional write.
+        await ts.storage.putPromotionState(legacyPromotion());
+        await ts.storage.putFixation(legacyFixation());
         await ts.storage.putSpecCache("ts-spec", SPEC);
         await ts.storage.appendLineage(tsEvent);
         await ts.revocations.revoke("ts-jti", Math.floor(Date.now() / 1000) + 3600);
@@ -129,6 +145,13 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
           staleConflict: boolean;
           deleteStaleConflict: boolean;
           pageIds: string[];
+          legacy: {
+            promotionRevisionBefore: string | null;
+            fixationRevisionBefore: string | null;
+            promotionEmptyAgainConflict: boolean;
+            fixationEmptyAgainConflict: boolean;
+            fixationDeleteEmptyConflict: boolean;
+          };
         };
 
         // Python read exactly what TS wrote, including the pinned Spec after a trip through its own model.
@@ -150,6 +173,16 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         expect(report.seen["delRevision"]).toBe("x-1");
         expect(report.deleteStaleConflict).toBe(true);
         expect(report.pageIds).toEqual(["ts-event", "py-event"]);
+        // The unversioned records TS wrote carry no revision to Python, which then guarded its writes with "".
+        expect(report.legacy).toEqual({
+          promotionRevisionBefore: null,
+          fixationRevisionBefore: null,
+          promotionEmptyAgainConflict: true,
+          fixationEmptyAgainConflict: true,
+          fixationDeleteEmptyConflict: true,
+        });
+        expect((await ts.storage.getPromotionState("lp", LEGACY_TENANT))?.revision).toBe("py-legacy");
+        expect((await ts.storage.getFixation("sha256:legacy", LEGACY_TENANT))?.revision).toBe("py-legacy");
 
         // TS reads what Python wrote and compare-and-sets from Python's revision.
         const promoted = await ts.storage.getPromotionState("a1", TENANT);
@@ -200,6 +233,29 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         expect(await ts.storage.getSpecCache("py-spec")).toEqual(SPEC);
         expect(ids(await ts.storage.listLineage({ correlationId: "py-corr" }))).toEqual(["py-event"]);
         expect(await ts.revocations.isRevoked("py-jti")).toBe(true);
+
+        // Records Python wrote without a revision: "" matches them once, then conflicts (they are versioned now).
+        const legacyP = await ts.storage.getPromotionState("lp", LEGACY_TENANT);
+        expect(legacyP?.revision).toBeUndefined();
+        await expect(
+          ts.storage.putPromotionState(
+            { ...legacyP!, status: "approved", revision: "stale" },
+            { expectedRevision: "not-empty" },
+          ),
+        ).rejects.toMatchObject({ code: "STORAGE_CONFLICT" });
+        await ts.storage.putPromotionState(
+          { ...legacyP!, status: "approved", revision: "ts-legacy" },
+          { expectedRevision: "" },
+        );
+        await expect(
+          ts.storage.putPromotionState({ ...legacyP!, revision: "ts-legacy-2" }, { expectedRevision: "" }),
+        ).rejects.toMatchObject({ code: "STORAGE_CONFLICT" });
+        const legacyF = await ts.storage.getFixation("sha256:legacy", LEGACY_TENANT);
+        expect(legacyF?.revision).toBeUndefined();
+        await ts.storage.putFixation({ ...legacyF!, revision: "ts-legacy" }, { expectedRevision: "" });
+        await expect(
+          ts.storage.deleteFixation?.("sha256:legacy", LEGACY_TENANT, { expectedRevision: "" }),
+        ).rejects.toMatchObject({ code: "STORAGE_CONFLICT" });
 
         await ts.storage.putPromotionState(promotion("ts-1", "approved"), { expectedRevision: "py-0" });
         await ts.storage.putFixation(fixation("ts-1", "fp-ts"), { expectedRevision: "py-0" });

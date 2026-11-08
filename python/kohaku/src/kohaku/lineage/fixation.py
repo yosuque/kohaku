@@ -312,14 +312,15 @@ class Fixations:
         self, intent_hash: str, tenant: str | None, revision: str | None
     ) -> None:
         """delete_fixation shared by unfixate and invalidate: an unimplemented delete (NotImplementedError)
-        becomes FixationUnsupportedError (fail-fast). On a compare-and-set port, for a record that carries a
-        revision, the delete is conditional on the revision the caller just read, so a fixation re-approved or
-        replaced by another instance in between is not swept away (StorageConflictError; nothing is audited).
-        Otherwise the call keeps its pre-CAS shape (a legacy record with no revision is deleted
-        unconditionally, as before)."""
+        becomes FixationUnsupportedError (fail-fast). On a compare-and-set port the delete is conditional on
+        the revision the caller just read -- `""` for a record that carries none (it predates the field) -- so a
+        fixation re-approved or replaced by another instance in between is not swept away (StorageConflictError;
+        nothing is audited). Otherwise the call keeps its pre-CAS shape."""
         try:
-            if revision is not None and supports_compare_and_set(self._storage):
-                await self._storage.delete_fixation(intent_hash, tenant, expected_revision=revision)
+            if supports_compare_and_set(self._storage):
+                await self._storage.delete_fixation(
+                    intent_hash, tenant, expected_revision=revision or ""
+                )
             else:
                 await self._storage.delete_fixation(intent_hash, tenant)
         except NotImplementedError as e:
@@ -327,11 +328,13 @@ class Fixations:
 
     async def _rewrite_fixation(self, record: FixationRecord, revision: str | None) -> None:
         """put_fixation for a read-modify-write over a record read with `revision` (refresh_fingerprint,
-        replace): always if_present, plus -- on a compare-and-set port, for a record that carries a revision
-        -- expected_revision, so a stale in-memory copy can neither resurrect a deleted fixation nor
-        overwrite a newer one (e.g. put an old pinned_spec back over a concurrent replace)."""
-        if revision is not None and supports_compare_and_set(self._storage):
-            await self._storage.put_fixation(record, if_present=True, expected_revision=revision)
+        replace): always if_present, plus -- on a compare-and-set port -- expected_revision (`""` for a record
+        that carries none), so a stale in-memory copy can neither resurrect a deleted fixation nor overwrite a
+        newer one (e.g. put an old pinned_spec back over a concurrent replace)."""
+        if supports_compare_and_set(self._storage):
+            await self._storage.put_fixation(
+                record, if_present=True, expected_revision=revision or ""
+            )
         else:
             await self._storage.put_fixation(record, if_present=True)
 

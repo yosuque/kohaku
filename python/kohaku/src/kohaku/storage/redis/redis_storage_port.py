@@ -101,16 +101,17 @@ def _check_revision(
     current: str | None,
     expected: ExpectedRevision,
 ) -> None:
-    """The compare-and-set check against the raw stored body (None = absent), the same tri-state as
-    `StoragePort`'s `expected_revision`: UNSET = no check; None = must be absent; a str = must be present with
-    exactly that `revision` (a record with no revision never matches)."""
+    """The compare-and-set check against the raw stored body (None = absent), the same four states as
+    `StoragePort`'s `expected_revision`: UNSET = no check; None = must be absent; "" = must be present and carry
+    no `revision` (it predates the field); any other str = must be present with exactly that `revision`. For a
+    present record that is the stored revision (read as `""` when absent or not a string) `== expected`; an absent one never matches a str."""
     if expected is UNSET:
         return
     if expected is None:
         if current is not None:
             raise StorageConflictError(kind, record_id)
         return
-    if current is None or _revision_of(current) != expected:
+    if current is None or (_revision_of(current) or "") != expected:
         raise StorageConflictError(kind, record_id)
 
 

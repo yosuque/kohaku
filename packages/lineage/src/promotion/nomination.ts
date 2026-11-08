@@ -5,6 +5,7 @@ import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { createFailOpenAudit } from "./audit.js";
 import type { PromotionCandidate, PromotionPolicy, ScopedCandidate } from "./candidate.js";
+import type { PersistManyResult } from "./candidate-store.js";
 import { mapWithConcurrency } from "./concurrency.js";
 import type { PromotionErrorContext } from "./errors.js";
 import { transition } from "./machine.js";
@@ -24,7 +25,7 @@ export function createNomination(opts: {
    * Batch persist (candidate-store's `persistMany`), so a scan that nominates many candidates in one pass
    * issues a single storage read-modify-write instead of one per nominated candidate.
    */
-  persistMany: (items: ScopedCandidate[]) => Promise<ScopedCandidate[]>;
+  persistMany: (items: ScopedCandidate[]) => Promise<PersistManyResult>;
   onError?: (ctx: PromotionErrorContext, error: unknown) => void;
   /**
    * Optional schema extraction hook (see createPromotions' own doc for the full advisory / fail-open
@@ -59,8 +60,11 @@ export function createNomination(opts: {
    * Every eligible candidate's status transition is applied in memory first, then persisted with a **single**
    * `persistMany` call at the end instead of one storage write per candidate — a scan that nominates many
    * candidates at once (e.g. after a burst of usage) no longer re-reads/re-stringifies/re-writes promotions.json
-   * once per candidate. component.nominated audit events are recorded only after persistMany resolves, so a
-   * persist failure leaves neither the snapshot nor the audit log reflecting the (uncommitted) transition.
+   * once per candidate. component.nominated audit events are recorded only for what persistMany reports as
+   * stored, so an uncommitted transition never reaches the audit log. A storage error mid-pass does not drop
+   * the candidates stored before it: persistMany returns them beside the error, they are audited like any
+   * other nominated candidate, and the error is rethrown once that is done (a retry would skip them, since they
+   * are no longer `in_use`, so an unaudited one would stay unaudited for good).
    *
    * Tenant-mismatch guard (#10): `tenant` is the call-level scope passed to `evaluateAndList` (undefined = an
    * all-tenant scan). When it is unspecified but a scanned candidate's own recorded tenant is not (a
@@ -145,8 +149,11 @@ export function createNomination(opts: {
         if (suggestion != null) candidate.suggestion = suggestion;
       });
     }
-    // persistMany may hand back the very array it was given, so snapshot the persisted items first.
-    const persisted = [...(await persistMany(toPersist))];
+    // persistMany may hand back the very array it was given, so snapshot the persisted items first. A storage
+    // error comes back beside the items stored before it (`result.error`), not as a throw: those are durable,
+    // so they are audited below, and the error is rethrown only after that.
+    const result = await persistMany(toPersist);
+    const persisted = [...result.persisted];
     // A candidate a compare-and-set port refused (another instance changed it since the scan) was not
     // nominated by this pass: put its in-memory status back so the returned list does not claim a transition
     // that was not stored, and drop it from the audit below.
@@ -181,6 +188,8 @@ export function createNomination(opts: {
         artifactId: candidate.artifactId,
       });
     }
+    // The pass stopped on a storage error: everything stored before it is audited above, so surface it now.
+    if ("error" in result) throw result.error;
     return candidates.map((c) => c.candidate);
   }
 
