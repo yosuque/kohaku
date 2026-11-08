@@ -45,7 +45,7 @@ Chosen: **Option A**
 
 ## References
 
-- Proposal E9 in `research_notes/pm-analysis-2026-11-08/improvement-proposals.md` (git-excluded, kept in the maintainer's checkout) and §11 of the 2026-11 implementation plan
+- Proposal E9 ("freeze the Python port") of the maintainer's internal 2026-11-08 PM/EM analysis (not published), rejected by the maintainer on 2026-11-08
 - PRs: #117, #119, #120, #123, #125, #126, #129
 - python/README, "Not yet ported" list; AGENTS.md, "Python implementation"
 - [ADR-0002](0002-update-dependencies-lockfile-only-with-cooldown.md), [ADR-0003](0003-python-claude-adapter-sends-no-sampling-parameters.md)

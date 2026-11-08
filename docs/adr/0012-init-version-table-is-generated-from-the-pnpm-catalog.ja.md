@@ -39,5 +39,5 @@ wp-e5 のレポートは、新しい ADR を書く代わりに、[ADR-0002](0002
 ## 参考
 
 - PR: #112
-- `research_notes/pm-analysis-2026-11-08/improvement-proposals.md` の提案 E5(git の管理外で、メンテナーのチェックアウトにある)
+- メンテナーの内部資料(2026-11-08 の PM/EM 分析、非公開)の提案 E5
 - [ADR-0002](0002-update-dependencies-lockfile-only-with-cooldown.ja.md): この ADR の土台になっている依存の更新方針

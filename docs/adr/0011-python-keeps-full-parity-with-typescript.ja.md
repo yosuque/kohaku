@@ -45,7 +45,7 @@ Python 実装(`python/`)は、TypeScript 実装の wire 互換の完全な移植
 
 ## 参考
 
-- `research_notes/pm-analysis-2026-11-08/improvement-proposals.md` の提案 E9(git の管理外で、メンテナーのチェックアウトにある)と、2026-11 実装計画の §11
+- メンテナーの内部資料(2026-11-08 の PM/EM 分析、非公開)の提案 E9「Python 移植の凍結」。2026-11-08 にメンテナーが不採用とした
 - PR: #117、#119、#120、#123、#125、#126、#129
 - python/README の「Not yet ported」の一覧、AGENTS.md の「Python implementation」
 - [ADR-0002](0002-update-dependencies-lockfile-only-with-cooldown.ja.md)、[ADR-0003](0003-python-claude-adapter-sends-no-sampling-parameters.ja.md)

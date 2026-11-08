@@ -39,5 +39,5 @@ Chosen: **Option A**
 ## References
 
 - PR: #112
-- Proposal E5 in `research_notes/pm-analysis-2026-11-08/improvement-proposals.md` (git-excluded, kept in the maintainer's checkout)
+- Proposal E5 of the maintainer's internal 2026-11-08 PM/EM analysis (not published)
 - [ADR-0002](0002-update-dependencies-lockfile-only-with-cooldown.md): the dependency update policy this builds on
