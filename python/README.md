@@ -570,12 +570,6 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   deprecated node's `type`/`version` on the Python side; a rewrite whose props need
   reshaping to satisfy the replacement's schema lands in `blocked` rather than `steps`,
   the same outcome a TS catalog with no `migrateProps` declared would produce.
-- **The MCP Tasks extension (`io.modelcontextprotocol/tasks`) is not ported.** On the TS
-  side (`packages/host-mcp-apps/src/tasks.ts`), `kohaku_compose` and the intent tools
-  become task-capable for a request that opts in, but only when `AttachOptions.tasksEnabled`
-  is also turned on (default off). `host_mcp` always serves the compose family
-  synchronously and never declares the extension, regardless of what a request's
-  `_meta` asks for.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
   the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the
   `acknowledged` payload field) and their rubric variants; the analytics `review` block and

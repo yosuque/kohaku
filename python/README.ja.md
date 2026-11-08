@@ -524,11 +524,6 @@ failed catalog/structure validation」という文言とは別物にし、この
   deprecated なノードの `type`/`version` のみを書き換える。置き換え先のスキーマに
   合わせて props の形を変える必要がある書き換えは(TS で `migrateProps` を宣言しなかった
   カタログと同じ結果として)`steps` ではなく `blocked` に入る。
-- **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
-  (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
-  `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と
-  intent ツール群がタスク対応になる。`host_mcp` は compose ファミリを常に同期実行し、
-  リクエストの `_meta` が何を求めていてもこの拡張を宣言しない。
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
   `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
   フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
