@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from kohaku.storage import FileStoragePort, MemoryStoragePort
+from kohaku.storage.postgres import create_postgres_storage_port
 from kohaku.storage.redis import create_redis_storage_port
 
 from ._contract import CASES, ContractCase
@@ -32,7 +33,7 @@ def _unique(prefix: str) -> str:
     return f"{prefix}{secrets.token_hex(6)}"
 
 
-@pytest.fixture(params=["memory", "file", "redis"])
+@pytest.fixture(params=["memory", "file", "redis", "postgres"])
 def open_port(request: pytest.FixtureRequest, tmp_path: Path) -> PortOpener:
     """A factory for one fresh port of the adapter under test (an async context manager that closes it)."""
     adapter: str = request.param
@@ -71,6 +72,21 @@ def open_port(request: pytest.FixtureRequest, tmp_path: Path) -> PortOpener:
                 await port.close()
 
         return redis
+
+    if adapter == "postgres":
+        connection_string: str = request.getfixturevalue("postgres_url")
+
+        @asynccontextmanager
+        async def postgres() -> AsyncIterator[Any]:
+            port = create_postgres_storage_port(
+                connection_string=connection_string, schema=_unique("t")
+            )
+            try:
+                yield port
+            finally:
+                await port.close()
+
+        return postgres
 
     raise AssertionError(f"unknown adapter {adapter}")
 
