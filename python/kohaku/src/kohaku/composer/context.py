@@ -11,6 +11,7 @@ from kohaku.registry import ResolvedCatalog, SurfaceCapabilities
 from kohaku.spec import (
     UNDEFINED,
     DataShape,
+    FilterDescriptor,
     Intent,
     QueryHandle,
     SemanticPort,
@@ -167,6 +168,20 @@ class ComposePolicy:
     existing cache key)."""
     effort: EffortPolicy | None = None
     """Per-tier Adaptive Reasoning effort. See `EffortPolicy`'s doc for the full contract."""
+    l1Filters: bool = False
+    """Opt in (default False) to deterministic filter injection into L1-generated Specs (port of TS's
+    `ComposePolicy.l1Filters`). When True, the composer asks `SemanticPort.describe_filters` for the Intent's
+    filters (derived from its facet declarations, never from the model) and, after a successful L1
+    generation, adds a `control.select` + `state` + `state.set` event + `data.bind` per filter whose query
+    param appears in a generated component's `$ref` (`inject_filters.py`). Changing a filter then
+    re-resolves the data with no recompose and no model call. Skipped (the Spec is delivered as generated)
+    when the Intent has no filters, the SemanticPort does not implement `describe_filters`, the bind
+    variants would exceed MAX_BIND_VARIANTS, or the injected Spec would not validate; the reason is recorded
+    in `ComposeTrace.filters`.
+
+    Participates in `policy_fingerprint` only when True, as an absent key (it changes the delivered Spec for
+    the same Intent and model; the generation prompt is unchanged). Filter labels are canonical (the Spec
+    cache key is locale-free, so no session locale is used)."""
 
 
 def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
@@ -289,6 +304,13 @@ def _fp_tier_gate(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | 
     return {"allowL2": allow_l2, "routeTierId": route_tier_id}
 
 
+def _fp_l1_filters(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+    """`l1Filters` participates only when True, as an ABSENT key (`UNDEFINED`, never `None`) otherwise: like
+    `_fp_tier_gate`, this row was added after callers already depend on the material's bytes. Port of TS's
+    `fingerprintL1Filters`."""
+    return True if policy.l1Filters is True else UNDEFINED
+
+
 def _fp_tier_llm(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
     if tier_llm is None:
         return None
@@ -317,6 +339,7 @@ _FINGERPRINTED: list[
     ("effort", _fp_effort),
     ("tierLlm", _fp_tier_llm),
     ("tierGate", _fp_tier_gate),
+    ("l1Filters", _fp_l1_filters),
 ]
 """Ordered table of (material key, extractor) driving policy_fingerprint(). One row per
 ComposePolicy field that changes prompt content but was, until now, only enforced by the
@@ -636,6 +659,10 @@ class ResolvedRefs:
     dataVersion: str
     versionsByRef: dict[str, str]
     """$ref URI → the dataVersion of that reference alone. The fill source for Spec.refVersions."""
+    descriptors: list[FilterDescriptor] | None = None
+    """The Intent's GUI filters (`SemanticPort.describe_filters`), resolved only under
+    `ComposePolicy.l1Filters`. None otherwise (and when the port does not implement it, returned none, or
+    the call failed -- fail-open, like describe_shape); fixation.py builds a ResolvedRefs without it."""
 
 
 type OnBudgetCheckError = Callable[[BaseException], None]

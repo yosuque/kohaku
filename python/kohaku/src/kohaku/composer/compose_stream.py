@@ -55,11 +55,16 @@ class StreamSpecEvent:
 
 @dataclass(frozen=True)
 class StreamPatchEvent:
-    """Diff from skeleton → final form. spec is the final form with the patch applied (obviating the host's re-application)."""
+    """Diff from skeleton → final form. spec is the final form with the patch applied (obviating the host's re-application).
+
+    `final` marks the last patch, the convergence to the finalized Spec (True on exactly one patch per stream
+    and only after generation has completed), so a host can attach what only the finalized Spec determines --
+    e.g. a capability covering the bind variants of injected L1 filters -- exactly once."""
 
     patch: SpecPatch
     spec: UISpec
     kind: Literal["patch"] = "patch"
+    final: bool = False
 
 
 @dataclass(frozen=True)
@@ -173,7 +178,7 @@ async def compose_stream(
         outcome = await gen_task
         result = finish(outcome.spec, outcome.trace, ctx)
         patch = diff_spec(last_spec, result.spec)
-        yield StreamPatchEvent(patch=patch, spec=result.spec)
+        yield StreamPatchEvent(patch=patch, spec=result.spec, final=True)
         yield StreamDoneEvent(result=result)
     except BaseException as e:
         # Notify the observer hook of a hard failure (whether before or after the skeleton was emitted) and re-raise.

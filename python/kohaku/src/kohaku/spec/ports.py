@@ -76,6 +76,31 @@ class QueryHandle:
 
 
 @dataclass(frozen=True)
+class FilterOption:
+    """One selectable value of a `FilterDescriptor` (TS `{ value, label }`)."""
+
+    value: str
+    label: str
+
+
+@dataclass(frozen=True)
+class FilterDescriptor:
+    """One GUI filter an Intent exposes, derived deterministically from the Intent's facet declaration (never
+    from a model). `ComposePolicy.l1_filters` makes the composer inject a `control.select` + `data.bind` pair
+    per descriptor into an L1-generated Spec, so changing the filter re-resolves the data without a recompose.
+    """
+
+    param: str
+    """Intent param name; also used as the UISpec.state key."""
+    queryParam: str
+    """Query parameter the param maps to in the resolved query:// ref (an Intent param and its query param may
+    be named differently)."""
+    label: str
+    options: list[FilterOption]
+    """The authorized value domain (becomes both the control's options and `data.bind.values`)."""
+
+
+@dataclass(frozen=True)
 class OperationDescriptor:
     """Exposure of a business API. Invariants remain behind this (in the domain module)."""
 
@@ -174,6 +199,26 @@ class SupportsValidateIntent(Protocol):
     """
 
     async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput: ...
+
+
+class SupportsDescribeFilters(Protocol):
+    """Optional `SemanticPort` extension (port of TS spec-core's `SemanticPort.describeFilters?`). Describes the
+    GUI filters of an Intent (see `FilterDescriptor`); consulted by the composer only when
+    `ComposePolicy.l1_filters` is on. Must be a pure function of the Intent definition: the composed Spec is
+    cached under a key that contains neither tenant nor locale, so the descriptors must not depend on the
+    caller's locale (the composer passes none, so labels are canonical). `tenant` only selects a per-tenant
+    Intent catalog, like `resolve_query`. Returning `[]` means the Intent has no filters.
+
+    Deliberately **not** declared as a member of `SemanticPort` itself, for the same reason as
+    `SupportsValidateIntent` above (a `typing.Protocol` cannot express an optional method, and a required one
+    would force every existing `SemanticPort` stub to grow it): the composer probes for it with
+    `getattr(semantic, "describe_filters", None)`. A `SemanticPort` that omits it simply gets no injected
+    filters (backward compatible).
+    """
+
+    async def describe_filters(
+        self, intent: Intent, *, tenant: str | None = None, locale: str | None = None
+    ) -> list[FilterDescriptor]: ...
 
 
 @dataclass(frozen=True)

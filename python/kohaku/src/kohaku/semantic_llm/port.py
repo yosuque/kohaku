@@ -19,6 +19,7 @@ from typing import Literal
 from kohaku.llm import LlmPort
 from kohaku.spec import (
     DataShape,
+    FilterDescriptor,
     GuiAction,
     Intent,
     IntentInput,
@@ -80,7 +81,8 @@ class NormalizedInfo:
 
 class LlmSemanticPort:
     """The SemanticPort implementation built by `create_llm_semantic_port` (a structural SemanticPort that
-    also implements the optional `validate_intent` extension, `kohaku.spec.ports.SupportsValidateIntent`)."""
+    also implements the optional `validate_intent` and `describe_filters` extensions,
+    `kohaku.spec.ports.SupportsValidateIntent` / `SupportsDescribeFilters`)."""
 
     def __init__(
         self,
@@ -169,6 +171,18 @@ class LlmSemanticPort:
         if shape is None:
             raise ValueError(f"unknown query path: {ref.path}")
         return shape
+
+    async def describe_filters(
+        self, intent: Intent, *, tenant: str | None = None, locale: str | None = None
+    ) -> list[FilterDescriptor]:
+        """The GUI filters of the Intent (`kohaku.spec.ports.SupportsDescribeFilters`): delegates to the Intent
+        definition's `filters` derivation, using the per-tenant catalog. An unknown Intent has no filters
+        (resolve_query is what reports it), nor does an Intent defined without facets or on the callback path
+        (no `filters` derivation) -- the same "no filters" answer."""
+        def_ = self._catalog_for(tenant).get(intent.canonical)
+        if def_ is None or def_.filters is None:
+            return []
+        return def_.filters(intent.params, locale)
 
     async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput:
         """Validates and normalizes a directly-specified Intent (backs `kohaku.host_core.intent.resolve_intent`'s

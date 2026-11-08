@@ -63,6 +63,7 @@ from .design_system import (
 from .errors import ComposeError, ComposeErrorCode
 from .fallback import build_fallback_spec
 from .fixation import FixationCheck, materialize_fixation
+from .inject_filters import InjectFiltersResult, inject_filters
 from .l2_js_sidecar import L2JsSidecar, create_l2_js_sidecar
 from .l2_lint import (
     collect_l2_issues,
@@ -72,6 +73,7 @@ from .l2_lint import (
 )
 from .post import (
     STANDARD_RULES,
+    FilterInjection,
     PostProcessContext,
     PostRule,
     canonical_props,
@@ -95,7 +97,7 @@ from .prompt import (
     build_l2_prompt_static,
     default_generator_version,
 )
-from .trace import ComposeAttempt, ComposeTrace, TokenUsage, TraceInput
+from .trace import ComposeAttempt, ComposeTrace, TokenUsage, TraceFilters, TraceInput
 
 __all__ = [
     "COMPOSER_ID",
@@ -129,7 +131,9 @@ __all__ = [
     "FewShotExample",
     "FewShotPolicy",
     "FixationCheck",
+    "FilterInjection",
     "FixedSpecSource",
+    "InjectFiltersResult",
     "IntentComposeInput",
     "L2JsSidecar",
     "L2SmokeContext",
@@ -144,6 +148,7 @@ __all__ = [
     "TierLlmFingerprintMaterial",
     "TierModelIdentity",
     "TokenUsage",
+    "TraceFilters",
     "TraceInput",
     "append_l1_repair_feedback",
     "append_l2_repair_feedback",
@@ -169,6 +174,7 @@ __all__ = [
     "extract_html_document",
     "extract_title",
     "finish",
+    "inject_filters",
     "materialize_fixation",
     "negotiate_spec",
     "normalize_ids",

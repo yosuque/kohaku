@@ -573,6 +573,11 @@ async def create_app(
         # The L2 verification JS sidecar (non-None only when Node is co-located. See the is_available check above).
         l2ScriptSyntax=l2_script_syntax,
         l2Smoke=l2_smoke,
+        # L1 filter injection (matches TS sample-api's `l1Filters: true`): the Intent facets declared in
+        # intents_catalog.py become control.select + data.bind on generated (L1) screens, so changing a filter
+        # re-resolves data with no recompose and no model call. A boolean, so it is code-defined like the other
+        # fields here (the Policy-as-Code schema does not carry it).
+        l1Filters=True,
     )
 
     # --- Policy as Code (design.md #69/#70 -- optional, off by default; see create_app's policy_file) ---

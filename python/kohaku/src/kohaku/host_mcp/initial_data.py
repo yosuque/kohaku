@@ -53,6 +53,12 @@ PRERESOLVE_CONCURRENCY = 8
 # path as an ordinary per-ref failure, with a message identifying it as a deadline discard.
 PRERESOLVE_TOTAL_TIMEOUT_S = 10.0
 
+# The most non-initial bind variants _preresolve_initial_data resolves eagerly per compose (the initial variants
+# are always all resolved; mirrors TS PRERESOLVE_MAX_SECONDARY_REFS). Generous for hand-written cross-filters (a
+# region switch is a handful of variants) while keeping a wide L1 filter fan-out (up to 256 variants, from
+# ComposePolicy.l1Filters) from becoming that many upstream calls per compose.
+PRERESOLVE_MAX_SECONDARY_REFS = 32
+
 
 async def _resolve_variant(
     variant: str, deps: McpHostDeps, principal: Principal
@@ -217,6 +223,12 @@ async def _preresolve_initial_data(
         for variant in enumerate_bind_variants(component.data):
             if variant != initial:
                 secondary_refs.append(variant)
+
+    # Bound the eager fan-out: a Spec can carry up to MAX_BIND_VARIANTS (256) variants (ComposePolicy.l1Filters
+    # injects them), and pre-resolving all of them would cost that many upstream calls on every compose even
+    # though the 100,000-char budget could embed only a few. Beyond the cap a variant is simply resolved on
+    # demand (kohaku_resolve_binding), exactly like any ref that did not fit the budget.
+    del secondary_refs[PRERESOLVE_MAX_SECONDARY_REFS:]
 
     # Dedup while preserving the initial-then-secondary priority order (the budget loop below walks this same
     # order), so a ref shared by several components/variants is resolved exactly once regardless of concurrency.

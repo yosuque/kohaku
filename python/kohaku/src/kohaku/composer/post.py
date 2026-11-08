@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from kohaku.registry import ResolvedCatalog
@@ -19,10 +19,13 @@ from kohaku.spec import (
     ComponentNode,
     DataShape,
     EventBinding,
+    FilterDescriptor,
     UISpec,
     normalize_json_value,
     order_components,
 )
+
+from .inject_filters import InjectFiltersResult, inject_filters
 
 
 @dataclass(frozen=True)
@@ -180,10 +183,43 @@ def canonical_props(spec: UISpec, ctx: PostProcessContext) -> UISpec:
 STANDARD_RULES: list[PostRule] = [normalize_ids, chart_kind, sort_order, canonical_props]
 
 
+@dataclass(frozen=True)
+class FilterInjection:
+    """`ComposePolicy.l1Filters` injection request for `post_process` (L1 only; see inject_filters.py)."""
+
+    descriptors: Sequence[FilterDescriptor]
+    report: Callable[[InjectFiltersResult], None] | None = None
+    """Receives the injection outcome (for ComposeTrace.filters); called once, only when descriptors is non-empty."""
+
+
 def post_process(
-    spec: UISpec, ctx: PostProcessContext, extra_rules: list[PostRule] | None = None
+    spec: UISpec,
+    ctx: PostProcessContext,
+    extra_rules: list[PostRule] | None = None,
+    filters: FilterInjection | None = None,
 ) -> UISpec:
+    """Apply the 4 standard rules, then the extension rules.
+
+    With `filters`, the Intent-declared filter injection (`inject_filters`) runs right after `normalize_ids`:
+    after it so the injected `filter-<param>` ids are not renamed, before the rest so the injected control
+    gets the same chart/sort/default-props treatment (and `version`) as every generated component.
+    """
+    rules: list[PostRule] = []
+    for rule in STANDARD_RULES:
+        rules.append(rule)
+        if rule is normalize_ids and filters is not None and len(filters.descriptors) > 0:
+            rules.append(_filter_injection_rule(filters))
     result = spec
-    for rule in [*STANDARD_RULES, *(extra_rules or [])]:
+    for rule in [*rules, *(extra_rules or [])]:
         result = rule(result, ctx)
     return result
+
+
+def _filter_injection_rule(filters: FilterInjection) -> PostRule:
+    def rule(spec: UISpec, ctx: PostProcessContext) -> UISpec:
+        injected = inject_filters(spec, filters.descriptors)
+        if filters.report is not None:
+            filters.report(injected)
+        return injected.spec
+
+    return rule
