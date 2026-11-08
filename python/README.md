@@ -477,7 +477,9 @@ in the same request) and `"approve"` (a bound `ApprovalPort.verify_approval` tok
 `host_rest`'s `POST /binding/action` and `host_mcp`'s `${prefix}_action` both consult before calling
 `DomainPort.invoke`. `kohaku.host_core.action_audit`'s `ActionAuditRecorder` protocol is the optional
 `action.*` lineage event sink (`action.invoked` / `action.denied` / `action.approvalRequested` /
-`action.approved`; fail-open — a recorder failure never blocks the write).
+`action.approved`; fail-open — a recorder failure never blocks the write). The `action.approvalIssued`
+event (recorded by `POST /approvals`, actor = the approver) is the optional
+`ApprovalIssuedRecorder.approval_issued` hook, looked up with `getattr` so a recorder without it is skipped.
 
 The stateless HMAC `ApprovalPort` reference implementation (`HmacApprovalPort` /
 `create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v2."`-prefixed token TS's

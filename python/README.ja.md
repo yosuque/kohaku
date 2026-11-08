@@ -440,6 +440,9 @@ canonical-JSON sha256 である。`packages/spec-core/src/action-params.ts` に�
 を呼ぶ前に参照する同じ形である。`kohaku.host_core.action_audit` の `ActionAuditRecorder` プロトコルは
 任意の `action.*` lineage イベントの記録先である(`action.invoked` / `action.denied` /
 `action.approvalRequested` / `action.approved`。fail-open — recorder の失敗が書き込みを止めることは無い)。
+`POST /approvals` が記録する `action.approvalIssued`(actor は承認者)は、任意の
+`ApprovalIssuedRecorder.approval_issued` フックで、`getattr` で探すため、これを持たない recorder は
+飛ばされる。
 
 ステートレスな HMAC `ApprovalPort` の参照実装(`HmacApprovalPort` / `create_hmac_approval_port` /
 `MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v2."` prefix の

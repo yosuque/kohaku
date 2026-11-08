@@ -524,6 +524,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `action.denied` | action, payloadHash, tier, reason, correlationId? | 提示されたトークンが検証に通らなかった(または `ApprovalPort` が未配線の)`"approve"` tier の invoke、あるいは `DomainPort` の宣言済み操作でないアクション名の invoke(tier は `auto`。ゲート実行前に拒否) |
 | `action.approvalRequested` | action, payloadHash, tier(`confirm`/`approve`), requestId, payload?, correlationId? | まだ何も提示されていない(`confirmed: true` の無い `"confirm"`、またはトークンの無い `"approve"`)。`payload` はレコーダーが `recordPayload: true` で設定されたときだけ入る(既定はハッシュのみ)。`requestId` は 403 `APPROVAL_REQUIRED` エンベロープの `approval.requestId` と同じ不透明 ID。承認者はここから `payloadHash` と依頼者の id(イベントの actor の id)を読み取り、`POST /approvals` を呼ぶ |
 | `action.approved` | action, payloadHash, approverId, requesterId, correlationId? | 承認グラントが検証・消費された `"approve"` tier の invoke。`action.invoked` に加えて記録される |
+| `action.approvalIssued` | action, payloadHash, requesterId, approverId, ttlSeconds, expiresAt, correlationId? | `POST /approvals` が承認トークンを発行した(design.md #72)。発行に成功した後にだけ記録し、fail-open。他のどの `action.*` イベントとも違い、**actor は要求者ではなく承認者**。トークンもトークン ID(`jti`)も載せない。`expiresAt` はホストが計算した `発行時刻 + ttlSeconds` なので、`ApprovalPort` が有効期間を丸めた場合は参考値になる。MCP プロファイルは記録しない(発行ツールが無い)。evidence pack の `approvals.jsonl` に含まれる |
 | `policy.applied` | policyId, previousPolicyId?, version, label?, changedPaths[], tenants[] | host-core の `PolicyRuntime.reload()` が実効ポリシーを変えた(design.md #69)。バイト単位で同一の再読み込みでは記録されない。ポリシーファイルの形式は §5.6 |
 
 ## 11. conformance(適合検査)
