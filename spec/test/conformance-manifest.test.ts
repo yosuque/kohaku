@@ -26,7 +26,7 @@ const DESIGN_MD = readFileSync(join(REPO_ROOT, "docs", "design.md"), "utf8");
 const PYTHON_README_MD = readFileSync(join(REPO_ROOT, "python", "README.md"), "utf8");
 
 // Mirrors AGENTS.md / the plan's own description of the requirement-id shape: <PREFIX>-<CODE>-<3 digits>.
-const REQUIREMENT_ID_PATTERN = /\b(SPEC|REST|CMP|MCPAPP|SBX|LIN|ACT)-[A-Z0-9]+-\d{3}\b/g;
+const REQUIREMENT_ID_PATTERN = /\b(SPEC|REST|CMP|MCPAPP|SBX|LIN|ACT|CAP)-[A-Z0-9]+-\d{3}\b/g;
 
 describe("conformance manifest metadata", () => {
   it("has no duplicate requirement ids", () => {
@@ -83,8 +83,8 @@ describe("conformance manifest metadata", () => {
     const musts = REQUIREMENTS.filter((r) => r.level === "MUST");
     const shoulds = REQUIREMENTS.filter((r) => r.level === "SHOULD");
     expect(musts.length, "total MUST count").toBe(37);
-    expect(shoulds.length, "total SHOULD count").toBe(13);
-    expect(REQUIREMENTS.length, "total requirement count").toBe(50);
+    expect(shoulds.length, "total SHOULD count").toBe(14);
+    expect(REQUIREMENTS.length, "total requirement count").toBe(51);
   });
 
   it("pins the per-target MUST breakdown", () => {

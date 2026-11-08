@@ -148,11 +148,15 @@ interface SemanticPort {
 
 ```ts
 interface AuthzPort {
-  issueCapability(principal, scopes: {kind: "read"|"write", ref: string}[], opts?): Promise<string>;
-  verify(token, req: {kind, ref}): Promise<{ ok, principal?, reason? }>;
+  issueCapability(principal, scopes: {kind: "read"|"write", ref: string}[], opts?: { ttlSeconds?, tenant? }): Promise<string>;
+  verify(token, req: {kind, ref}): Promise<{ ok, principal?, tenant?, reason? }>;
 }
 ```
 ホストは compose 後に Spec 内の全 `$ref` を read スコープで発行し、`/binding/resolve` で検証する。発行者に明示的な `ttlSeconds` が渡されないときの既定 TTL(600 秒)は `DEFAULT_CAPABILITY_TTL_SECONDS` であり、`@kohaku-ui/spec-core` で一度だけ定義され、`@kohaku-ui/host-core` と `@kohaku-ui/authz-hmac` は後方互換のため再 export している。
+
+**capability のテナント(SPEC §5 CAP-TEN-001 [Draft]、design.md #75)**: `issueCapability` の `opts.tenant` はテナントを署名付き claim として token に束縛し、`verify` はそれを `VerifyResult.tenant` として返す(テナントなしで発行された token では存在しない)。REST ホストは `POST /compose`・`/events`・`/compose/stream`・`POST /promotions/:id/preview` で発行する際、自身のリクエスト解決(`KohakuHostDeps.tenant`)が生んだテナントを渡し、リクエスト body が申告したテナントに署名することはない。データ面(`/binding/resolve`・`/binding/action`)では**capability のテナントが正**となる: `DomainPort.invoke` への `InvocationContext.tenant`、承認トークンの束縛(ACT-APR-001 (a))と `action.*` 監査記録のテナント、レート制限キーのテナントになる。そのリクエストで `deps.tenant` も別のテナントを解決して食い違う場合は `403 CAPABILITY_DENIED`(fail-closed)、テナントを持たない capability(この claim ができる前に発行されたもの、またはテナントを解決しない MCP プロファイルが発行したもの)は `deps.tenant` にフォールバックするので、既存の token は動き続ける。参照実装の `createHmacAuthzPort` は `tenant` claim(古い検証側は未知の claim を無視する)と `requireTenant`(`verify` がテナントなしの token を理由 `capability lacks tenant` で拒否する。`requireJti` と同じ形)を追加し、`createJwtAuthzPort` は `requireCapabilityTenant` として素通しする(bearer JWT 自身の claim を支配する、継承された `requireTenant` とは別)。したがって Python の `AuthzPort.issue_capability` は `tenant` キーワードを取る — 独自の Python Port はそれを受け付けなければならない。
+
+`/binding/resolve` と `/binding/action` のレート制限は capability の検証**後**に、`(capability のテナント, capability の sub, routeClass)` をキーとして行う(SPEC §6.1、REST-RL-001)。compose 系のルートは従来どおり、リクエスト自身の identity をキーとするミドルウェアのままである。検証に失敗する要求の洪水は、したがってレート制限ではなくボディサイズ上限でしか抑えられない。HMAC の検証は安価であり、これは受け入れた代償である。
 
 `verify` は通常の拒否を `{ ok: false, reason }` で返し、自身では allow/deny に分類できないインフラ障害(リビケーションストアの停止等)の場合に**限り**例外を投げてよい。ホストはこの throw を fail-closed として扱わねばならず(REST: 503 `INTERNAL`、§5 参照。MCP Apps: 構造化ツールエラー)、2xx や `{ ok: false }` の拒否と同じ形にしてはならない。有効期限前のケーパビリティ失効は `AuthzPort` 本体の契約外の拡張として提供される(`@kohaku-ui/spec-core` の `ports.ts` にある `CapabilityRevocationStore`。`RevokeCapabilityResult` のコードは `MALFORMED` / `INVALID_SIGNATURE` / `NO_JTI` / `STORE_ERROR`、期限切れ済みトークンの失効は `{ ok: true, alreadyExpired: true }` になる)。実装は `@kohaku-ui/authz-hmac` — `revokeCapability` の使い方はその README を参照。
 
