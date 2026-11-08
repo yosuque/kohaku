@@ -14,9 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import cast
+from dataclasses import dataclass, field
+from typing import Literal, cast
 
-from kohaku.host_core import ParsedInvokableRefOk, parse_invokable_ref
+from kohaku.host_core import (
+    ActionAuditContext,
+    GatedReadGuard,
+    OperationIndex,
+    ParsedInvokableRefOk,
+    create_gated_read_guard,
+    parse_invokable_ref,
+)
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.spec import (
     InvocationContext,
@@ -54,23 +62,93 @@ PRERESOLVE_CONCURRENCY = 8
 PRERESOLVE_TOTAL_TIMEOUT_S = 10.0
 
 
+ReadDenial = Literal["gated", "schemaInvalid", "indexUnavailable"]
+"""Why a read-ahead ref was not resolved: the data-plane read guard (SPEC ACT-RD-001) refused it."""
+
+
+@dataclass(frozen=True)
+class PreresolveContext:
+    """What one pre-resolution (or one snapshot) needs about the tool call, symmetric with TS `ToolCallContext`:
+    the host deps, the call's resolved principal, the memoized operation index the read guard consults, and the
+    call's correlation id (the audit record's)."""
+
+    deps: McpHostDeps
+    principal: Principal
+    operation_index: OperationIndex
+    correlation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ReadGuardSession:
+    """The data-plane read guard of one pre-resolution (or one snapshot), plus the refs it refused. One session
+    shares one `GatedReadGuard`, so the operation index is read once and an index failure is reported and
+    audited once, not once per ref. `denied` maps each refused ref to its reason, so a later step (the
+    snapshot) can tell a refused ref from a failed one without asking the guard, and audit, again."""
+
+    guard: GatedReadGuard
+    denied: dict[str, ReadDenial] = field(default_factory=dict)
+
+
+def _create_read_guard_session(pctx: PreresolveContext) -> ReadGuardSession:
+    """Builds the `ReadGuardSession` for one pre-resolution / snapshot over `pctx`'s operation index."""
+
+    async def _report(error: BaseException) -> None:
+        await _host_core_notify_hook(
+            pctx.deps.on_error, McpErrorInfo(endpoint="compose.initialData", error=error)
+        )
+
+    return ReadGuardSession(
+        guard=create_gated_read_guard(
+            operation_index=pctx.operation_index,
+            report_index_failure=_report,
+            report_schema_error=_report,
+        )
+    )
+
+
 async def _resolve_variant(
-    variant: str, deps: McpHostDeps, principal: Principal
+    variant: str, pctx: PreresolveContext, session: ReadGuardSession
 ) -> TabularData | None:
     """Shared helper that preresolves a single effective ref with read. An unknown source is None (not co-embedded).
 
     Pure parse/merge via host_core's parse_invokable_ref (shared with the REST/MCP resolve_binding sites).
     Deliberately no verify step here (this is preresolution, not a caller-supplied capability check) — an
     unknown source still yields None (not an embedding target) rather than a raised error.
+
+    Preresolution is a data-plane read too: it never runs a governed Action (SPEC ACT-RD-001, design.md #77). A
+    ref the session's guard refuses (a gated operation, an operation with an invalid declaration, or an
+    unreadable operation index) is skipped like an unknown source -- None, recorded in `session.denied` -- and
+    the compose result itself stays successful.
     """
+    deps = pctx.deps
     parsed = parse_invokable_ref(variant, deps.query_source)
     if not isinstance(parsed, ParsedInvokableRefOk):
         return None
     base, params = parsed.ref.base, parsed.ref.params
+
+    async def _report_audit(error: BaseException) -> None:
+        await _host_core_notify_hook(
+            deps.on_error, McpErrorInfo(endpoint="compose.initialData.audit", error=error)
+        )
+
+    outcome = await session.guard(
+        base.path,
+        ActionAuditContext(
+            recorder=deps.action_audit_recorder,
+            action=base.path,
+            payload=params,
+            principal=pctx.principal,
+            report=_report_audit,
+            correlation_id=pctx.correlation_id,
+        ),
+    )
+    if outcome.kind != "readable":
+        session.denied[variant] = outcome.kind
+        return None
     resolved = await deps.domain.invoke(
         base.path,
         params,
-        InvocationContext(principal=principal),
+        InvocationContext(principal=pctx.principal),
     )
     return cast(TabularData, resolved)
 
@@ -88,8 +166,8 @@ class _PreresolveDeadline:
 
 async def _resolve_ref_bounded(
     ref: str,
-    deps: McpHostDeps,
-    principal: Principal,
+    pctx: PreresolveContext,
+    session: ReadGuardSession,
     semaphore: asyncio.Semaphore,
     results: dict[str, TabularData],
     deadline: _PreresolveDeadline,
@@ -113,23 +191,23 @@ async def _resolve_ref_bounded(
         try:
             # per-ref timeout: cut off so a ref that never returns does not hold its concurrency slot forever.
             resolved = await asyncio.wait_for(
-                _resolve_variant(ref, deps, principal), timeout=timeout_s
+                _resolve_variant(ref, pctx, session), timeout=timeout_s
             )
         except Exception as exc:  # noqa: BLE001 — per-ref fail-open (including timeout)
             if deadline.exceeded:
                 await _host_core_notify_hook(
-                    deps.on_error,
+                    pctx.deps.on_error,
                     McpErrorInfo(endpoint="compose.initialData", error=_discard_error(ref, exc)),
                 )
             else:
                 await _host_core_notify_hook(
-                    deps.on_error, McpErrorInfo(endpoint="compose.initialData", error=exc)
+                    pctx.deps.on_error, McpErrorInfo(endpoint="compose.initialData", error=exc)
                 )
             return
         if deadline.exceeded:
             # Resolved successfully, but too late: the caller already stopped waiting and moved on.
             await _host_core_notify_hook(
-                deps.on_error,
+                pctx.deps.on_error,
                 McpErrorInfo(endpoint="compose.initialData", error=_discard_error(ref)),
             )
             return
@@ -149,9 +227,9 @@ def _discard_error(ref: str, cause: BaseException | None = None) -> RuntimeError
 
 async def _resolve_refs_bounded(
     refs: list[str],
-    deps: McpHostDeps,
-    principal: Principal,
+    pctx: PreresolveContext,
     *,
+    session: ReadGuardSession | None = None,
     timeout_s: float,
     total_timeout_s: float,
 ) -> dict[str, TabularData]:
@@ -171,11 +249,13 @@ async def _resolve_refs_bounded(
     resolved: dict[str, TabularData] = {}
     if not refs:
         return resolved
+    if session is None:
+        session = _create_read_guard_session(pctx)
     semaphore = asyncio.Semaphore(PRERESOLVE_CONCURRENCY)
     deadline = _PreresolveDeadline()
     tasks = [
         asyncio.ensure_future(
-            _resolve_ref_bounded(ref, deps, principal, semaphore, resolved, deadline, timeout_s)
+            _resolve_ref_bounded(ref, pctx, session, semaphore, resolved, deadline, timeout_s)
         )
         for ref in refs
     ]
@@ -189,8 +269,8 @@ async def _resolve_refs_bounded(
 
 
 async def _preresolve_initial_data(
-    spec: UISpec, deps: McpHostDeps, principal: Principal
-) -> tuple[dict[str, TabularData], dict[str, TabularData]]:
+    spec: UISpec, pctx: PreresolveContext
+) -> tuple[dict[str, TabularData], dict[str, TabularData], dict[str, ReadDenial]]:
     """Preresolve the initial data `{effective ref: TabularData}` co-embedded in the tool result's _meta.
 
     - Fill each component's initial variant ($ref) across all components first, and fill bind's other variants with the
@@ -202,10 +282,12 @@ async def _preresolve_initial_data(
     - per-ref fail-open: a preresolution failure (or a ref discarded by the overall deadline) skips that ref
       and reports to on_error (compose stays a success).
 
-    Returns `(data, resolved)`: `data` is the existing budget-trimmed `_meta` co-embedding; `resolved` is the
-    full pre-budget map, returned so a caller that also needs the same Spec's refs resolved for a second
+    Returns `(data, resolved, denied)`: `data` is the existing budget-trimmed `_meta` co-embedding; `resolved` is
+    the full pre-budget map, returned so a caller that also needs the same Spec's refs resolved for a second
     purpose (_compose_and_package's legacyUiResource co-emission, via _snapshot_html_for) can reuse this call's
-    domain.invoke results instead of resolving the identical ref set a second time.
+    domain.invoke results instead of resolving the identical ref set a second time; `denied` is the refs the
+    data-plane read guard refused (SPEC ACT-RD-001) with the reason, so that second purpose neither re-asks the
+    guard (and re-audits) nor reports a refused ref as merely unresolved.
     """
     initial_refs: list[str] = []
     secondary_refs: list[str] = []
@@ -228,10 +310,11 @@ async def _preresolve_initial_data(
         seen_refs.add(ref)
         ordered_refs.append(ref)
 
+    session = _create_read_guard_session(pctx)
     resolved = await _resolve_refs_bounded(
         ordered_refs,
-        deps,
-        principal,
+        pctx,
+        session=session,
         timeout_s=PRERESOLVE_TIMEOUT_S,
         total_timeout_s=PRERESOLVE_TOTAL_TIMEOUT_S,
     )
@@ -248,4 +331,4 @@ async def _preresolve_initial_data(
             break
         used += size
         data[ref] = value
-    return data, resolved
+    return data, resolved, session.denied

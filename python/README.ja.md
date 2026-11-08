@@ -518,7 +518,7 @@ Python 側ではそもそも独立パッケージ境界を持たないため(TS 
 
 `kohaku.domain_mcp` は `@kohaku-ui/domain-mcp` のミラーで、既存の MCP サーバーをホストの `DomainPort` にします。
 `annotations.read_only_hint is True` のツールは `query://` の op(結果は `TabularData`)、それ以外のツールは
-`tier="approve"` の Action(`tier_for` で上書き可)で、その `paramsSchema` は `inputSchema` を閉じた
+`tier="approve"` の Action(`tier_for` で上書き可。書き込みツールに `tier_for(tool) == "auto"` を返すと、ホストが読み取りの経路で拒否するのは `confirm` / `approve` の operation だけなので(SPEC ACT-RD-001)、`paramsSchema` の検査なしに `query://` の読み取り ref から到達できます)で、その `paramsSchema` は `inputSchema` を閉じた
 `ActionParamsSchema` の部分集合へ射影したものです(nullable な `Optional[X]` 形以外の `anyOf`、`oneOf`、`$ref`、`additionalProperties: true` を使う場合は付きません)。
 既存の `mcp` extra(`pip install 'kohaku-ui[mcp]'`)に含まれ、`mcp` 自体は import しません: 公式 SDK の `Client` を
 引数で渡します(`list_tools(cursor=...)` / `call_tool(name, arguments)` を持つ任意のオブジェクトで可)。

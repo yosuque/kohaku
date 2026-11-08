@@ -49,7 +49,9 @@ const host = createKohakuHost({
 - **Classification.** `annotations.readOnlyHint === true` makes a tool a query (`domain.queryOps`). Everything else,
   including a tool with no annotation (MCP's default is `false`), is an Action (`domain.actionOps`) with
   `tier: "approve"`; `tierFor(tool)` overrides that for non-read-only tools. `include(tool)` leaves tools out, and
-  `isReadOnly(tool)` replaces the hint check.
+  `isReadOnly(tool)` replaces the hint check. Caveat: the host refuses a `"confirm"` / `"approve"` operation on the read
+  path (SPEC ACT-RD-001), so `tierFor(tool) === "auto"` on a write tool leaves it reachable through a `query://` read
+  ref, without the `paramsSchema` check, if such a ref is ever issued (`createMcpIntents` never emits one).
 - **Queries.** `invoke` coerces the ref's string parameters by the tool's `inputSchema` type (`number`, `integer`,
   `boolean`; a nullable `anyOf` is read through), never forwards `_cursor` / `_sort` / `_dir`, maps `_limit` onto the
   tool's own numeric `limit`, calls the tool, and converts the result to `TabularData`: `structuredContent`, else the

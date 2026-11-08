@@ -554,7 +554,7 @@ guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full w
 
 `kohaku.domain_mcp` mirrors `@kohaku-ui/domain-mcp`: an existing MCP server becomes the host's `DomainPort`. A tool
 with `annotations.read_only_hint is True` is a `query://` op (the result becomes `TabularData`); every other tool is
-an Action with `tier="approve"` (`tier_for` overrides) whose `paramsSchema` is its `inputSchema` projected onto the
+an Action with `tier="approve"` (`tier_for` overrides; `tier_for(tool) == "auto"` on a write tool leaves it reachable through a `query://` read ref without the `paramsSchema` check, because the host refuses only `confirm` / `approve` operations on the read path, SPEC ACT-RD-001) whose `paramsSchema` is its `inputSchema` projected onto the
 closed `ActionParamsSchema` subset (or absent when it uses an `anyOf` other than the nullable `Optional[X]` form, `oneOf`, `$ref` or `additionalProperties: true`).
 It lives under the existing `mcp` extra (`pip install 'kohaku-ui[mcp]'`) and imports nothing from `mcp` itself: the
 official SDK's `Client` is passed in (any object with `list_tools(cursor=...)` / `call_tool(name, arguments)` works).

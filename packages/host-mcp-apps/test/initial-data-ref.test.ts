@@ -1,3 +1,4 @@
+import { createOperationIndex } from "@kohaku-ui/host-core";
 import type { DomainPort, JsonObject, TabularData } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { resolveVariantWithTimeout } from "../src/initial-data.js";
@@ -32,10 +33,11 @@ function captureDomain(): {
   };
 }
 
-/** A minimal ToolCallContext stub: resolveVariant only reads deps.domain / deps.querySource / principal. */
+/** A minimal ToolCallContext stub: resolveVariant only reads deps.domain / deps.querySource / operationIndex / principal. */
 function makeCtx(domain: DomainPort, querySource = "sales"): ToolCallContext {
   return {
     deps: { domain, querySource } as ToolCallContext["deps"],
+    operationIndex: createOperationIndex(domain),
     principal: { id: "tester", roles: ["user"] },
   } as unknown as ToolCallContext;
 }
