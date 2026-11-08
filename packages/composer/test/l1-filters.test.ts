@@ -1,5 +1,11 @@
 import { FakeLlm } from "@kohaku-ui/llm/fake";
-import { type FilterDescriptor, type GuiAction, type SemanticPort, validateSpecStructure } from "@kohaku-ui/spec-core";
+import {
+  type FilterDescriptor,
+  type GuiAction,
+  type SemanticPort,
+  type UISpec,
+  validateSpecStructure,
+} from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { type ComposeContext, type ComposePolicy, compose, composeStream } from "../src/index.js";
 import { catalog, goodRawDraft, makeSemantic, makeStorage, REF } from "./helpers.js";
@@ -21,13 +27,14 @@ const GROUP_BY: FilterDescriptor = {
   ],
 };
 
-function semanticWith(
-  describeFilters?: SemanticPort["describeFilters"],
-): SemanticPort {
+function semanticWith(describeFilters?: SemanticPort["describeFilters"]): SemanticPort {
   return { ...makeSemantic(), ...(describeFilters != null ? { describeFilters } : {}) };
 }
 
-function makeCtx(policy: ComposePolicy, semantic: SemanticPort = semanticWith(async () => [GROUP_BY])): ComposeContext {
+function makeCtx(
+  policy: ComposePolicy,
+  semantic: SemanticPort = semanticWith(async () => [GROUP_BY]),
+): ComposeContext {
   return {
     catalog,
     semantic,
@@ -53,7 +60,9 @@ describe("ComposePolicy.l1Filters", () => {
     const bound = spec.components.filter((c) => c.data?.bind != null);
     expect(bound.length).toBeGreaterThanOrEqual(2);
     for (const c of bound) {
-      expect(c.data?.bind).toEqual({ groupBy: { $state: "groupBy", values: ["region", "product", "channel"] } });
+      expect(c.data?.bind).toEqual({
+        groupBy: { $state: "groupBy", values: ["region", "product", "channel"] },
+      });
     }
     expect(spec.events).toContainEqual({
       on: "filter-groupBy.change",
@@ -121,7 +130,13 @@ describe("ComposePolicy.l1Filters", () => {
         ...Array.from({ length: 200 }, (_, i) => ({ value: `v${i}`, label: `v${i}` })),
       ],
     };
-    const { spec, trace } = await compose(GUI_INPUT, makeCtx({ l1Filters: true }, semanticWith(async () => [many])));
+    const { spec, trace } = await compose(
+      GUI_INPUT,
+      makeCtx(
+        { l1Filters: true },
+        semanticWith(async () => [many]),
+      ),
+    );
     expect(trace.filters).toEqual({ injected: [], skipped: "variant-limit" });
     expect(spec.state).toBeUndefined();
     expect(spec.components.some((c) => c.type === "control.select")).toBe(false);
@@ -144,13 +159,18 @@ describe("ComposePolicy.l1Filters", () => {
       l1Filters: true,
       fixedSpecs: {
         async lookup() {
-          return (intent, handles) => ({
+          return (intent, handles): UISpec => ({
             kohaku: "0.2",
             intent,
             dataVersion: "template",
             components: [
               { id: "root", type: "layout.stack", props: {}, children: ["c"] },
-              { id: "c", type: "presentChart", props: { kind: "bar", x: "region", y: "revenue" }, data: { $ref: handles[0]!.uri } },
+              {
+                id: "c",
+                type: "presentChart",
+                props: { kind: "bar", x: "region", y: "revenue" },
+                data: { $ref: handles[0]!.uri },
+              },
             ],
             events: [],
             provenance: { tier: "L0", composedBy: "fixed-spec-template", cache: "miss" },
@@ -167,7 +187,16 @@ describe("ComposePolicy.l1Filters", () => {
   it("composeStream converges on the injected Spec in its final patch", async () => {
     const ctx = makeCtx({ l1Filters: true });
     const events = [];
-    for await (const ev of composeStream({ kind: "intent", intent: { canonical: "sales.quarterly_summary", params: { fiscalYear: 2026, quarter: 3, groupBy: "region" } } }, ctx)) {
+    for await (const ev of composeStream(
+      {
+        kind: "intent",
+        intent: {
+          canonical: "sales.quarterly_summary",
+          params: { fiscalYear: 2026, quarter: 3, groupBy: "region" },
+        },
+      },
+      ctx,
+    )) {
       events.push(ev);
     }
     const patches = events.filter((e) => e.kind === "patch");

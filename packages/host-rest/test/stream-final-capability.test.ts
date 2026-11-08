@@ -142,7 +142,10 @@ function parseSse(sse: string): SseEvent[] {
   const out: SseEvent[] = [];
   for (const block of sse.split("\n\n")) {
     const lines = block.split("\n");
-    const event = lines.find((l) => l.startsWith("event:"))?.slice("event:".length).trim();
+    const event = lines
+      .find((l) => l.startsWith("event:"))
+      ?.slice("event:".length)
+      .trim();
     const data = lines.find((l) => l.startsWith("data:"));
     if (event == null || data == null) continue;
     out.push({ event, data: JSON.parse(data.slice("data:".length).trim()) as Record<string, unknown> });

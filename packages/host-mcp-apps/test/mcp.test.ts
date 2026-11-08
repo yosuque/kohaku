@@ -3286,7 +3286,11 @@ describe("initial-data preresolution of a wide bind fan-out (L1 filter injection
       },
       async invoke(_op, args) {
         invoked.push(String((args as Record<string, unknown>)["region"]));
-        return { columns: [{ key: "month", type: "string" }], rows: [{ month: "Jan" }], dataVersion: "sales@seed-1" } as TabularData;
+        return {
+          columns: [{ key: "month", type: "string" }],
+          rows: [{ month: "Jan" }],
+          dataVersion: "sales@seed-1",
+        } as TabularData;
       },
     };
     const server = new McpServer({ name: "kohaku-wide", version: "0.1.0" });
@@ -3299,7 +3303,10 @@ describe("initial-data preresolution of a wide bind fan-out (L1 filter injection
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(st), client.connect(ct)]);
 
-    const result = await client.callTool({ name: "kohaku_compose", arguments: { question: "Monthly revenue trend" } });
+    const result = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Monthly revenue trend" },
+    });
     const initial = result._meta?.[INITIAL_DATA_META_KEY] as Record<string, TabularData>;
     // The initial variant (r0) is always embedded; of the 39 others, at most the first 32 are pre-resolved.
     expect(invoked).toContain("r0");
@@ -3321,7 +3328,12 @@ describe("L1 filter injection over MCP (ComposePolicy.l1Filters)", () => {
         objects: [
           {
             components: [
-              { id: "root", type: "layout.stack", props: { direction: "vertical", gap: null }, children: ["c"] },
+              {
+                id: "root",
+                type: "layout.stack",
+                props: { direction: "vertical", gap: null },
+                children: ["c"],
+              },
               {
                 id: "c",
                 type: "presentChart",

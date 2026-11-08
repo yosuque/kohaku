@@ -100,7 +100,10 @@ describe("injectFilters", () => {
       param: "region",
       queryParam: "geo",
       label: "Region",
-      options: Array.from({ length: 130 }, (_, i) => ({ value: i === 0 ? "europe" : `r${i}`, label: `r${i}` })),
+      options: Array.from({ length: 130 }, (_, i) => ({
+        value: i === 0 ? "europe" : `r${i}`,
+        label: `r${i}`,
+      })),
     };
     const input = l1Spec(REF);
     // 130 variants per data component x 2 components = 260 > 256.
@@ -164,7 +167,12 @@ describe("injectFilters", () => {
 
   it("returns invalid (and the input Spec) when the root cannot host controls", () => {
     const input = l1Spec(REF);
-    input.components[0] = { id: "root", type: "layout.tabs", props: {}, children: ["title1", "chart1", "table1"] };
+    input.components[0] = {
+      id: "root",
+      type: "layout.tabs",
+      props: {},
+      children: ["title1", "chart1", "table1"],
+    };
     const out = injectFilters(input, [REGION]);
     expect(out.skipped).toBe("invalid");
     expect(out.spec).toBe(input);

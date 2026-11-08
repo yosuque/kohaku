@@ -406,6 +406,27 @@ See TS's `docs/design.md#prompt-caching` (and its Japanese counterpart) for the 
 trade-off and the measurement script (`apps/sample-api/scripts/measure-grammar-latency.ts`)
 used to decide whether either is worth turning on for a given model/provider.
 
+## L1 filters / `l1Filters` (symmetric with TS)
+
+`ComposePolicy(l1Filters=True)` (default `False`) turns on deterministic filter injection into
+L1-generated Specs, mirroring TS's `ComposePolicy.l1Filters` (design.md #77):
+
+- `kohaku.intents`: `IntentDef.filters(params, locale=None)` derives `FilterDescriptor`s
+  (`kohaku.spec`) from the Intent's `facets` + `queries[].paramMap`.
+- `kohaku.semantic_llm`: the default port implements the optional
+  `describe_filters(intent, *, tenant=None, locale=None)`; the composer probes it with
+  `getattr` (`SupportsDescribeFilters`) and passes no locale (the cache key is locale-free).
+- `kohaku.composer.inject_filters.inject_filters` is the post-step (run after `normalize_ids`
+  and before `canonical_props`; L1 only). Its output is pinned byte-for-byte against TS by the
+  cross-language golden (`l1Filters` in `cross-language-canonical.json`), as are the
+  `policy_fingerprint` bytes (`l1Filters` folds in only when `True`, as an absent key).
+- `kohaku.host_rest` `/compose/stream`: the last patch carries a replacement `capability`
+  (`StreamPatchEvent.final`); `kohaku.host_mcp` pre-resolves at most 32 non-initial bind
+  variants. `examples/sales-api` enables it.
+
+Python naming note: the policy field is `l1Filters` (camelCase, like the rest of `ComposePolicy`'s
+wire-adjacent fields), not `l1_filters`.
+
 ## Reasoning effort / per-tier LLM (symmetric with TS)
 
 Two additive, opt-in knobs mirror the TS side exactly (both defaulted off/unset; leaving

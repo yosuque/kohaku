@@ -43,6 +43,7 @@ const fields: Record<keyof ComposePolicy, true> = {
   selectComponents: true,
   fewShot: true,
   refConstraint: true,
+  l1Filters: true,
   designSystem: true,
   l2Smoke: true,
   extraRules: true,
@@ -51,10 +52,10 @@ const slices: Record<keyof Slices, true> = fields;
 const policyKeys: Record<keyof ComposePolicy, true> = slices;
 
 describe("ComposePolicy slices", () => {
-  it("is exactly the union of its six concern slices (17 fields)", () => {
+  it("is exactly the union of its six concern slices (18 fields)", () => {
     expect(noFieldMissingFromSlices).toBe(true);
     expect(noFieldMissingFromPolicy).toBe(true);
-    expect(Object.keys(policyKeys)).toHaveLength(17);
-    expect(Object.keys(fields).length).toBe(17);
+    expect(Object.keys(policyKeys)).toHaveLength(18);
+    expect(Object.keys(fields).length).toBe(18);
   });
 });

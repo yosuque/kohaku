@@ -369,6 +369,17 @@ kohaku のスキーマ段階の `data.$ref` 偽造防止(TS `docs/design.md` §1
 (`apps/sample-api/scripts/measure-grammar-latency.ts`)は、TS の `docs/design.ja.md#prompt-caching`
 を参照。
 
+## L1 のフィルタ / `l1Filters`(TS と対称)
+
+`ComposePolicy(l1Filters=True)`(既定 `False`)で、L1 で生成した Spec への決定的なフィルタ注入を有効にする。TS の `ComposePolicy.l1Filters`(design.md #77)と対応する:
+
+- `kohaku.intents`: `IntentDef.filters(params, locale=None)` が、Intent の `facets` と `queries[].paramMap` から `FilterDescriptor`(`kohaku.spec`)を導出する。
+- `kohaku.semantic_llm`: 既定のポートが任意の `describe_filters(intent, *, tenant=None, locale=None)` を実装する。composer は `getattr` で探す(`SupportsDescribeFilters`)。キャッシュキーがロケールを含まないので、ロケールは渡さない。
+- `kohaku.composer.inject_filters.inject_filters` が後処理(`normalize_ids` の後、`canonical_props` の前。L1 のみ)。出力は、言語間の golden(`cross-language-canonical.json` の `l1Filters`)で TS とバイト単位で一致することを固定している。`policy_fingerprint` のバイト列も同様(`l1Filters` は `True` のときだけ、欠けたキーとして入る)。
+- `kohaku.host_rest` の `/compose/stream`: 最後の patch が置き換えの `capability` を運ぶ(`StreamPatchEvent.final`)。`kohaku.host_mcp` は、先読みする初期でない bind の変種を最大 32 にする。`examples/sales-api` で有効。
+
+Python の名前に関する注: ポリシーのフィールドは `l1_filters` ではなく `l1Filters`(camelCase。`ComposePolicy` のワイヤに近いフィールドと同じ)。
+
 ## 推論エフォート / ティアごとの LLM(TS と対称)
 
 TS 側と完全対称な、追加的(additive)な opt-in ノブが 2 つある(両方とも既定 off/未設定。どちらに

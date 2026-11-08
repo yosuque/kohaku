@@ -464,7 +464,11 @@ async function main(): Promise<void> {
       name,
       spec: input,
       descriptors,
-      expected: { spec: out.spec, injected: out.injected, ...(out.skipped != null ? { skipped: out.skipped } : {}) },
+      expected: {
+        spec: out.spec,
+        injected: out.injected,
+        ...(out.skipped != null ? { skipped: out.skipped } : {}),
+      },
     };
   });
   const policyFingerprintCases = await Promise.all(

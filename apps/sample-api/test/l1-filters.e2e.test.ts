@@ -97,7 +97,9 @@ describe("L1 filter injection in the sample API", () => {
       }
     }
     // ...403 for a value outside the declared domain (no forgery), and still exactly one generation.
-    expect(await resolveStatus(app, capability, "query://sales/trend?granularity=month&metric=bogus")).toBe(403);
+    expect(await resolveStatus(app, capability, "query://sales/trend?granularity=month&metric=bogus")).toBe(
+      403,
+    );
     expect(llm.calls).toHaveLength(1);
   });
 
@@ -112,10 +114,16 @@ describe("L1 filter injection in the sample API", () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     for (const block of (await res.text()).split("\n\n")) {
       const lines = block.split("\n");
-      const event = lines.find((l) => l.startsWith("event:"))?.slice("event:".length).trim();
+      const event = lines
+        .find((l) => l.startsWith("event:"))
+        ?.slice("event:".length)
+        .trim();
       const data = lines.find((l) => l.startsWith("data:"));
       if (event != null && data != null) {
-        events.push({ event, data: JSON.parse(data.slice("data:".length).trim()) as Record<string, unknown> });
+        events.push({
+          event,
+          data: JSON.parse(data.slice("data:".length).trim()) as Record<string, unknown>,
+        });
       }
     }
     const skeletonCap = events.find((e) => e.event === "spec")!.data["capability"] as string;

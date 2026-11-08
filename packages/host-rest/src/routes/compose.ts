@@ -454,7 +454,10 @@ async function streamGenerated(
           : undefined;
       await stream.writeSSE({
         event: "patch",
-        data: JSON.stringify({ patch: ev.patch, ...(replacement != null ? { capability: replacement } : {}) }),
+        data: JSON.stringify({
+          patch: ev.patch,
+          ...(replacement != null ? { capability: replacement } : {}),
+        }),
       });
     } else {
       final = ev.result;

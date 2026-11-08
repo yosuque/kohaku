@@ -425,7 +425,8 @@ function buildSpecFromOutcome(
     // ComposePolicy.l1Filters: Intent-declared filters are injected into a freshly generated L1 Spec only
     // (never L0 -- a hand-written template owns its own controls -- nor L2 nor the fallback Spec).
     let filters: ComposeTrace["filters"] | undefined;
-    const descriptors = outcome.tier === "L1" && prepared.policy.l1Filters === true ? refs.descriptors : undefined;
+    const descriptors =
+      outcome.tier === "L1" && prepared.policy.l1Filters === true ? refs.descriptors : undefined;
     const spec = postAndValidate(
       assembled,
       refs,

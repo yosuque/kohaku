@@ -32,7 +32,9 @@ function summary(overrides: { facets?: Parameters<typeof defineIntent>[0]["facet
       { param: "region", label: "Region", options: region, emptyLabel: "All regions" },
       { param: "metric", label: "Metric" },
     ],
-    queries: [{ path: "summary", paramMap: { fiscalYear: "fy", groupBy: "groupBy", region: "geo", metric: "m" } }],
+    queries: [
+      { path: "summary", paramMap: { fiscalYear: "fy", groupBy: "groupBy", region: "geo", metric: "m" } },
+    ],
   });
 }
 
@@ -89,7 +91,10 @@ describe("IntentDef.filters", () => {
     expect(filters.find((f) => f.param === "groupBy")?.label).toBe("集計軸");
     expect(filters.find((f) => f.param === "region")?.label).toBe("Region");
     expect(filters.find((f) => f.param === "region")?.options[0]).toEqual({ value: "japan", label: "日本" });
-    expect(filters.find((f) => f.param === "region")?.options[1]).toEqual({ value: "europe", label: "Europe" });
+    expect(filters.find((f) => f.param === "region")?.options[1]).toEqual({
+      value: "europe",
+      label: "Europe",
+    });
   });
 
   it("skips a facet whose param maps to different query params across queries (ambiguous), and an unmapped param", () => {

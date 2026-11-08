@@ -136,11 +136,7 @@ export function injectFilters(spec: UISpec, descriptors: readonly FilterDescript
   const rootIndex = components.findIndex((c) => c.id === ROOT_COMPONENT_ID);
   components[rootIndex] = { ...root, children: [...controls.map((c) => c.id), ...root.children] };
   // DFS-consistent position: root first, then the controls (first among its children), then the rest.
-  const ordered = [
-    ...components.slice(0, rootIndex + 1),
-    ...controls,
-    ...components.slice(rootIndex + 1),
-  ];
+  const ordered = [...components.slice(0, rootIndex + 1), ...controls, ...components.slice(rootIndex + 1)];
 
   const events: EventBinding[] = [
     ...spec.events,

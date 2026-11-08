@@ -73,10 +73,18 @@ export const INJECT_FILTERS_CASES: InjectFiltersCase[] = [
     spec: l1Spec("query://sales/summary?geo=mars&groupBy=region"),
     descriptors: [REGION, GROUP_BY],
   },
-  { name: "no descriptor matches a $ref query param", spec: l1Spec("query://sales/summary?groupBy=region"), descriptors: [REGION] },
+  {
+    name: "no descriptor matches a $ref query param",
+    spec: l1Spec("query://sales/summary?groupBy=region"),
+    descriptors: [REGION],
+  },
   { name: "empty descriptor list", spec: l1Spec(REF), descriptors: [] },
   { name: "variant limit abandons the whole injection", spec: l1Spec(REF), descriptors: [WIDE] },
-  { name: "a root that cannot host controls is invalid", spec: l1Spec(REF, REF, "layout.tabs"), descriptors: [REGION] },
+  {
+    name: "a root that cannot host controls is invalid",
+    spec: l1Spec(REF, REF, "layout.tabs"),
+    descriptors: [REGION],
+  },
   {
     name: "the data components disagree on the current value",
     spec: l1Spec(REF, "query://sales/summary?geo=japan&groupBy=region"),
@@ -108,5 +116,8 @@ export const POLICY_FINGERPRINT_CASES: PolicyFingerprintCase[] = [
   { name: "l1Filters true with an output language", policy: { outputLanguage: "Japanese", l1Filters: true } },
   { name: "output language alone", policy: { outputLanguage: "Japanese" } },
   { name: "allowL2 true with l1Filters true", policy: { allowL2: true, l1Filters: true } },
-  { name: "refConstraint validate with effort", policy: { refConstraint: "validate", effort: { l1: "low" } } },
+  {
+    name: "refConstraint validate with effort",
+    policy: { refConstraint: "validate", effort: { l1: "low" } },
+  },
 ];

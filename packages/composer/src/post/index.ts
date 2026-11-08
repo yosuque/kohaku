@@ -39,7 +39,7 @@ export function postProcess(
   return [...rules, ...extraRules].reduce((acc, rule) => rule(acc, ctx), spec);
 }
 
-export { canonicalProps, chartKind, normalizeIds, STANDARD_RULES, sortOrder } from "./rules.js";
 export type { InjectFiltersResult } from "./inject-filters.js";
 export { injectFilters } from "./inject-filters.js";
+export { canonicalProps, chartKind, normalizeIds, STANDARD_RULES, sortOrder } from "./rules.js";
 export type { PostProcessContext, PostRule } from "./types.js";
