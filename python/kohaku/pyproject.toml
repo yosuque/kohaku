@@ -36,8 +36,14 @@ gemini = ["google-genai>=1.0"]
 # Ed25519 signing/verification for Compliance Evidence Packs (kohaku.lineage.evidence). Symmetric with
 # the TS side's WebCrypto usage -- Python has no built-in Ed25519, so this is a real added dependency.
 evidence = ["cryptography>=43"]
+# Shared-backend StoragePort / CapabilityRevocationStore reference adapters (kohaku.storage.redis / .postgres),
+# symmetric with the TS storage-redis / storage-postgres packages whose drivers are peers too. redis-py's asyncio
+# client (`aclose()` needs >= 5.0.1) and psycopg 3 with its separate connection-pool distribution. psycopg needs
+# libpq: install `psycopg[binary]` (or a system libpq) alongside -- the extra deliberately does not pick for you.
+redis = ["redis>=5.2"]
+postgres = ["psycopg[pool]>=3.2"]
 # Convenience bundle: every optional feature set, for demos and quickstarts that don't want to pick individually.
-all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence]"]
+all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence,redis,postgres]"]
 
 [build-system]
 requires = ["hatchling"]

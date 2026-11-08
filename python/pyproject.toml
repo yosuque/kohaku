@@ -43,6 +43,13 @@ dev = [
     # install time.
     "anthropic>=1.5",
     "google-genai>=1.0",
+    # For testing the shared-backend StoragePort adapters (kohaku.storage.redis / .postgres; the redis /
+    # postgres extras of kohaku-ui). `psycopg[binary]` brings its own libpq so the suite needs no system
+    # install. testcontainers (base package only: the generic DockerContainer, no sqlalchemy/psycopg2 extras)
+    # starts a throwaway backend when no KOHAKU_TEST_*_URL is set -- same resolution order as the TS suites.
+    "redis>=5.2",
+    "psycopg[binary,pool]>=3.2",
+    "testcontainers>=4.9",
 ]
 
 [tool.pytest.ini_options]
