@@ -39,15 +39,19 @@ from .service import (
     Promotions,
     PublishContext,
     ReconcileSummary,
+    SuggestContext,
     UnpublishContext,
     ValidatePublishContext,
     create_promotions,
 )
+from .suggestion import DRAFT_DIFF_FIELDS, DraftDiffField, diff_draft
 
 __all__ = [
     "DEFAULT_PROMOTION_POLICY",
+    "DRAFT_DIFF_FIELDS",
     "ArtifactNotFoundError",
     "ComponentDraft",
+    "DraftDiffField",
     "JudgeContext",
     "JudgeResult",
     "JudgeStart",
@@ -73,6 +77,7 @@ __all__ = [
     "ReviewRequestChanges",
     "ReviewStart",
     "SchemaPropose",
+    "SuggestContext",
     "TransitionError",
     "Unpublish",
     "UnpublishContext",
@@ -80,6 +85,7 @@ __all__ = [
     "Withdraw",
     "component_draft_from_wire",
     "create_promotions",
+    "diff_draft",
     "is_terminal",
     "may_have_projection",
     "query_template_from_wire",
