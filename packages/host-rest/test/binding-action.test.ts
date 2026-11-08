@@ -131,6 +131,37 @@ describe("response shape of POST /binding/action", () => {
     expect(seen[0]!.endpoint).toBe("binding/action");
   });
 
+  it("a write whose outcome is unknown (error code *_OUTCOME_UNKNOWN) is 503 INTERNAL with the fixed message, the real error still reported", async () => {
+    const timedOut = Object.assign(
+      new Error('MCP tool "annotate": did not answer in time; its effect is unknown'),
+      {
+        code: "MCP_OUTCOME_UNKNOWN",
+      },
+    );
+    const throwingDomain: DomainPort = {
+      async listOperations() {
+        return [{ name: "annotate", description: "d" }];
+      },
+      async invoke() {
+        throw timedOut;
+      },
+    };
+    const seen: { endpoint: string; error: unknown }[] = [];
+    const deps = baseDeps({
+      domain: throwingDomain,
+      onError: (info) => {
+        seen.push({ endpoint: info.endpoint, error: info.error });
+      },
+    });
+    const res = await postAction(deps, { action: "annotate", payload: {} });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("INTERNAL");
+    expect(body.error.message).toBe("the action's outcome is unknown; verify before retrying");
+    expect(JSON.stringify(body)).not.toContain("did not answer");
+    expect(seen).toEqual([{ endpoint: "binding/action", error: timedOut }]);
+  });
+
   it("returns 401 when there is no capability", async () => {
     const res = await postAction(baseDeps(), { action: "annotate", payload: {} }, false);
     expect(res.status).toBe(401);

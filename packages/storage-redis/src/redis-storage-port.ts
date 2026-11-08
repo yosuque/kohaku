@@ -145,7 +145,7 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       for (const { field, value } of indexValues(event)) {
         multi.zadd(keys.lineage.index(field, value), "NX", seq, event.id);
       }
-      await multi.exec();
+      await execOrThrow(multi);
     },
     async listLineage(filter = {}) {
       await ready();
@@ -261,7 +261,7 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       multi.del(key);
       multi.zrem(keys.fixationIndex(undefined), key);
       if (normalizeTenant(tenant) != null) multi.zrem(keys.fixationIndex(tenant), key);
-      await multi.exec();
+      await execOrThrow(multi);
     },
   };
 }
@@ -287,7 +287,7 @@ async function putIndexed(
   const seq = await redis.incr(seqKey);
   const multi = redis.multi();
   queueIndexed(multi, seq, key, tenant, indexKey, value);
-  await multi.exec();
+  await execOrThrow(multi);
 }
 
 /**
@@ -305,7 +305,7 @@ async function putIndexedMany(
   entries.forEach((entry, i) => {
     queueIndexed(multi, seqs[i]!, entry.key, entry.tenant, indexKey, entry.value);
   });
-  await multi.exec();
+  await execOrThrow(multi);
 }
 
 /** Queues one record's SET plus its all-tenants / per-tenant index entries on `multi`. */
@@ -339,9 +339,10 @@ function revisionOf(raw: string): string | undefined {
 }
 
 /**
- * The compare-and-set check against the raw stored body (`null` = absent), the same tri-state as
- * `StoragePort`'s `expectedRevision`: `null` = must be absent; a string = must be present with exactly that
- * `revision` (a record with no revision never matches).
+ * The compare-and-set check against the raw stored body (`null` = absent), the same four states as
+ * `StoragePort`'s `expectedRevision`: `null` = must be absent; `""` = must be present and carry no `revision`
+ * (it predates the field); any other string = must be present with exactly that `revision`. For a present
+ * record that is the stored revision (read as `""` when absent or not a string) `=== expected`; an absent one never matches a string.
  */
 function checkRevision(
   kind: "promotion" | "fixation",
@@ -353,7 +354,31 @@ function checkRevision(
     if (current != null) throw new StorageConflictError(kind, id);
     return;
   }
-  if (current == null || revisionOf(current) !== expected) throw new StorageConflictError(kind, id);
+  if (current == null || (revisionOf(current) ?? "") !== expected) throw new StorageConflictError(kind, id);
+}
+
+/**
+ * Runs a queued MULTI and surfaces what a bare `await multi.exec()` hides. ioredis resolves `exec()` with a
+ * `[error, result]` pair per command, so a command that failed at run time (for example a `ZADD` on a key
+ * holding the wrong type, after the `SET` before it already applied) leaves `exec()` itself resolved. The first
+ * such error is thrown here, worded as a possibly partially applied transaction: Redis does not roll a MULTI
+ * back, so the earlier commands' effects stand. It is deliberately NOT a `StorageConflictError` (a conflict
+ * means "nothing was written, retry from a fresh read"; this means the store may be inconsistent).
+ * Returns `null` when the server aborted the transaction (a watched key changed), which only the
+ * compare-and-set path can see and treats as a conflict, and the replies otherwise.
+ */
+async function execOrThrow(multi: ChainableCommander): Promise<unknown[] | null> {
+  const replies = await multi.exec();
+  if (replies == null) return null;
+  for (const [error] of replies) {
+    if (error != null) {
+      throw new Error(
+        `redis storage port: a command of the MULTI/EXEC transaction failed, so it may have been partially applied (${error.message})`,
+        { cause: error },
+      );
+    }
+  }
+  return replies.map(([, result]) => result);
 }
 
 interface CompareAndSet {
@@ -456,8 +481,7 @@ function createCompareAndSet(
           if (epoch !== startEpoch) throw new StorageConflictError(kind, id);
           executed = true;
           // A null reply = the watched key changed under us: nothing was applied.
-          const replies = await multi.exec();
-          if (replies == null) throw new StorageConflictError(kind, id);
+          if ((await execOrThrow(multi)) == null) throw new StorageConflictError(kind, id);
         } finally {
           // Best effort: if the connection itself is broken the next transaction's WATCH fails loudly instead.
           if (!executed) await client.unwatch().catch(() => {});

@@ -112,7 +112,8 @@ function casStorage(options: { supportsCompareAndSet?: boolean } = {}): CasStora
       const expected = putOptions?.expectedRevision;
       if (expected !== undefined) {
         const current = states.get(state.artifactId);
-        const ok = expected === null ? current == null : current?.revision === expected;
+        const ok =
+          expected === null ? current == null : current != null && (current.revision ?? "") === expected;
         if (!ok) throw new StorageConflictError("promotion", state.artifactId);
       }
       states.set(state.artifactId, state);
@@ -135,7 +136,8 @@ function casStorage(options: { supportsCompareAndSet?: boolean } = {}): CasStora
       if (putOptions?.ifPresent === true && current == null) return;
       const expected = putOptions?.expectedRevision;
       if (expected !== undefined) {
-        const ok = expected === null ? current == null : current?.revision === expected;
+        const ok =
+          expected === null ? current == null : current != null && (current.revision ?? "") === expected;
         if (!ok) throw new StorageConflictError("fixation", record.intentHash);
       }
       fixations.set(record.intentHash, record);
@@ -146,7 +148,8 @@ function casStorage(options: { supportsCompareAndSet?: boolean } = {}): CasStora
     async deleteFixation(intentHash, _tenant, deleteOptions) {
       storage.fixationDeletes.push({ intentHash, options: deleteOptions });
       const expected = deleteOptions?.expectedRevision;
-      if (expected !== undefined && fixations.get(intentHash)?.revision !== expected) {
+      const stored = fixations.get(intentHash);
+      if (expected !== undefined && (stored == null || (stored.revision ?? "") !== expected)) {
         throw new StorageConflictError("fixation", intentHash);
       }
       fixations.delete(intentHash);
@@ -190,7 +193,7 @@ describe("promotion writes carry the revision they read", () => {
     expect(second?.state.revision).not.toBe(first?.state.revision);
   });
 
-  it("passes no condition for a legacy record that has no revision (one unguarded write, which then stamps one)", async () => {
+  it('guards a legacy record that has no revision with expectedRevision "" (and the write then stamps one)', async () => {
     const storage = casStorage();
     seedGenerated(storage, "a1");
     storage.states.set("a1", { artifactId: "a1", status: "candidate", updatedAt: "x", data: {} });
@@ -198,8 +201,36 @@ describe("promotion writes carry the revision they read", () => {
 
     await promotions.act("a1", { kind: "judge.start" }, actor);
 
-    expect(storage.promotionWrites[0]?.options).toBeUndefined();
+    expect(storage.promotionWrites[0]?.options).toEqual({ expectedRevision: "" });
     expect(typeof storage.states.get("a1")?.revision).toBe("string");
+  });
+
+  it("a stale transition cannot overwrite a decision committed to a legacy (unversioned) record, even with both instances upgraded", async () => {
+    const storage = casStorage();
+    seedGenerated(storage, "a1");
+    storage.states.set("a1", {
+      artifactId: "a1",
+      status: "candidate",
+      updatedAt: "x",
+      data: {},
+    });
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage });
+    // Instance B has read the unversioned record when instance A commits a decision (stamping a revision).
+    storage.hooks.afterPromotionRead = () => {
+      storage.states.set("a1", {
+        artifactId: "a1",
+        status: "rejected",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        data: {},
+        revision: "reject-writer",
+      });
+    };
+
+    await expect(promotions.act("a1", { kind: "judge.start" }, actor)).rejects.toBeInstanceOf(
+      StorageConflictError,
+    );
+    expect(storage.states.get("a1")?.status).toBe("rejected");
+    expect(storage.states.get("a1")?.revision).toBe("reject-writer");
   });
 
   it("passes no options at all to a port that does not declare supportsCompareAndSet", async () => {
@@ -292,6 +323,147 @@ describe("promotion writes carry the revision they read", () => {
 
     expect(batchCalls).toBe(1);
     expect(typeof storage.states.get("a1")?.revision).toBe("string");
+  });
+});
+
+describe("a storage error in the middle of a bulk nomination does not lose the audit of what was already stored", () => {
+  const nominatedIds = (storage: CasStorage): string[] =>
+    storage.events
+      .filter((e) => e.type === "component.nominated")
+      .map((e) => String(e.payload["artifactId"]));
+  const policy = { minUses: 0, minDistinctSessions: 0, judgeBlocking: true };
+
+  it("compare-and-set port: the 2nd put fails, the 1st stays persisted AND audited, the error is rethrown, and the retry audits the rest", async () => {
+    const storage = casStorage();
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    seedGenerated(storage, "a3");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    const realPut = storage.putPromotionState.bind(storage);
+    let failA2 = true;
+    storage.putPromotionState = async (state, options) => {
+      if (state.artifactId === "a2" && failA2) throw new Error("transient storage failure");
+      await realPut(state, options);
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("transient storage failure");
+
+    expect(storage.states.get("a1")?.status).toBe("candidate");
+    expect(storage.states.has("a2")).toBe(false);
+    // The pass stopped at the failure: the item after it was neither written nor audited (it stays in_use).
+    expect(storage.states.has("a3")).toBe(false);
+    expect(nominatedIds(storage)).toEqual(["a1"]);
+
+    failA2 = false;
+    await promotions.evaluateAndList();
+    expect(storage.states.get("a2")?.status).toBe("candidate");
+    expect(storage.states.get("a3")?.status).toBe("candidate");
+    expect(nominatedIds(storage).sort()).toEqual(["a1", "a2", "a3"]);
+  });
+
+  it("compare-and-set port: a put that stores the state and then throws (ambiguous outcome) is read back, counted as persisted and audited, then the error is rethrown", async () => {
+    const storage = casStorage();
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    seedGenerated(storage, "a3");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    const realPut = storage.putPromotionState.bind(storage);
+    storage.putPromotionState = async (state, options) => {
+      await realPut(state, options);
+      if (state.artifactId === "a2") throw new Error("timeout after commit");
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("timeout after commit");
+
+    expect(storage.states.get("a2")?.status).toBe("candidate");
+    expect(storage.states.has("a3")).toBe(false);
+    expect(nominatedIds(storage)).toEqual(["a1", "a2"]);
+  });
+
+  it("an ambiguous failure whose state did NOT land is not audited, and a failing read-back keeps the original error", async () => {
+    const storage = casStorage();
+    seedGenerated(storage, "a1");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    let writeAttempted = false;
+    storage.putPromotionState = async () => {
+      writeAttempted = true;
+      throw new Error("write failed");
+    };
+    // The verifying read-back (after the failed write) fails too: the original write error is still reported.
+    const realGet = storage.getPromotionState.bind(storage);
+    storage.getPromotionState = async (id, tenant) => {
+      if (writeAttempted) throw new Error("read failed");
+      return realGet(id, tenant);
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("write failed");
+    expect(nominatedIds(storage)).toEqual([]);
+  });
+
+  it("batch port: a putPromotionStates that stores the batch and then throws is read back and audited, then the error is rethrown", async () => {
+    const storage = casStorage({ supportsCompareAndSet: false });
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    const realBatch = storage.putPromotionStates!.bind(storage);
+    storage.putPromotionStates = async (states) => {
+      await realBatch(states);
+      throw new Error("timeout after commit");
+    };
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("timeout after commit");
+
+    expect(nominatedIds(storage).sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("batch port (putPromotionStates throws): nothing is stored, nothing is audited, the error is rethrown", async () => {
+    const storage = casStorage({ supportsCompareAndSet: false });
+    seedGenerated(storage, "a1");
+    storage.putPromotionStates = async () => {
+      throw new Error("batch failed");
+    };
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("batch failed");
+
+    expect(storage.states.size).toBe(0);
+    expect(nominatedIds(storage)).toEqual([]);
+  });
+
+  it("legacy per-item fallback: a put that stores the state and then throws is read back and audited", async () => {
+    const storage = casStorage({ supportsCompareAndSet: false });
+    delete (storage as { putPromotionStates?: unknown }).putPromotionStates;
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    const realPut = storage.putPromotionState.bind(storage);
+    storage.putPromotionState = async (state, options) => {
+      await realPut(state, options);
+      if (state.artifactId === "a2") throw new Error("timeout after commit");
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("timeout after commit");
+
+    expect(nominatedIds(storage)).toEqual(["a1", "a2"]);
+  });
+
+  it("legacy per-item fallback (no putPromotionStates): the 2nd put fails, the 1st stays persisted AND audited", async () => {
+    const storage = casStorage({ supportsCompareAndSet: false });
+    delete (storage as { putPromotionStates?: unknown }).putPromotionStates;
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage, policy });
+    const realPut = storage.putPromotionState.bind(storage);
+    storage.putPromotionState = async (state, options) => {
+      if (state.artifactId === "a2") throw new Error("transient storage failure");
+      await realPut(state, options);
+    };
+
+    await expect(promotions.evaluateAndList()).rejects.toThrow("transient storage failure");
+
+    expect(storage.states.get("a1")?.status).toBe("candidate");
+    expect(storage.states.has("a2")).toBe(false);
+    expect(nominatedIds(storage)).toEqual(["a1"]);
   });
 });
 
@@ -489,7 +661,7 @@ describe("fixation writes carry the revision they read", () => {
     expect(storage.events.some((e) => e.type === "intent.unfixated")).toBe(false);
   });
 
-  it("a legacy fixation without a revision is written and deleted unconditionally", async () => {
+  it('a legacy fixation without a revision is written and deleted conditionally on "" (present and unversioned)', async () => {
     const storage = casStorage();
     storage.fixations.set(HASH, fixationRecord("old"));
     const api = fixations(storage);
@@ -497,8 +669,21 @@ describe("fixation writes carry the revision they read", () => {
     await api.refreshFingerprint(HASH, "fp2");
     await api.unfixate(HASH, actor);
 
-    expect(storage.fixationWrites[0]?.options).toEqual({ ifPresent: true });
-    expect(storage.fixationDeletes[0]?.options).toBeUndefined();
+    expect(storage.fixationWrites[0]?.options).toEqual({ ifPresent: true, expectedRevision: "" });
+    expect(storage.fixationDeletes[0]?.options).toEqual({ expectedRevision: "" });
+  });
+
+  it("a stale unfixate of a legacy fixation loses to a replace that landed after its read: the new fixation survives and nothing is audited", async () => {
+    const storage = casStorage();
+    storage.fixations.set(HASH, fixationRecord("old"));
+    const api = fixations(storage);
+    storage.hooks.afterFixationRead = () => {
+      storage.fixations.set(HASH, fixationRecord("new", "r-new"));
+    };
+
+    await expect(api.unfixate(HASH, actor)).rejects.toMatchObject({ code: "STORAGE_CONFLICT" });
+    expect(storage.fixations.get(HASH)?.revision).toBe("r-new");
+    expect(storage.events.some((e) => e.type === "intent.unfixated")).toBe(false);
   });
 
   it("a port that does not declare supportsCompareAndSet keeps the pre-CAS call shapes", async () => {

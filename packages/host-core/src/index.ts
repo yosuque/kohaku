@@ -88,9 +88,11 @@ export {
   formatErrorChain,
   type HostErrorClass,
   isLlmUnavailableError,
+  isOutcomeUnknownError,
   isTypedHostError,
   LLM_PROVIDER_UNAVAILABLE_MESSAGE,
   notifyHook,
+  OUTCOME_UNKNOWN_MESSAGE,
   STORAGE_CONFLICT_MESSAGE,
 } from "./errors.js";
 export {

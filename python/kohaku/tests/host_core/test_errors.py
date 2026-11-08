@@ -12,6 +12,7 @@ import pytest
 from kohaku.composer import ComposeErrorContext
 from kohaku.host_core import (
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+    OUTCOME_UNKNOWN_MESSAGE,
     STORAGE_CONFLICT_MESSAGE,
     ConsoleErrorReporterOptions,
     HostErrorClass,
@@ -20,6 +21,7 @@ from kohaku.host_core import (
     fail_open,
     format_error_chain,
     is_llm_unavailable_error,
+    is_outcome_unknown_error,
     is_typed_host_error,
 )
 from kohaku.llm import LlmError
@@ -254,6 +256,31 @@ class TestClassifyHostError:
         assert (
             STORAGE_CONFLICT_MESSAGE == "the resource was modified concurrently; reload and retry"
         )
+
+    def test_maps_an_error_whose_code_ends_in_outcome_unknown_to_the_fixed_message(self) -> None:
+        # It carries a string `code` too, so without an explicit branch it would pass its own text (which names
+        # the upstream tool) through.
+        timed_out = Exception('MCP tool "refund": the upstream tool did not answer in time')
+        timed_out.code = "MCP_OUTCOME_UNKNOWN"  # type: ignore[attr-defined]
+        assert classify_host_error(timed_out) == HostErrorClass(
+            "outcome_unknown", OUTCOME_UNKNOWN_MESSAGE
+        )
+        assert OUTCOME_UNKNOWN_MESSAGE == "the action's outcome is unknown; verify before retrying"
+        bare = Exception("x")
+        bare.code = "OUTCOME_UNKNOWN"  # type: ignore[attr-defined]
+        assert classify_host_error(bare).kind == "outcome_unknown"
+
+    def test_recognises_only_a_coded_exception_as_outcome_unknown(self) -> None:
+        def coded(code: str) -> Exception:
+            error = Exception("x")
+            error.code = code  # type: ignore[attr-defined]
+            return error
+
+        assert is_outcome_unknown_error(coded("SQL_OUTCOME_UNKNOWN"))
+        assert not is_outcome_unknown_error(coded("MCP_ARGUMENT_INVALID"))
+        assert not is_outcome_unknown_error(coded("OUTCOME_UNKNOWN_X"))
+        assert not is_outcome_unknown_error(Exception("OUTCOME_UNKNOWN"))
+        assert not is_outcome_unknown_error("MCP_OUTCOME_UNKNOWN")
 
     def test_maps_a_plain_exception_and_a_non_exception_to_untyped(self) -> None:
         assert classify_host_error(Exception("boom")) == HostErrorClass("untyped")

@@ -1,4 +1,5 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
+import type { PolicyRateLimiter, PolicyRateLimiterTakeParams } from "@kohaku-ui/host-core";
 import type {
   ApprovalPort,
   ApprovalVerifyResult,
@@ -163,5 +164,143 @@ describe("MCP: the verified capability's tenant is carried through (CAP-TEN-002)
     });
     expect(verifyApproval.mock.calls[0]![1].tenant).toBeUndefined();
     expect("tenant" in contexts[0]!).toBe(false);
+  });
+
+  // SPEC CAP-TEN-002: the data-plane rate limit is taken after the capability verified and keyed by its tenant,
+  // so a tenant-scoped rule (policy `tenants.A.rateLimits`) is enforced over MCP too.
+  describe("rate limit keyed by the capability's tenant", () => {
+    /** Denies only tenant "A" (a tenant-only rule); records every take. */
+    function tenantRuleLimiter(takes: PolicyRateLimiterTakeParams[]): PolicyRateLimiter {
+      return {
+        async take(params) {
+          takes.push(params);
+          return params.tenant === "A" ? { allow: false, retryAfterMs: 500 } : { allow: true };
+        },
+      };
+    }
+
+    it("kohaku_resolve_binding: the take carries the capability's tenant; a tenant-A rule denies and the domain is not invoked", async () => {
+      const contexts: InvocationContext[] = [];
+      const takes: PolicyRateLimiterTakeParams[] = [];
+      const onRateLimited = vi.fn();
+      const client = await connect({
+        compose: NO_COMPOSE,
+        domain: recordingDomain(contexts),
+        authz: authzBinding("A"),
+        querySource: "sales",
+        rateLimiter: tenantRuleLimiter(takes),
+        onRateLimited,
+      });
+      const result = await client.callTool({
+        name: "kohaku_resolve_binding",
+        arguments: { ref: TREND_REF, capability: "cap" },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.structuredContent as { error?: { code?: string } }).error?.code).toBe("RATE_LIMITED");
+      expect(takes).toHaveLength(1);
+      expect(takes[0]).toMatchObject({ tenant: "A", routeClass: "resolve" });
+      expect(contexts).toHaveLength(0);
+      expect(onRateLimited).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "A", routeClass: "resolve" }),
+      );
+    });
+
+    it("kohaku_action: the take carries the capability's tenant; a tenant-A rule denies before the action runs", async () => {
+      const contexts: InvocationContext[] = [];
+      const takes: PolicyRateLimiterTakeParams[] = [];
+      const onRateLimited = vi.fn();
+      const client = await connect({
+        compose: NO_COMPOSE,
+        domain: recordingDomain(contexts),
+        authz: authzBinding("A"),
+        querySource: "sales",
+        rateLimiter: tenantRuleLimiter(takes),
+        onRateLimited,
+      });
+      const result = await client.callTool({
+        name: "kohaku_action",
+        arguments: { action: "delete", payload: {}, capability: "cap" },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.structuredContent as { error?: { code?: string } }).error?.code).toBe("RATE_LIMITED");
+      expect(takes).toHaveLength(1);
+      expect(takes[0]).toMatchObject({ tenant: "A", routeClass: "action" });
+      expect(contexts).toHaveLength(0);
+      expect(onRateLimited).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "A", routeClass: "action" }),
+      );
+    });
+
+    it("a tenant-less capability is taken without a tenant (the tenant-A rule does not apply)", async () => {
+      const contexts: InvocationContext[] = [];
+      const takes: PolicyRateLimiterTakeParams[] = [];
+      const client = await connect({
+        compose: NO_COMPOSE,
+        domain: recordingDomain(contexts),
+        authz: authzBinding(undefined),
+        querySource: "sales",
+        rateLimiter: tenantRuleLimiter(takes),
+      });
+      const result = await client.callTool({
+        name: "kohaku_resolve_binding",
+        arguments: { ref: TREND_REF, capability: "cap" },
+      });
+      expect(result.isError).toBeFalsy();
+      expect("tenant" in takes[0]!).toBe(false);
+    });
+
+    it("a capability that fails verification is refused before the limiter is consulted", async () => {
+      const takes: PolicyRateLimiterTakeParams[] = [];
+      const client = await connect({
+        compose: NO_COMPOSE,
+        domain: recordingDomain([]),
+        authz: {
+          async issueCapability() {
+            return "cap";
+          },
+          async verify() {
+            return { ok: false, reason: "bad" };
+          },
+        },
+        querySource: "sales",
+        rateLimiter: tenantRuleLimiter(takes),
+      });
+      const result = await client.callTool({
+        name: "kohaku_resolve_binding",
+        arguments: { ref: TREND_REF, capability: "cap" },
+      });
+      expect(result.isError).toBe(true);
+      expect(takes).toHaveLength(0);
+    });
+
+    it("kohaku_action: a capability that fails verification never reaches the limiter or onRateLimited", async () => {
+      const takes: PolicyRateLimiterTakeParams[] = [];
+      const onRateLimited = vi.fn();
+      const client = await connect({
+        compose: NO_COMPOSE,
+        domain: recordingDomain([]),
+        authz: {
+          async issueCapability() {
+            return "cap";
+          },
+          async verify() {
+            return { ok: false, reason: "bad" };
+          },
+        },
+        querySource: "sales",
+        rateLimiter: tenantRuleLimiter(takes),
+        onRateLimited,
+      });
+      const result = await client.callTool({
+        name: "kohaku_action",
+        arguments: { action: "delete", payload: {}, capability: "cap" },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.structuredContent as { error?: { code?: string } } | undefined)?.error?.code).not.toBe(
+        "RATE_LIMITED",
+      );
+      expect(takes).toHaveLength(0);
+      expect(onRateLimited).not.toHaveBeenCalled();
+    });
   });
 });

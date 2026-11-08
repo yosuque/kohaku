@@ -51,13 +51,50 @@ _SDK_TIMEOUT_MARGIN_SECONDS = 5.0
 _MAX_LISTED_CONSTRAINTS = 5
 
 
+MCP_OUTCOME_UNKNOWN = "MCP_OUTCOME_UNKNOWN"
+"""The `code` of an error that says "the write may have been applied" (host_core's `is_outcome_unknown_error`):
+a write's `McpTimeoutError`, and `McpOutcomeUnknownError`."""
+
+
 class McpTimeoutError(RuntimeError):
     """An upstream call did not answer within `call_timeout_ms`. The request was cancelled, not retried. For a
-    write the message says the effect is unknown: the tool may or may not have run. No wire `code`."""
+    write the message says the effect is unknown (the tool may or may not have run) and the error carries the
+    code `MCP_OUTCOME_UNKNOWN`, which the hosts recognise: REST answers 503 `INTERNAL` with a fixed "outcome is
+    unknown; verify before retrying" message instead of the 404 every failed read gets, and MCP the same text as
+    a tool error. A read's timeout has no `code`: nothing was changed, so it stays an ordinary failed read."""
 
     def __init__(self, tool: str, write: bool) -> None:
         suffix = "; its effect is unknown" if write else ""
         super().__init__(f'MCP tool "{tool}": the upstream tool did not answer in time{suffix}')
+        self.code: str | None = MCP_OUTCOME_UNKNOWN if write else None
+
+
+class McpOutcomeUnknownError(RuntimeError):
+    """A write's upstream call failed in a way that does not tell whether the tool ran: the connection closed or
+    the send failed after the request may have left, a transport error, or the SDK's own request timeout. Carries
+    the code `MCP_OUTCOME_UNKNOWN` like a write's `McpTimeoutError`, and the original error as `__cause__` (the
+    hosts show the caller only the fixed message; the cause reaches `on_error`)."""
+
+    def __init__(self, tool: str) -> None:
+        super().__init__(
+            f'MCP tool "{tool}": the upstream call failed after the request may have been sent; '
+            "its effect is unknown"
+        )
+        self.code: str = MCP_OUTCOME_UNKNOWN
+
+
+# The Python SDK raises these JSON-RPC-numbered MCPErrors locally (CONNECTION_CLOSED, REQUEST_TIMEOUT): they are
+# not answers from the server, so they do not say that the tool did not run.
+_SDK_LOCAL_RPC_CODES = frozenset({-32000, -32001})
+
+
+def _failed_before_execution(error: BaseException) -> bool:
+    """Whether a write's failure is one that certainly did not run the tool, so it is re-raised unchanged: a
+    JSON-RPC error the server answered (the SDK's `MCPError`, an int `code`) other than the SDK-local
+    CONNECTION_CLOSED / REQUEST_TIMEOUT. Every other failure (a transport error, an unknown shape) is treated as
+    "may have been applied". Duck-typed, like the TS port: this package never imports the SDK."""
+    code = getattr(error, "code", None)
+    return isinstance(code, int) and not isinstance(code, bool) and code not in _SDK_LOCAL_RPC_CODES
 
 
 @dataclass(frozen=True)
@@ -197,7 +234,17 @@ class McpDomainPort:
                 timeout=seconds,
             )
         except TimeoutError:
+            # Deliberately broader than the TS port, which has its own timer: `asyncio.wait_for` also lets a
+            # TimeoutError the client itself raised (e.g. the SDK's own request timeout) through as this one.
+            # Both mean "no answer in time", so a write's is outcome-unknown either way.
             raise McpTimeoutError(name, write) from None
+        except Exception as error:
+            # (CancelledError is a BaseException and passes through.) A write that fails in a way that does not
+            # tell whether the tool ran is wrapped; a read's failure and a write the server certainly rejected
+            # are re-raised as they are.
+            if write and not _failed_before_execution(error):
+                raise McpOutcomeUnknownError(name) from error
+            raise
 
     async def invoke(self, op: str, args: JsonObject, ctx: InvocationContext) -> object:
         tool = self._tools.get(op)

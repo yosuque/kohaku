@@ -32,6 +32,7 @@ from kohaku.host_core import (
     ACTION_GATE_UNAVAILABLE_MESSAGE,
     GATED_READ_MESSAGE,
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+    OUTCOME_UNKNOWN_MESSAGE,
     STORAGE_CONFLICT_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
@@ -185,12 +186,35 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
+async def _mcp_task_owner_key(
+    deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]
+) -> str:
+    """The identity a task is bound to (`tasks/get` / `tasks/cancel` match the caller against it).
+    Deliberately NOT `_mcp_rate_limit_key`: a transport-identity `rate_limit_key` (a client IP behind a NAT)
+    is shared by distinct authenticated callers, which would let one read another's task result (a bearer
+    capability) and cancel it. In order: the resolved principal's id when `resolve_principal` is wired AND it
+    resolved a caller-specific identity (an id other than the default principal's, `deps.principal` or
+    `_ANONYMOUS`, which a resolver returns for a guest / unauthenticated call and which would merge every such
+    caller into one owner); else `deps.rate_limit_key(ctx)`; else the per-connection id. Without
+    `resolve_principal` the principal is the constant default one, so it is only consulted when wired.
+    `resolve_principal` must therefore return a distinct id per caller. Port of TS `mcpTaskOwnerKey`."""
+    default_principal = deps.principal if deps.principal is not None else _ANONYMOUS
+    if deps.resolve_principal is not None and principal.id != default_principal.id:
+        return principal.id
+    if deps.rate_limit_key is not None:
+        key = deps.rate_limit_key(ctx)
+        if inspect.isawaitable(key):
+            return await key
+        return key
+    return _session_correlation_prefix(ctx)
+
+
 async def _mcp_rate_limit_key(
     deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]
 ) -> str:
-    """The bucket-key "principal" component for a rate-limit check (this profile has no tenant -- see
-    `McpHostDeps.rate_limiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
-    `None` here). Every unauthenticated call resolves to the same constant fallback principal
+    """The bucket-key "principal" component for a rate-limit check (the tenant component is separate:
+    `compose` checks carry none, `action` / `resolve` checks carry the verified capability's tenant -- see
+    `_check_mcp_rate_limit`). Every unauthenticated call resolves to the same constant fallback principal
     (`McpHostDeps.principal` or the built-in `_ANONYMOUS`), so keying on `principal.id` alone in that
     case would put every anonymous caller into one shared bucket -- exactly the failure a per-caller
     budget exists to prevent. In order: `deps.rate_limit_key(ctx)` when wired (a product keying by a
@@ -441,7 +465,9 @@ def _client_failure_message(exc: BaseException) -> str:
     `_safe_tool`, or a background MCP Tasks compose failing in `_start_compose_task`). An unavailable LLM provider
     (LlmError PROVIDER / CONFIG / ABORTED) is an operator-side failure whose raw SDK wording must not reach the
     model: host_core's `classify_host_error` gives it the same fixed message the REST profile answers with on 503.
-    A typed host error passes its own message through; everything else collapses to
+    The same goes for a write whose outcome is unknown (an `*_OUTCOME_UNKNOWN` code, e.g. domain_mcp's write
+    timeout): the fixed OUTCOME_UNKNOWN_MESSAGE, so the model checks before retrying and never reads the upstream
+    tool's name from the error. A typed host error passes its own message through; everything else collapses to
     `_TOOL_INTERNAL_ERROR_MESSAGE`. Port of TS `clientFailureMessage`.
     """
     cls = classify_host_error(exc)
@@ -449,6 +475,8 @@ def _client_failure_message(exc: BaseException) -> str:
         return STORAGE_CONFLICT_MESSAGE
     if cls.kind == "upstream_unavailable":
         return LLM_PROVIDER_UNAVAILABLE_MESSAGE
+    if cls.kind == "outcome_unknown":
+        return OUTCOME_UNKNOWN_MESSAGE
     return str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE
 
 
@@ -677,14 +705,16 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         principal: Principal,
         route_class: Literal["compose", "action", "resolve"],
         ctx: ServerRequestContext[Any],
+        tenant: str | None = None,
     ) -> mcp_types.CallToolResult | None:
         """Checks `deps.rate_limiter` (host_core's `PolicyRateLimiter`, typically
         `PolicyRuntime.rate_limiter`) before a tool handler proceeds with its actual work. Returns `None`
         (proceed) when `deps.rate_limiter` is unset or the limiter allows; a structured `RATE_LIMITED`
         tool error otherwise (see `_rate_limit_tool_error`), after notifying `deps.on_rate_limited`
         (fire-and-forget). Port of the REST profile's
-        `check_rate_limit` -- called inline, as the first statement after resolving `principal`, at the
-        top of each of the 6 tool handlers below, since this profile has no per-path middleware layer to
+        `check_rate_limit` -- called inline, as the first statement after resolving `principal` (for
+        `action` / `resolve`: after the capability verified, with `tenant` the capability's signed tenant, so
+        a tenant rule applies, SPEC CAP-TEN-002), in each of the 6 tool handlers below, since this profile has no per-path middleware layer to
         mount a single check on. Reuses the principal each handler already resolved via
         `_current_principal(ctx)` rather than invoking `resolve_principal` a second time. `ctx` is
         needed to resolve `_mcp_rate_limit_key` (`deps.rate_limit_key`, or the per-connection fallback
@@ -695,7 +725,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             return None
         key = await _mcp_rate_limit_key(deps, principal, ctx)
         result = await deps.rate_limiter.take(
-            PolicyRateLimiterTakeParams(principal=key, routeClass=route_class)
+            PolicyRateLimiterTakeParams(tenant=tenant, principal=key, routeClass=route_class)
         )
         if result.allow:
             return None
@@ -704,6 +734,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             RateLimitedInfo(
                 routeClass=route_class,
                 requestId=_correlation_id_of(ctx) or f"mcp:{uuid.uuid4().hex}",
+                tenant=tenant,
                 principal=key,
             ),
         )
@@ -949,7 +980,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 locale,
                 principal,
                 correlation_id,
-                await _mcp_rate_limit_key(deps, principal, ctx),
+                await _mcp_task_owner_key(deps, principal, ctx),
                 _trace_context_of(ctx),
             )
         return await _compose_and_package(source, locale, principal, correlation_id)
@@ -1109,9 +1140,6 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
-            rate_limited = await _check_mcp_rate_limit(principal, "resolve", ctx)
-            if rate_limited is not None:
-                return rate_limited
             # Server-side paging/sorting: verify the capability against base (reserved params removed) and merge
             # the reserved params into domain.invoke. Unknown `_` keys are rejected. parse_invokable_ref
             # (host_core, shared with REST's /binding/resolve and this module's initial-data preresolution)
@@ -1124,6 +1152,13 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             verdict = await deps.authz.verify(capability, VerifyRequest(kind="read", ref=base.raw))
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
+            # Taken after the capability verified so a tenant rule keys on the capability's signed tenant
+            # (SPEC CAP-TEN-002; the principal component stays the MCP rate-limit key).
+            rate_limited = await _check_mcp_rate_limit(
+                principal, "resolve", ctx, verdict.tenant or None
+            )
+            if rate_limited is not None:
+                return rate_limited
             # The read path never runs a governed Action (SPEC ACT-RD-001, design.md #77): a ref naming an
             # operation whose tier is "confirm" / "approve" is refused before domain.invoke (only `_action`
             # holds such an operation for a confirmation or an approval), and an unreadable operation index
@@ -1318,9 +1353,6 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
-            rate_limited = await _check_mcp_rate_limit(principal, "action", ctx)
-            if rate_limited is not None:
-                return rate_limited
             action = _arg_str(args, "action")
             capability = _arg_str(args, "capability")
             payload = cast(JsonObject, args.get("payload", {}))
@@ -1347,6 +1379,11 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             resolved_principal = verdict.principal or principal
             # The tenant the capability itself binds (CAP-TEN-002); this profile resolves none of its own.
             tenant = verdict.tenant or None
+            # Taken after the capability verified so a tenant rule keys on the capability's signed tenant
+            # (SPEC CAP-TEN-002; the principal component stays the MCP rate-limit key).
+            rate_limited = await _check_mcp_rate_limit(principal, "action", ctx, tenant)
+            if rate_limited is not None:
+                return rate_limited
             # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
             # domain.invoke ever runs, symmetric with the REST surface's /binding/action. An action absent
             # from the DomainPort's own operation index -- whether because the index and DomainPort
@@ -1578,11 +1615,10 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
     # product decision (whether to hand a declaring client a task handle at all); leave the server silent about
     # the extension entirely unless asked.
     async def _task_owner_key(ctx: ServerRequestContext[Any]) -> str:
-        """The owner a `tasks/get` / `tasks/cancel` caller is matched against: the key the rate limiter would
-        use for this call (see `_mcp_rate_limit_key`) -- `deps.rate_limit_key`, else the resolved principal's id,
-        else the connection id. A throw from `resolve_principal` / `rate_limit_key` propagates and fails the
-        request closed, like a tool call."""
-        return await _mcp_rate_limit_key(deps, await _current_principal(ctx), ctx)
+        """The owner a `tasks/get` / `tasks/cancel` caller is matched against (see `_mcp_task_owner_key`). A
+        throw from `resolve_principal` / `rate_limit_key` propagates and fails the request closed, like a tool
+        call."""
+        return await _mcp_task_owner_key(deps, await _current_principal(ctx), ctx)
 
     if options.tasks_enabled is True:
         _register_task_methods(server, _tasks, _task_owner_key)

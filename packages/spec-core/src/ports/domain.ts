@@ -75,6 +75,13 @@ export interface DomainPort {
    * Runs `op`. Contract (SPEC ACT-RD-001): `invoke` MUST dispatch on the exact operation name it is given, with
    * no case folding, trailing-slash stripping, percent-decoding or other normalization, so the name a host
    * looked up in `listOperations()` is the operation that runs.
+   *
+   * Failure contract (SPEC ACT-OUT-001): when a write fails in a way that does not tell whether it ran (a timeout,
+   * a connection lost after the request may have left), throw an Error whose string `code` is `OUTCOME_UNKNOWN`
+   * or ends in `_OUTCOME_UNKNOWN` (e.g. `MCP_OUTCOME_UNKNOWN`). host-core's `classifyHostError` keys on that
+   * suffix: REST `POST /binding/action` then answers 503 `INTERNAL` and MCP a tool error, both with the fixed
+   * message `the action's outcome is unknown; verify before retrying` (the error's own text, which may name an
+   * upstream tool, goes to `onError` only). Any other thrown error is an ordinary failed write (404).
    */
   invoke(op: string, args: JsonObject, ctx: InvocationContext): Promise<unknown>;
 }

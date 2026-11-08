@@ -54,7 +54,7 @@ const host = createKohakuHost({
   ref, without the `paramsSchema` check, if such a ref is ever issued (`createMcpIntents` never emits one).
 - **Queries.** `invoke` coerces the ref's string parameters by the tool's `inputSchema` type (`number`, `integer`,
   `boolean`; a nullable `anyOf` is read through), never forwards `_cursor` / `_sort` / `_dir`, maps `_limit` onto the
-  tool's own numeric `limit`, calls the tool, and converts the result to `TabularData`: `structuredContent`, else the
+  tool's own numeric `limit` (a positive integer, else `McpArgumentError`: it can only lower the signed limit), calls the tool, and converts the result to `TabularData`: `structuredContent`, else the
   first JSON text block, as an array, `{ rows: [...] }`, or an object with a single array property. Columns are
   inferred from the **first 50 rows** only (`number` / `boolean` / `date` / `string`).
 - **Actions.** The payload goes to the tool unchanged. Its `paramsSchema` is the tool's `inputSchema` *projected*
@@ -89,7 +89,7 @@ const host = createKohakuHost({
 
 | Option | Default | Meaning |
 |---|---|---|
-| `callTimeoutMs` | 30000 | Deadline of one upstream call. The request is aborted (an `AbortSignal` goes to `callTool`, and the SDK's own `timeout` is set 5 s later) and **never retried**. A write that times out says "the upstream tool did not answer in time; its effect is unknown". |
+| `callTimeoutMs` | 30000 | Deadline of one upstream call. The request is aborted (an `AbortSignal` goes to `callTool`, and the SDK's own `timeout` is set 5 s later) and **never retried**. A write that times out says "the upstream tool did not answer in time; its effect is unknown" and carries the code `MCP_OUTCOME_UNKNOWN`: REST answers 503 `INTERNAL` with the fixed message "the action's outcome is unknown; verify before retrying", MCP the same text as a tool error. |
 | `maxLimit` | 1000 | Ceiling for the tool's numeric `limit`. `_limit` can only lower the signed `limit`: the smaller of the two wins. |
 | `maxRows` | 10000 | More rows in one query result is an error (a fixed message). |
 | `maxResultBytes` | 10 MiB | Serialized (compact JSON, UTF-8) size of one query result. |
@@ -104,8 +104,10 @@ const host = createKohakuHost({
   caller shares that one upstream credential and there is no per-caller authorization upstream.
 - Errors: `McpArgumentError` (code `MCP_ARGUMENT_INVALID`, a string that does not convert), `McpResultError` (not a list
   of rows, or over a limit), `McpToolError` (the tool reported `isError`; text truncated to 500 characters, no code),
-  `McpTimeoutError`. Raised inside `DomainPort.invoke` for a read, the REST host reports all of them like any failed
-  read: 404 `REF_NOT_FOUND` with the detail kept out of the body.
+  `McpTimeoutError` (a write's carries the code `MCP_OUTCOME_UNKNOWN`), `McpOutcomeUnknownError` (a write that failed after the request may have left: closed connection, failed send, transport error, the SDK's own timeout; same code, the original as `cause`; a JSON-RPC error the server answered is re-thrown unchanged). Raised inside `DomainPort.invoke` for a read,
+  the REST host reports all of them like any failed read: 404 `REF_NOT_FOUND` with the detail kept out of the body. A
+  write whose upstream call timed out is the exception: 503 `INTERNAL` with the fixed outcome-unknown message, so the
+  caller verifies before retrying.
 - No test in this package calls a real MCP server or LLM: the e2e test runs an in-process MCP server through
   `createKohakuHost` with a scripted `FakeLlm`.
 

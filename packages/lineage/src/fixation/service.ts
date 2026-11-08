@@ -13,7 +13,7 @@ import { FIXATION_PROPOSAL_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind } from "../events.js";
 import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
-import { generateRevision } from "../revision.js";
+import { generateRevision, revisionToken } from "../revision.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 
 /**
@@ -364,25 +364,26 @@ export function createFixations(opts: {
   }
 
   /**
-   * The `deleteFixation` options for a record read with `revision`: conditional on it when the port declares
-   * compare-and-set and the record carries one. Otherwise `undefined`, so the call keeps its pre-CAS shape (a
-   * legacy record with no revision is deleted unconditionally, as before).
+   * The `deleteFixation` options for a record read with `revision` (`undefined` = the record carries none):
+   * on a port that declares compare-and-set the delete is always conditional on what was read -- a record with
+   * no revision (it predates the field) is guarded with `""`, "present and unversioned", so it cannot be swept
+   * away after another instance replaced it. Otherwise `undefined`, so the call keeps its pre-CAS shape.
    */
   function deleteGuard(revision: string | undefined): { expectedRevision: string } | undefined {
-    return opts.storage.supportsCompareAndSet === true && revision != null
-      ? { expectedRevision: revision }
+    return opts.storage.supportsCompareAndSet === true
+      ? { expectedRevision: revisionToken(revision) }
       : undefined;
   }
 
   /**
    * The `putFixation` options of a read-modify-write over a record read with `revision` (refreshFingerprint,
-   * replace): always `ifPresent`, plus -- on a compare-and-set port, for a record that carries a revision --
-   * `expectedRevision`, so a stale in-memory copy can neither resurrect a deleted fixation nor overwrite a
+   * replace): always `ifPresent`, plus -- on a compare-and-set port -- `expectedRevision` (`""` for a record
+   * that carries none), so a stale in-memory copy can neither resurrect a deleted fixation nor overwrite a
    * newer one (e.g. put an old pinnedSpec back over a concurrent replace).
    */
   function rewriteOptions(revision: string | undefined): { ifPresent: true; expectedRevision?: string } {
-    return opts.storage.supportsCompareAndSet === true && revision != null
-      ? { ifPresent: true, expectedRevision: revision }
+    return opts.storage.supportsCompareAndSet === true
+      ? { ifPresent: true, expectedRevision: revisionToken(revision) }
       : { ifPresent: true };
   }
 

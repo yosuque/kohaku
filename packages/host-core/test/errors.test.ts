@@ -10,9 +10,11 @@ import {
   failOpen,
   formatErrorChain,
   isLlmUnavailableError,
+  isOutcomeUnknownError,
   isTypedHostError,
   LLM_PROVIDER_UNAVAILABLE_MESSAGE,
   notifyHook,
+  OUTCOME_UNKNOWN_MESSAGE,
   STORAGE_CONFLICT_MESSAGE,
 } from "../src/errors.js";
 
@@ -121,6 +123,28 @@ describe("classifyHostError", () => {
     expect(classifyHostError(e)).toEqual({ kind: "conflict", message: STORAGE_CONFLICT_MESSAGE });
     expect(STORAGE_CONFLICT_MESSAGE).toBe("the resource was modified concurrently; reload and retry");
     expect(clientMessageFor(e, "fb")).toBe(STORAGE_CONFLICT_MESSAGE);
+  });
+
+  it("maps an error whose code ends in OUTCOME_UNKNOWN to outcomeUnknown with the fixed message, not its own text", () => {
+    const e = Object.assign(new Error('MCP tool "refund": the upstream tool did not answer in time'), {
+      code: "MCP_OUTCOME_UNKNOWN",
+    });
+    expect(classifyHostError(e)).toEqual({ kind: "outcomeUnknown", message: OUTCOME_UNKNOWN_MESSAGE });
+    expect(OUTCOME_UNKNOWN_MESSAGE).toBe("the action's outcome is unknown; verify before retrying");
+    expect(clientMessageFor(e, "fb")).toBe(OUTCOME_UNKNOWN_MESSAGE);
+    expect(classifyHostError(Object.assign(new Error("x"), { code: "OUTCOME_UNKNOWN" })).kind).toBe(
+      "outcomeUnknown",
+    );
+  });
+
+  it("recognises only a coded Error as outcome-unknown", () => {
+    expect(isOutcomeUnknownError(Object.assign(new Error("x"), { code: "SQL_OUTCOME_UNKNOWN" }))).toBe(true);
+    expect(isOutcomeUnknownError(Object.assign(new Error("x"), { code: "MCP_ARGUMENT_INVALID" }))).toBe(
+      false,
+    );
+    expect(isOutcomeUnknownError(Object.assign(new Error("x"), { code: "OUTCOME_UNKNOWN_X" }))).toBe(false);
+    expect(isOutcomeUnknownError(new Error("OUTCOME_UNKNOWN"))).toBe(false);
+    expect(isOutcomeUnknownError({ code: "MCP_OUTCOME_UNKNOWN" })).toBe(false);
   });
 
   it("maps a plain Error and a non-Error value to untyped", () => {

@@ -66,6 +66,42 @@ export const SIDEBAR_EN: SidebarGroup[] = [
         text: "0003. No sampling parameters (Python claude)",
         link: "/docs/adr/0003-python-claude-adapter-sends-no-sampling-parameters",
       },
+      {
+        text: "0004. Capability tenant is authoritative",
+        link: "/docs/adr/0004-capability-tenant-is-authoritative-on-the-data-plane",
+      },
+      {
+        text: "0005. Optional storage compare-and-set",
+        link: "/docs/adr/0005-storage-compare-and-set-is-an-optional-extension",
+      },
+      {
+        text: "0006. Reads never run gated operations",
+        link: "/docs/adr/0006-data-plane-read-path-never-runs-gated-operations",
+      },
+      {
+        text: "0007. Composer-injected L1 filters",
+        link: "/docs/adr/0007-composer-injects-l1-filters-from-intent-facets",
+      },
+      {
+        text: "0008. MCP write tools default to approve",
+        link: "/docs/adr/0008-mcp-write-tools-default-to-approve-tier",
+      },
+      {
+        text: "0009. LLM base URL is the vendor root",
+        link: "/docs/adr/0009-llm-base-url-is-the-vendor-api-root",
+      },
+      {
+        text: "0010. No sampling parameters (TS claude)",
+        link: "/docs/adr/0010-ts-claude-path-sends-no-sampling-parameters",
+      },
+      {
+        text: "0011. Python keeps full parity",
+        link: "/docs/adr/0011-python-keeps-full-parity-with-typescript",
+      },
+      {
+        text: "0012. Generated init version table",
+        link: "/docs/adr/0012-init-version-table-is-generated-from-the-pnpm-catalog",
+      },
     ],
   },
 ];
@@ -110,6 +146,42 @@ export const SIDEBAR_JA: SidebarGroup[] = [
       {
         text: "0003. sampling parameter を送らない(Python claude)",
         link: "/ja/docs/adr/0003-python-claude-adapter-sends-no-sampling-parameters",
+      },
+      {
+        text: "0004. capability のテナントを正とする",
+        link: "/ja/docs/adr/0004-capability-tenant-is-authoritative-on-the-data-plane",
+      },
+      {
+        text: "0005. storage の compare-and-set は任意",
+        link: "/ja/docs/adr/0005-storage-compare-and-set-is-an-optional-extension",
+      },
+      {
+        text: "0006. 読み取りは gated な操作を実行しない",
+        link: "/ja/docs/adr/0006-data-plane-read-path-never-runs-gated-operations",
+      },
+      {
+        text: "0007. L1 のフィルタは composer が注入",
+        link: "/ja/docs/adr/0007-composer-injects-l1-filters-from-intent-facets",
+      },
+      {
+        text: "0008. MCP の書き込みは既定で approve",
+        link: "/ja/docs/adr/0008-mcp-write-tools-default-to-approve-tier",
+      },
+      {
+        text: "0009. LLM の base URL はベンダーの根",
+        link: "/ja/docs/adr/0009-llm-base-url-is-the-vendor-api-root",
+      },
+      {
+        text: "0010. sampling parameter を送らない(TS claude)",
+        link: "/ja/docs/adr/0010-ts-claude-path-sends-no-sampling-parameters",
+      },
+      {
+        text: "0011. Python は完全な対応を保つ",
+        link: "/ja/docs/adr/0011-python-keeps-full-parity-with-typescript",
+      },
+      {
+        text: "0012. init の版表は catalog から生成",
+        link: "/ja/docs/adr/0012-init-version-table-is-generated-from-the-pnpm-catalog",
       },
     ],
   },

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import pytest
@@ -516,6 +516,67 @@ async def _cas_promotion_unconditional(port: Any) -> None:
 
 
 @_case(
+    'compare-and-set: put_promotion_state: "" means the record exists but carries no revision '
+    "(matches only an unversioned record)"
+)
+async def _cas_promotion_empty_string(port: Any) -> None:
+    # Matches a record that predates `revision`, and the write proceeds.
+    await port.put_promotion_state(promotion("x", "a"))
+    await port.put_promotion_state(
+        promotion("x", "a", "r1", status="approved"), expected_revision=""
+    )
+    assert (await _promo(port, "x", "a")).revision == "r1"
+    # Once the record is versioned, "" conflicts and writes nothing.
+    await _expect_conflict(
+        port.put_promotion_state(promotion("x", "a", "r2", status="rejected"), expected_revision="")
+    )
+    stored = await _promo(port, "x", "a")
+    assert stored.revision == "r1"
+    assert stored.status == "approved"
+    # An absent record conflicts too (it is neither "absent" (None) nor "unversioned").
+    await _expect_conflict(
+        port.put_promotion_state(promotion("x", "b", "r1"), expected_revision="")
+    )
+    assert await port.get_promotion_state("x", "b") is None
+
+
+@_case(
+    "compare-and-set: put_promotion_state / put_fixation / delete_fixation: a stored revision that is not "
+    'a string reads as unversioned ("")'
+)
+async def _cas_non_string_revision(port: Any) -> None:
+    odd: list[Any] = [7, True, {"v": 1}]
+    for i, revision in enumerate(odd):
+        id_ = f"odd{i}"
+        await port.put_promotion_state(replace(promotion(id_, "x"), revision=revision))
+        await port.put_promotion_state(promotion(id_, "x", "r1"), expected_revision="")
+        assert (await _promo(port, id_, "x")).revision == "r1"
+        await port.put_fixation(replace(fixation(id_, "a"), revision=revision))
+        await port.put_fixation(fixation(id_, "a", "r1"), expected_revision="")
+        assert (await _fix(port, id_, "a")).revision == "r1"
+        await port.put_fixation(replace(fixation(id_, "b"), revision=revision))
+        await port.delete_fixation(id_, "b", expected_revision="")
+        assert await port.get_fixation(id_, "b") is None
+
+
+@_case(
+    'compare-and-set: put_promotion_state: of two concurrent writes from the same unversioned base ("") '
+    "exactly one wins"
+)
+async def _cas_promotion_empty_string_race(port: Any) -> None:
+    await port.put_promotion_state(promotion("x", "a"))
+    outcome = await _race(
+        port.put_promotion_state(
+            promotion("x", "a", "rA", status="approved"), expected_revision=""
+        ),
+        port.put_promotion_state(
+            promotion("x", "a", "rB", status="rejected"), expected_revision=""
+        ),
+    )
+    assert outcome == (1, 1)
+
+
+@_case(
     "compare-and-set: put_promotion_state: of two concurrent writes from the same base, exactly one wins"
 )
 async def _cas_promotion_race(port: Any) -> None:
@@ -600,6 +661,31 @@ async def _cas_fixation_race(port: Any) -> None:
         port.put_fixation(fixation("h", "a", "rB"), expected_revision="r1"),
     )
     assert outcome == (1, 1)
+
+
+@_case(
+    'compare-and-set: put_fixation / delete_fixation: "" matches only a fixation that carries no revision '
+    "(conflicts with a versioned or absent one)"
+)
+async def _cas_fixation_empty_string(port: Any) -> None:
+    await port.put_fixation(fixation("h", "a"))  # predates `revision`
+    await port.put_fixation(fixation("h", "a", "r1"), expected_revision="")
+    assert (await _fix(port, "h", "a")).revision == "r1"
+    await _expect_conflict(port.put_fixation(fixation("h", "a", "r2"), expected_revision=""))
+    await _expect_conflict(port.delete_fixation("h", "a", expected_revision=""))
+    assert (await _fix(port, "h", "a")).revision == "r1"
+    # if_present + "": applied to a present unversioned record, a silent no-op on an absent one.
+    await port.put_fixation(fixation("h", "b"))  # unversioned
+    await port.put_fixation(fixation("h", "b", "r1"), if_present=True, expected_revision="")
+    assert (await _fix(port, "h", "b")).revision == "r1"
+    await port.put_fixation(fixation("h", "c", "r1"), if_present=True, expected_revision="")
+    assert await port.get_fixation("h", "c") is None
+    # An absent record conflicts without if_present, and deleting an unversioned one with "" works.
+    await _expect_conflict(port.put_fixation(fixation("h", "c", "r1"), expected_revision=""))
+    await _expect_conflict(port.delete_fixation("h", "c", expected_revision=""))
+    await port.put_fixation(fixation("h", "d"))
+    await port.delete_fixation("h", "d", expected_revision="")
+    assert await port.get_fixation("h", "d") is None
 
 
 @_case(

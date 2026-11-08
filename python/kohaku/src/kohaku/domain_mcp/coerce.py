@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
 from kohaku.spec import JsonObject, JsonValue
 
@@ -58,6 +58,32 @@ def _property_type(input_schema: Mapping[str, Any], name: str) -> str | None:
     return type_ if isinstance(type_, str) else None
 
 
+def _positive_safe_integer(value: object) -> int | None:
+    """`value` as an int when it is a positive safe integer (JS `Number.isSafeInteger(v) && v >= 1`), else None.
+    An int is range-checked as an int: converting a huge one to float raises OverflowError."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, int):
+        return value if 1 <= value < _SAFE_INTEGER else None
+    if not math.isfinite(value) or not value.is_integer():
+        return None
+    return int(value) if 1 <= value < _SAFE_INTEGER else None
+
+
+def _positive_integer_limit(value: JsonValue) -> int:
+    """`_limit` is outside the capability's signed ref, so the one thing it may do is *lower* the signed limit. A
+    negative, zero or fractional value would not (an upstream doing `rows[:limit]` reads -1 as "all but the last
+    row"), so anything but a positive safe integer is refused rather than forwarded. Same grammar as
+    `_coerce_value`'s numbers, so "5.0" and "1e1" stay accepted. Port of TS `positiveIntegerLimit`."""
+    parsed: object = value
+    if isinstance(value, str):
+        parsed = float(value) if _NUMBER_PATTERN.fullmatch(value) else math.nan
+    result = _positive_safe_integer(parsed)
+    if result is None:
+        raise McpArgumentError('argument "_limit": expected a positive integer')
+    return result
+
+
 def _coerce_value(name: str, value: JsonValue, type_: str | None) -> JsonValue:
     if not isinstance(value, str):
         return value
@@ -89,9 +115,10 @@ def coerce_tool_arguments(
     `boolean`; everything else stays a string), and a value that does not convert raises `McpArgumentError`. The
     reserved parameters (`_cursor`, `_limit`, `_sort`, `_dir`) are never forwarded, except that `_limit` is
     mapped onto the tool's own numeric `limit` argument when its `inputSchema` declares one. `_limit` is not
-    covered by the capability's signed ref, so it can only *lower* the signed `limit`: when both are present the
-    smaller wins, and `max_limit` (default 1000) then caps whatever is left. A value that is not a string is kept
-    as is.
+    covered by the capability's signed ref, so it can only *lower* the signed `limit` (without a signed one it sets
+    the value, up to `max_limit`). Both must be positive safe integers when the tool declares a numeric `limit`
+    (anything else raises `McpArgumentError`, never widens); when both are present the smaller wins, and
+    `max_limit` (default 1000) then caps whatever is left. A value that is not a string is kept as is.
     """
     out: JsonObject = {}
     for name, value in args.items():
@@ -103,11 +130,14 @@ def coerce_tool_arguments(
         candidates: list[int | float] = []
         current = out.get("limit")
         if _is_number(current):
-            candidates.append(cast("int | float", current))
+            # A signed limit of 0 or -1 would slip under `max_limit` (the smaller wins) and, for an upstream
+            # doing `rows[:limit]`, widen the read just like a negative `_limit`: same rule.
+            signed = _positive_safe_integer(current)
+            if signed is None:
+                raise McpArgumentError('argument "limit": expected a positive integer')
+            candidates.append(signed)
         if "_limit" in args:
-            lowered = _coerce_value("limit", args["_limit"], limit_type)
-            if _is_number(lowered):
-                candidates.append(cast("int | float", lowered))
+            candidates.append(_positive_integer_limit(args["_limit"]))
         if candidates:
             out["limit"] = min(*candidates, max_limit)
     return out

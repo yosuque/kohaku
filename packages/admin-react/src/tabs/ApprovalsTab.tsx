@@ -91,18 +91,22 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
   const expired = issued != null && issuedAgeSeconds >= DEFAULT_APPROVAL_TTL_SECONDS;
   // A token minted earlier (possibly by another approver, or before this page was loaded) is known only from the
   // lineage; it is shown while its recorded expiry is still ahead of the live clock, and not once it has passed.
+  // The recorded `expiresAt` is advisory (the host computes it from the requested TTL, and the ApprovalPort may
+  // clamp the real lifetime shorter), so this is information only and never a reason to disable Approve: an
+  // approver can always mint a fresh token.
   const recordedRemainingSeconds =
     row.issued != null ? Math.ceil((Date.parse(row.issued.expiresAt) - now) / 1000) : 0;
   const recordedIssued =
     issued == null && row.issued != null && recordedRemainingSeconds > 0 ? row.issued : null;
   // Why Approve is unavailable, if it is: no requester to bind the token to, a recorded payload that is not the
-  // one the hash covers, or a token that was already issued and is still valid (a new one would only confuse).
+  // one the hash covers, or a token issued in THIS page session that is still within the TTL this console asked
+  // for (the token is on screen; a new one would only confuse). A recorded issuance does not count.
   const disabledReason =
     row.requesterId == null
       ? t.approvals.requesterUnknown
       : row.payloadHashState === "mismatch"
         ? t.approvals.approveDisabledMismatch
-        : (issued != null && !expired) || recordedIssued != null
+        : issued != null && !expired
           ? t.approvals.approveDisabledIssued
           : null;
   // After the TTL only Re-issue (next to the token) is offered.

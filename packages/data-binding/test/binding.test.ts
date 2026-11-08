@@ -184,6 +184,29 @@ describe("invokeAction: error mapping", () => {
   });
 });
 
+describe("invokeAction: a 503 is never retried automatically", () => {
+  // SPEC ACT-OUT-001: a 503 INTERNAL from POST /binding/action may mean the write's outcome is unknown ("the
+  // action's outcome is unknown; verify before retrying"). A client MUST NOT re-send it on its own: a stateless
+  // approval token would run the write twice.
+  it("calls the actionFetcher exactly once and surfaces RESOLVE_FAILED with the status", async () => {
+    const actionFetcher = vi.fn(async () => ({
+      status: 503,
+      body: {
+        error: { code: "INTERNAL", message: "the action's outcome is unknown; verify before retrying" },
+      },
+    }));
+    const client = createBindingClient({
+      fetcher: async () => ({ status: 200, body: DATA }),
+      actionFetcher,
+    });
+    await expect(client.invokeAction("annotate", { note: "x" })).rejects.toMatchObject({
+      code: "RESOLVE_FAILED",
+      status: 503,
+    });
+    expect(actionFetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("invokeAction: governed-action error mapping (design.md #62/#63)", () => {
   it("422 ACTION_PARAMS_INVALID → BindingError with issues", async () => {
     const client = createBindingClient({

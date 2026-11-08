@@ -2954,6 +2954,519 @@
           }
         },
         "expected": null
+      },
+      {
+        "args": {
+          "limit": "1",
+          "_limit": "-1"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "1",
+          "_limit": "0"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "1",
+          "_limit": "0.5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "1",
+          "_limit": "abc"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "1",
+          "_limit": "-1e9"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": "5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 5
+        }
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": "5.0"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 5
+        }
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": "1e1"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 9
+        }
+      },
+      {
+        "args": {
+          "_limit": "1"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 1
+        }
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": 3
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 3
+        }
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": -1
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": 0.5
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": true
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": "9007199254740993"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "-1"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "0"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "-1",
+          "_limit": "5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": -1
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "0"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "0.5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "0",
+          "_limit": "-1"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "string"
+            }
+          }
+        },
+        "expected": {
+          "limit": "0"
+        }
+      },
+      {
+        "args": {
+          "limit": "1",
+          "_limit": "0.5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "1",
+          "_limit": "-1"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number"
+            }
+          }
+        },
+        "expected": null
       }
     ],
     "tabular": [

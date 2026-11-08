@@ -47,7 +47,7 @@ from kohaku.host_mcp.tasks import (
     create_task_store,
 )
 from kohaku.llm import GenerateObjectRequest, LlmError
-from kohaku.spec import IntentInput
+from kohaku.spec import IntentInput, Principal
 
 from ._helpers import (
     RENDERER_HTML_PLAIN,
@@ -670,6 +670,108 @@ class TestTaskOwnership:
                 )
                 assert _store_of(server).get(created["taskId"], "owner-c") is not None
                 assert _store_of(server).get(created["taskId"], "owner-a") is None
+                await _tick()
+
+        asyncio.run(run())
+
+
+class TestTaskOwnerIsThePrincipalNotTheRateLimitKey:
+    """Two authenticated principals behind one NAT share an IP-based `rate_limit_key`; the task owner must differ
+    (counterpart of the TS "task ownership binds to the resolved principal" block)."""
+
+    @staticmethod
+    @asynccontextmanager
+    async def _attached_with_principals(
+        tmp_path: Path, current: dict[str, str]
+    ) -> AsyncIterator[tuple[Server, Client]]:
+        server = Server("kohaku-tasks-owner-test")
+        attach_kohaku_to_mcp_server(
+            server,
+            McpHostDeps(
+                compose=make_compose_ctx(tmp_path),
+                domain=_DOMAIN,
+                authz=_AUTHZ,
+                query_source="sales",
+                resolve_principal=lambda _ctx: Principal(id=current["id"]),
+                rate_limit_key=lambda _ctx: "shared-nat-ip",
+            ),
+            AttachOptions(renderer_html=RENDERER_HTML_PLAIN, tasks_enabled=True),
+        )
+        async with Client(
+            server, mode="2026-07-28", cache=None, extensions=[advertise(TASKS_EXTENSION_ID)]
+        ) as client:
+            yield server, client
+
+    def test_a_second_principal_sharing_the_rate_limit_key_cannot_get_or_cancel_the_task(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            current = {"id": "alice"}
+            async with self._attached_with_principals(tmp_path, current) as (_server, client):
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                task_id = created["taskId"]
+                await _tick()
+
+                current["id"] = "bob"
+                for send in (_raw_tasks_get, _raw_tasks_cancel):
+                    with pytest.raises(MCPError) as denied:
+                        await send(client, task_id)
+                    assert denied.value.code == mcp_types.INVALID_PARAMS
+
+                current["id"] = "alice"
+                own = await _raw_tasks_get(client, task_id)
+                assert own["taskId"] == task_id
+                await _raw_tasks_cancel(client, task_id)
+
+        asyncio.run(run())
+
+    def test_a_resolver_returning_the_default_guest_principal_falls_back_to_the_rate_limit_key(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            ip = {"v": "ip-1"}
+            server = Server("kohaku-tasks-guest-test")
+            attach_kohaku_to_mcp_server(
+                server,
+                McpHostDeps(
+                    compose=make_compose_ctx(tmp_path),
+                    domain=_DOMAIN,
+                    authz=_AUTHZ,
+                    query_source="sales",
+                    resolve_principal=lambda _ctx: Principal(id="mcp-user", roles=["user"]),
+                    rate_limit_key=lambda _ctx: ip["v"],
+                ),
+                AttachOptions(renderer_html=RENDERER_HTML_PLAIN, tasks_enabled=True),
+            )
+            async with Client(
+                server, mode="2026-07-28", cache=None, extensions=[advertise(TASKS_EXTENSION_ID)]
+            ) as client:
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                task_id = created["taskId"]
+                await _tick()
+                assert _store_of(server).get(task_id, "ip-1") is not None
+                assert _store_of(server).get(task_id, "mcp-user") is None
+                ip["v"] = "ip-2"
+                for send in (_raw_tasks_get, _raw_tasks_cancel):
+                    with pytest.raises(MCPError) as denied:
+                        await send(client, task_id)
+                    assert denied.value.code == mcp_types.INVALID_PARAMS
+
+        asyncio.run(run())
+
+    def test_the_task_is_attributed_to_the_resolved_principal_id(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            current = {"id": "carol"}
+            async with self._attached_with_principals(tmp_path, current) as (server, client):
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                assert _store_of(server).get(created["taskId"], "carol") is not None
+                assert _store_of(server).get(created["taskId"], "shared-nat-ip") is None
                 await _tick()
 
         asyncio.run(run())

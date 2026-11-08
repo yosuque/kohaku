@@ -322,6 +322,8 @@ describe("createMcpDomainPort: limits and deadlines", () => {
     const failure = await port.invoke("list_orders", {}, CTX).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(McpTimeoutError);
     expect((failure as Error).message).not.toMatch(/effect is unknown/);
+    // Nothing was changed, so a read's timeout carries no outcome-unknown code.
+    expect((failure as McpTimeoutError).code).toBeUndefined();
     expect(client.aborted).toEqual(["list_orders"]);
   });
 
@@ -333,6 +335,7 @@ describe("createMcpDomainPort: limits and deadlines", () => {
     expect((failure as Error).message).toContain(
       "the upstream tool did not answer in time; its effect is unknown",
     );
+    expect((failure as McpTimeoutError).code).toBe("MCP_OUTCOME_UNKNOWN");
     expect(client.calls).toHaveLength(1);
   });
 
