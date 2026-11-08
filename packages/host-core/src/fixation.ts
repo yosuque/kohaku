@@ -6,7 +6,13 @@ import {
   materializeFixation,
   type TraceContext,
 } from "@kohaku-ui/composer";
-import type { CanonicalIntent, FixationRecord, KeyedMutex, SessionContext } from "@kohaku-ui/spec-core";
+import {
+  type CanonicalIntent,
+  type FixationRecord,
+  isStorageConflictError,
+  type KeyedMutex,
+  type SessionContext,
+} from "@kohaku-ui/spec-core";
 
 /**
  * Self-healing hooks for fixation staleness detection. Both the REST profile's FixationsApi and the
@@ -179,6 +185,10 @@ export function settleFixation(
           tenant != null ? { tenant } : undefined,
         ),
       ).catch((e) => {
+        // Losing a storage compare-and-set race means another instance already healed this fixation: a
+        // no-op, not an error worth reporting (the reference Fixations already swallows it; this covers a
+        // custom FixationSelfHealApi that does not).
+        if (isStorageConflictError(e)) return;
         host.onSelfHealError("fixation.refreshFingerprint", e, requestId);
       });
     }
@@ -209,6 +219,7 @@ export function settleFixation(
         ...(tenant != null ? { tenant } : {}),
       }),
     ).catch((e) => {
+      if (isStorageConflictError(e)) return; // another instance already healed it; see above
       host.onSelfHealError("fixation.invalidate", e, requestId);
     });
   }

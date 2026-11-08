@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import type { FixedSpecSource } from "@kohaku-ui/composer";
 import { defineIntent } from "@kohaku-ui/intents";
@@ -11,7 +14,7 @@ import {
   SPEC_VERSION,
   type UISpec,
 } from "@kohaku-ui/spec-core";
-import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
+import { createFileStoragePort, createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import type { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -516,7 +519,11 @@ describe("createKohakuHost", () => {
     it("warns once when a custom storage does not declare supportsCompareAndSet", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
-        const { supportsCompareAndSet: _declared, ...undeclared } = createMemoryStoragePort();
+        const {
+          supportsCompareAndSet: _declared,
+          singleProcess: _marker,
+          ...undeclared
+        } = createMemoryStoragePort();
         createKohakuHost({ ...hostOptions(), storage: undeclared });
         expect(casWarnings(warn)).toHaveLength(1);
       } finally {
@@ -524,11 +531,19 @@ describe("createKohakuHost", () => {
       }
     });
 
-    it("stays silent for the default storage and for one that declares it", () => {
+    it("stays silent for the default storage, a declaring one, and the singleProcess file port", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         createKohakuHost(hostOptions());
         createKohakuHost({ ...hostOptions(), storage: createMemoryStoragePort() });
+        const { supportsCompareAndSet: _declared, ...onlySingleProcess } = createMemoryStoragePort();
+        createKohakuHost({ ...hostOptions(), storage: onlySingleProcess });
+        const dir = mkdtempSync(join(tmpdir(), "kohaku-host-file-"));
+        try {
+          createKohakuHost({ ...hostOptions(), storage: createFileStoragePort(dir) });
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
         expect(casWarnings(warn)).toHaveLength(0);
       } finally {
         warn.mockRestore();

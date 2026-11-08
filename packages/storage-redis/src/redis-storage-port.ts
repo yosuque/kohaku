@@ -392,12 +392,25 @@ function createCompareAndSet(
 ): CompareAndSet {
   const lock = createKeyedMutex();
   let dedicated: Promise<Redis> | undefined;
+  // Counts `ready` events of the dedicated connection. A reconnect (which silently drops a server-side WATCH)
+  // bumps it, so a transaction whose epoch changed between WATCH and EXEC is treated as a conflict.
+  let epoch = 0;
 
   function dedicatedClient(): Promise<Redis> {
     if (dedicated == null) {
       const attempt = (async () => {
         await ready();
-        const dup = redis.duplicate({ lazyConnect: true });
+        // enableOfflineQueue: false and autoResendUnfulfilledCommands: false keep ioredis from queueing or
+        // re-sending a WATCH / MULTI / EXEC across a reconnect: a re-sent EXEC would run without the watch the
+        // server dropped with the old connection and apply the write unconditionally.
+        const dup = redis.duplicate({
+          lazyConnect: true,
+          enableOfflineQueue: false,
+          autoResendUnfulfilledCommands: false,
+        });
+        dup.on("ready", () => {
+          epoch += 1;
+        });
         dup.on("error", (error: Error) => {
           if (options.onError != null) options.onError(error);
           else
@@ -427,19 +440,27 @@ function createCompareAndSet(
     write(kind, id, key, build, seqKey) {
       return lock("cas", async () => {
         const client = await dedicatedClient();
+        const startEpoch = epoch;
+        // EXEC (whatever it replies) clears the watch, so UNWATCH is only needed on the paths that leave
+        // before EXEC. The one connection is shared by every CAS write of this port, which is why the mutex
+        // above serializes them per process.
+        let executed = false;
         try {
           await client.watch(key);
           const current = await client.get(key);
           const seq = seqKey != null ? await client.incr(seqKey) : 0;
           const multi = client.multi();
           if (build(current, multi, seq) === "skip") return;
+          // The connection was re-established since the WATCH: the server dropped the watch with the old
+          // connection, so an EXEC now would apply unconditionally. Refuse it as a conflict instead.
+          if (epoch !== startEpoch) throw new StorageConflictError(kind, id);
+          executed = true;
           // A null reply = the watched key changed under us: nothing was applied.
           const replies = await multi.exec();
           if (replies == null) throw new StorageConflictError(kind, id);
         } finally {
-          // Drop the watch on every exit path (a conflict thrown before EXEC leaves it armed). Best effort:
-          // if the connection itself is broken the next transaction's WATCH will fail loudly instead.
-          await client.unwatch().catch(() => {});
+          // Best effort: if the connection itself is broken the next transaction's WATCH fails loudly instead.
+          if (!executed) await client.unwatch().catch(() => {});
         }
       });
     },

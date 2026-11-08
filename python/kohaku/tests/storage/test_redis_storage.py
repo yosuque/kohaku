@@ -926,3 +926,45 @@ class TestCompareAndSetConnectionLoss:
                 await client.aclose()
 
         _run(go())
+
+
+class TestCompareAndSetReconnect:
+    def test_a_connection_killed_between_watch_and_exec_cannot_silently_succeed(
+        self, redis_url: str
+    ) -> None:
+        """The reconnect-between-WATCH-and-EXEC hazard of the TS adapter (its reconnect epoch): a connection the
+        server drops after the WATCH has lost the watch, so a retry of the transaction on a fresh connection would
+        write against a read nothing guards. redis-py disconnects and raises WatchError for a watching pipeline
+        instead of retrying; this kills the real pinned connection after the GET and expects a conflict, no write."""
+        from redis.asyncio.client import Pipeline
+
+        async def go() -> None:
+            prefix = _prefix()
+            port = create_redis_storage_port(url=redis_url, key_prefix=prefix)
+            killer: Any = Redis.from_url(redis_url, decode_responses=True)
+            original_get = Pipeline.get
+
+            async def get_then_kill(self: Any, name: str) -> Any:
+                value = await original_get(self, name)
+                client_id = await self.client_id()
+                await killer.execute_command("CLIENT", "KILL", "ID", client_id)
+                return value
+
+            try:
+                await port.ready()
+                with (
+                    pytest.MonkeyPatch.context() as patch,
+                    pytest.raises(StorageConflictError),
+                ):
+                    patch.setattr(Pipeline, "get", get_then_kill)
+                    await port.put_promotion_state(
+                        _state("a1", revision="r1"), expected_revision=None
+                    )
+                assert await port.get_promotion_state("a1") is None
+                # The port is usable afterwards (the dead connection was discarded, not reused).
+                await port.put_promotion_state(_state("a1", revision="r1"), expected_revision=None)
+            finally:
+                await killer.aclose()
+                await port.close()
+
+        _run(go())

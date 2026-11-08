@@ -29,6 +29,7 @@ from kohaku.spec import (
     StoragePort,
     UISpec,
     compute_structure_hash,
+    is_storage_conflict_error,
     supports_compare_and_set,
     validate_fixation_record,
 )
@@ -386,7 +387,15 @@ class Fixations:
             if_fingerprint = guard.get("ifCatalogFingerprint")
             if if_fingerprint is not None and existing.catalogFingerprint != if_fingerprint:
                 return
-        await self._delete_fixation(intent_hash, tenant, existing.revision)
+        try:
+            await self._delete_fixation(intent_hash, tenant, existing.revision)
+        except Exception as e:
+            # Self-healing lost a compare-and-set race: another instance already re-approved, replaced or
+            # removed the fixation after this one read it, so there is nothing left for this heal to do. Not an
+            # error (nothing was deleted and nothing is audited); unfixate, a human decision, still surfaces it.
+            if is_storage_conflict_error(e):
+                return
+            raise
         # Since this is self-healing invalidation, the actor is system (distinguished from human-approved unfixate).
         payload: dict[str, Any] = {"intentHash": intent_hash, "reason": reason}
         if detail is not None:
@@ -410,9 +419,16 @@ class Fixations:
         # in-memory copy; if_present makes the write a no-op unless the fixation still exists on disk.
         # On a compare-and-set port the write is also conditional on the revision just read (kept unchanged: a
         # fingerprint re-stamp is not a governance decision), so it cannot overwrite a concurrent replace.
-        await self._rewrite_fixation(
-            dataclasses.replace(existing, catalogFingerprint=catalog_fingerprint), existing.revision
-        )
+        try:
+            await self._rewrite_fixation(
+                dataclasses.replace(existing, catalogFingerprint=catalog_fingerprint),
+                existing.revision,
+            )
+        except Exception as e:
+            # Self-healing lost a compare-and-set race (another instance already replaced or re-stamped the
+            # fixation): a no-op, not an error. `replace`, a human-approved migration, still surfaces it.
+            if not is_storage_conflict_error(e):
+                raise
 
     async def replace(
         self,

@@ -4,7 +4,7 @@ import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { KohakuPolicyFile, UISpec } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { SignJWT } from "jose";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createJwtRequestIdentity } from "../src/app/request-identity-jwt.js";
 import { createApp } from "../src/app.js";
 
@@ -59,6 +59,36 @@ describe("sample-api with KOHAKU_AUTHZ=jwt wiring", () => {
     const res = await app.request("/api/kohaku/catalog");
     expect(res.status).toBe(401);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_DENIED");
+  });
+
+  it("logs why a presented token was rejected (never the token) but keeps the 401 body opaque; a missing header is not logged", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { app } = await makeApp();
+      const bad = await jwt({ sub: "u", tenant: "t".repeat(257) });
+      const res = await app.request("/api/kohaku/catalog", { headers: { authorization: `Bearer ${bad}` } });
+      expect(res.status).toBe(401);
+      expect(((await res.json()) as { error: { message: string } }).error.message).toBe(
+        "authentication required (INVALID_TENANT)",
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("INVALID_TENANT");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(bad);
+
+      const expired = await new SignJWT({ sub: "u" })
+        .setProtectedHeader({ alg: "HS256" })
+        .setExpirationTime(Math.floor(Date.now() / 1000) - 60)
+        .sign(new TextEncoder().encode(SECRET));
+      await app.request("/api/kohaku/catalog", { headers: { authorization: `Bearer ${expired}` } });
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(String(warn.mock.calls[1]?.[1])).toMatch(/exp/);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(expired);
+
+      await app.request("/api/kohaku/catalog");
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("derives roles from the token: a viewer cannot approve, an admin can list promotions", async () => {

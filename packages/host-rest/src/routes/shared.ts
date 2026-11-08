@@ -265,12 +265,19 @@ export function traceContextOf(c: Context): TraceContext | undefined {
  * The 409 `CONFLICT` response for a `StorageConflictError` (SPEC §6.1): a governance write found its record
  * changed by a concurrent writer between the read and the write, and nothing was written. The message is the
  * fixed STORAGE_CONFLICT_MESSAGE (the error's own text names the record kind and key, so it never reaches the
- * client). The host does not retry on its own; the caller reloads and retries. Not reported to `onError`: it
- * is an expected, client-visible outcome of optimistic concurrency, not a host failure, and the envelope's
- * requestId already correlates it with the request log.
+ * client). The host does not retry on its own; the caller reloads and retries. The conflict is still reported
+ * to `onError` under the dedicated endpoint `storage.conflict` (the client message stays fixed), so REST
+ * conflicts can be counted the same way the MCP profile's are; an operator who does not want them filters that
+ * endpoint.
  */
-export function storageConflictResponse(c: Context, deps: KohakuHostDeps): Response {
-  return c.json(errorBody("CONFLICT", STORAGE_CONFLICT_MESSAGE, requestIdOf(c, deps)), 409);
+export async function storageConflictResponse(
+  c: Context,
+  deps: KohakuHostDeps,
+  error: unknown,
+): Promise<Response> {
+  const requestId = requestIdOf(c, deps);
+  await reportHostError(deps, "storage.conflict", requestId, error);
+  return c.json(errorBody("CONFLICT", STORAGE_CONFLICT_MESSAGE, requestId), 409);
 }
 
 /**

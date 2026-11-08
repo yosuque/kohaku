@@ -70,10 +70,12 @@ export function createFileStoragePort(dataDir: string): StoragePort {
   const fixations = new TenantSnapshot<FixationRecord>(fixationsPath, (fn) => fileLock(fixationsPath, fn));
 
   return {
-    // Every conditional write compares against the snapshot freshly re-read from disk inside the file lock
-    // (see mergeMutate), so the check-and-set is atomic within the process and also sees another process's
-    // write that has already landed on disk. It is still not a cross-process lock (module doc).
-    supportsCompareAndSet: true,
+    // Deliberately does NOT declare `supportsCompareAndSet`. The `expectedRevision` option is honored (the
+    // compare runs against the snapshot freshly re-read from disk inside the in-process file lock, see
+    // mergeMutate), but a lock that only orders calls within this process is not atomic across processes, and
+    // two processes sharing one data directory (sample-api + sample-mcp) is a documented setup. The lineage
+    // services therefore do not pass the option to this port, and it declares `singleProcess` instead.
+    singleProcess: true,
     async getSpecCache(key) {
       return specCache.get(key);
     },

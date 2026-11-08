@@ -103,4 +103,38 @@ describe.skipIf(backend.mode === "skip")("createRedisStoragePort: compare-and-se
       client.disconnect();
     }
   });
+
+  it("a reconnect of the dedicated connection between WATCH and EXEC is a conflict, never an unguarded write", async () => {
+    const client = new Redis(url);
+    try {
+      const realDuplicate = client.duplicate.bind(client);
+      let duplicateOptions: Record<string, unknown> | undefined;
+      client.duplicate = ((override?: Record<string, unknown>) => {
+        duplicateOptions = override;
+        const dup = realDuplicate(override);
+        const realGet = dup.get.bind(dup);
+        // Simulate ioredis re-establishing the connection (a new "ready") right after the GET: the server
+        // dropped the WATCH with the old connection.
+        (dup as unknown as { get: unknown }).get = async (key: string) => {
+          const value = await realGet(key);
+          dup.emit("ready");
+          return value;
+        };
+        return dup;
+      }) as typeof client.duplicate;
+      const port = createRedisStoragePort({ client, keyPrefix: uniquePrefix() });
+      await expect(port.putPromotionState(state("r1"), { expectedRevision: null })).rejects.toMatchObject({
+        code: "STORAGE_CONFLICT",
+      });
+      expect(await port.getPromotionState("a1")).toBeNull();
+      // Commands are neither queued while disconnected nor re-sent after a reconnect.
+      expect(duplicateOptions).toMatchObject({
+        enableOfflineQueue: false,
+        autoResendUnfulfilledCommands: false,
+      });
+      await port.close();
+    } finally {
+      client.disconnect();
+    }
+  });
 });

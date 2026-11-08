@@ -82,9 +82,9 @@ class _CasStorage(FileStoragePort):
 
     def __init__(self, data_dir: Path, *, declares_cas: bool = True) -> None:
         super().__init__(data_dir)
-        if not declares_cas:
-            # An adapter that has not adopted the extension: shadow the class-level declaration.
-            self.supports_compare_and_set = False
+        # The file port does not declare the extension itself (its lock is in-process only); this test double
+        # stands in for a real CAS adapter, or for one that has not adopted the extension.
+        self.supports_compare_and_set = declares_cas
         self.promotion_writes: list[tuple[PromotionState, ExpectedRevision]] = []
         self.fixation_writes: list[tuple[FixationRecord, bool, ExpectedRevision]] = []
         self.fixation_deletes: list[ExpectedDeleteRevision] = []
@@ -111,6 +111,13 @@ class _CasStorage(FileStoragePort):
     ) -> FixationRecord | None:
         result = await super().get_fixation(intent_hash, tenant)
         await self._fire("after_fixation_read")
+        return result
+
+    async def get_promotion_state(
+        self, artifact_id: str, tenant: str | None = None
+    ) -> PromotionState | None:
+        result = await super().get_promotion_state(artifact_id, tenant)
+        await self._fire("after_promotion_read")
         return result
 
     async def put_promotion_state(
@@ -228,20 +235,95 @@ class TestPromotionWritesCarryTheRevisionTheyRead:
 
         asyncio.run(run())
 
-    def test_the_batch_nomination_write_stamps_a_revision_and_stays_unconditional(
+    def test_bulk_nomination_on_a_cas_port_writes_each_candidate_conditionally_not_through_the_batch(
         self, tmp_path: Path
     ) -> None:
         async def run() -> None:
             storage = _CasStorage(tmp_path)
             await _seed_generated(storage, "a1")
+            await _seed_generated(storage, "a2")
+            batch_calls = 0
+            original = storage.put_promotion_states
+
+            async def counting(states: list[PromotionState]) -> None:
+                nonlocal batch_calls
+                batch_calls += 1
+                await original(states)
+
+            storage.put_promotion_states = counting  # type: ignore[method-assign]
             promotions = _promotions(storage)
 
             await promotions.evaluate_and_list()
 
+            assert batch_calls == 0
+            assert [w[1] for w in storage.promotion_writes] == [None, None]
+            assert all(isinstance(w[0].revision, str) for w in storage.promotion_writes)
+
+        asyncio.run(run())
+
+    def test_a_concurrent_approve_during_the_nomination_scan_is_not_rolled_back(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path)
+            await _seed_generated(storage, "a1")
+            await _seed_generated(storage, "a2")
+            promotions = _promotions(storage)
+
+            # The scan reads a1 as "no state yet"; right after that read another instance records a decision.
+            async def other() -> None:
+                await FileStoragePort.put_promotion_state(
+                    storage,
+                    PromotionState(
+                        artifactId="a1",
+                        status="approved",
+                        updatedAt="2026-01-01T00:00:00.000Z",
+                        data={},
+                        revision="other-writer",
+                    ),
+                )
+
+            storage.hooks["after_promotion_read"] = other
+
+            listed = await promotions.evaluate_and_list()
+
+            a1 = await storage.get_promotion_state("a1")
+            a2 = await storage.get_promotion_state("a2")
+            assert a1 is not None and (a1.status, a1.revision) == ("approved", "other-writer")
+            assert a2 is not None and a2.status == "candidate"
+            nominated = [
+                e.payload["artifactId"]
+                for e in await storage.list_lineage()
+                if e.type == "component.nominated"
+            ]
+            assert nominated == ["a2"]
+            # The returned list does not claim a transition that was not stored.
+            by_id = {c.artifactId: c.status for c in listed}
+            assert by_id == {"a1": "in_use", "a2": "candidate"}
+
+        asyncio.run(run())
+
+    def test_bulk_nomination_on_a_port_without_the_declaration_keeps_the_single_batch_write(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path, declares_cas=False)
+            await _seed_generated(storage, "a1")
+            batch_calls = 0
+            original = storage.put_promotion_states
+
+            async def counting(states: list[PromotionState]) -> None:
+                nonlocal batch_calls
+                batch_calls += 1
+                await original(states)
+
+            storage.put_promotion_states = counting  # type: ignore[method-assign]
+
+            await _promotions(storage).evaluate_and_list()
+
+            assert batch_calls == 1
             stored = await storage.get_promotion_state("a1")
             assert stored is not None and isinstance(stored.revision, str)
-            # No per-state conditional write happened (the batch method has no expected_revision).
-            assert storage.promotion_writes == []
 
         asyncio.run(run())
 
@@ -275,7 +357,7 @@ class TestActWithAConcurrentWriter:
 
         asyncio.run(run())
 
-    def test_a_write_between_the_recheck_and_the_state_write_cannot_overwrite_and_leaves_a_harmless_orphan(
+    def test_a_write_between_the_recheck_and_the_state_write_cannot_overwrite_and_the_orphan_has_no_effect_on_reconcile(
         self, tmp_path: Path
     ) -> None:
         async def run() -> None:
@@ -286,10 +368,19 @@ class TestActWithAConcurrentWriter:
             await promotions.act("a1", JudgeStart(), ACTOR)
             await promotions.act("a1", JudgeResult(verdict={"pass": True, "score": 1}), ACTOR)
 
-            # The audit append is the window between the recheck and the CAS write.
+            # The audit append is the window between the recheck and the CAS write. The other instance
+            # publishes the artifact there, so reconcile has a real projection to apply.
             async def other() -> None:
                 await storage.other_writer_sets_promotion(
-                    "a1", status="rejected", revision="other-writer"
+                    "a1",
+                    status="published",
+                    revision="other-writer",
+                    data={
+                        "draft": DRAFT.to_wire(),
+                        "html": "<html></html>",
+                        "sha256": "s",
+                        "componentType": DRAFT.componentType,
+                    },
                 )
 
             storage.hooks["before_reviewed_append"] = other
@@ -299,18 +390,24 @@ class TestActWithAConcurrentWriter:
 
             stored = await storage.get_promotion_state("a1")
             assert stored is not None
-            assert (stored.status, stored.revision) == ("rejected", "other-writer")
-            # The orphan audit event exists ...
+            assert (stored.status, stored.revision) == ("published", "other-writer")
             assert "component.reviewed" in _types(await storage.list_lineage())
-            # ... and reconcile ignores an event that has no matching state: nothing is projected.
-            projected: list[str] = []
 
-            async def on_publish(ctx: PublishContext) -> None:
-                projected.append(ctx.artifactId)
+            # Reconcile's result must be decided by the snapshot alone: run it with the orphan on the log,
+            # then with the orphan removed, and require the identical outcome.
+            async def run_reconcile() -> tuple[tuple[int, int, int], list[str]]:
+                projected: list[str] = []
 
-            summary = await _promotions(storage, on_publish=on_publish).reconcile()
-            assert (summary.published, summary.withdrawn, summary.skipped) == (0, 0, 0)
-            assert projected == []
+                async def on_publish(ctx: PublishContext) -> None:
+                    projected.append(ctx.artifactId)
+
+                summary = await _promotions(storage, on_publish=on_publish).reconcile()
+                return (summary.published, summary.withdrawn, summary.skipped), projected
+
+            with_orphan = await run_reconcile()
+            assert with_orphan == ((1, 0, 0), ["a1"])
+            storage._lineage[:] = [e for e in storage._lineage if e.type != "component.reviewed"]
+            assert await run_reconcile() == with_orphan
 
         asyncio.run(run())
 
@@ -358,8 +455,8 @@ class TestFixationWritesCarryTheRevisionTheyRead:
 
             storage.hooks["after_fixation_read"] = other
 
-            with pytest.raises(StorageConflictError):
-                await fixations.refresh_fingerprint(HASH, "fp2")
+            # Self-healing that loses the race is a no-op, not an error: another instance already moved it on.
+            await fixations.refresh_fingerprint(HASH, "fp2")
 
             stored = await storage.get_fixation(HASH)
             assert stored is not None
@@ -427,6 +524,25 @@ class TestFixationWritesCarryTheRevisionTheyRead:
             stored = await storage.get_fixation(HASH)
             assert stored is not None and stored.revision == "r2"
             assert storage.fixation_deletes == ["r1"]
+            assert "intent.unfixated" not in _types(await storage.list_lineage())
+
+        asyncio.run(run())
+
+    def test_invalidate_self_heal_that_loses_the_race_is_a_noop(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            storage = _CasStorage(tmp_path)
+            await FileStoragePort.put_fixation(storage, _fixation("old", "r1", "fp-old"))
+            fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
+
+            async def other() -> None:
+                await storage.other_writer_sets_fixation(_fixation("re-approved", "r2", "fp-old"))
+
+            storage.hooks["after_fixation_read"] = other
+
+            await fixations.invalidate(HASH, "stale", guard={"ifCatalogFingerprint": "fp-old"})
+
+            stored = await storage.get_fixation(HASH)
+            assert stored is not None and stored.revision == "r2"
             assert "intent.unfixated" not in _types(await storage.list_lineage())
 
         asyncio.run(run())

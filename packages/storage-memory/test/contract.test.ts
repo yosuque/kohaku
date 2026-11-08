@@ -20,11 +20,13 @@ describeStoragePortContract(
   ALL_EXTENSIONS,
 );
 
+// The file port honors expectedRevision (in-process atomic) but does not declare supportsCompareAndSet: its
+// lock does not span processes, and two processes sharing one data directory is a documented setup.
 describeStoragePortContract(
   "createFileStoragePort",
   () => {
     const dir = mkdtempSync(join(tmpdir(), "kohaku-storage-contract-"));
     return { port: createFileStoragePort(dir), dispose: () => rm(dir, { recursive: true, force: true }) };
   },
-  ALL_EXTENSIONS,
+  { ...ALL_EXTENSIONS, declaresCompareAndSet: false },
 );

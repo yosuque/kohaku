@@ -589,6 +589,14 @@ type ExpectedDeleteRevision = str | _Unset
 fixation's `revision` MUST equal it (deleting has no "must not exist" case, so `None` is not accepted)."""
 
 
+def is_single_process(storage: object) -> bool:
+    """True when `storage` marks itself `single_process = True`: only ever shared by the callers of one
+    process (the file and in-memory ports), so it has no cross-process guarantee to declare and a host does
+    not warn about it (TS: `storage.singleProcess === true`). A strict identity check, like
+    `supports_compare_and_set`."""
+    return getattr(storage, "single_process", False) is True
+
+
 def supports_compare_and_set(storage: object) -> bool:
     """True when `storage` declares the optional compare-and-set extension (TS: `storage.supportsCompareAndSet
     === true`). A strict identity check on a real `True`, so a `Mock` or a `__getattr__`-based proxy does not

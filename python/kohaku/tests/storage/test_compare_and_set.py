@@ -22,6 +22,7 @@ from kohaku.spec import (
     PromotionState,
     StorageConflictError,
     UISpec,
+    is_single_process,
     supports_compare_and_set,
 )
 from kohaku.storage import FileStoragePort, MemoryStoragePort
@@ -116,12 +117,20 @@ def make_port(request: pytest.FixtureRequest) -> PortFactory:
 
 
 class TestCompareAndSetContract:
-    def test_declares_supports_compare_and_set(
-        self, tmp_path: Path, make_port: PortFactory
-    ) -> None:
-        port = make_port(tmp_path)
+    def test_memory_port_declares_supports_compare_and_set(self) -> None:
+        port = MemoryStoragePort()
         assert port.supports_compare_and_set is True
         assert supports_compare_and_set(port) is True
+        assert is_single_process(port) is True
+
+    def test_file_port_honors_expected_revision_but_does_not_declare_the_extension(
+        self, tmp_path: Path
+    ) -> None:
+        # Its lock is in-process only and two processes may share one data directory, so it claims
+        # single_process instead (hosts do not warn about it, and the lineage services do not pass the option).
+        port = FileStoragePort(tmp_path)
+        assert supports_compare_and_set(port) is False
+        assert is_single_process(port) is True
 
     def test_supports_compare_and_set_is_a_strict_check(self) -> None:
         assert supports_compare_and_set(object()) is False

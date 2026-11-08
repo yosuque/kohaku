@@ -10,9 +10,8 @@ from pathlib import Path
 import pytest
 
 from kohaku.storage import FileStoragePort, MemoryStoragePort
+from sales_api.authz_from_env import DEFAULT_CAPABILITY_SECRET, create_authz_from_env
 from sales_api.storage_from_env import (
-    DEV_CAPABILITY_SECRET,
-    capability_secret_from_env,
     create_storage_from_env,
     storage_kind_from_env,
 )
@@ -90,8 +89,11 @@ class TestCreateStorageFromEnv:
 
 class TestCapabilitySecret:
     def test_the_demo_default_is_fine_for_single_process_storage(self) -> None:
-        assert capability_secret_from_env({}) == DEV_CAPABILITY_SECRET
-        assert capability_secret_from_env({"KOHAKU_STORAGE": "memory"}) == DEV_CAPABILITY_SECRET
+        assert create_authz_from_env({}).capability_secret == DEFAULT_CAPABILITY_SECRET
+        assert (
+            create_authz_from_env({"KOHAKU_STORAGE": "memory"}).capability_secret
+            == DEFAULT_CAPABILITY_SECRET
+        )
 
     @pytest.mark.parametrize("raw", [None, "", "   "])
     @pytest.mark.parametrize("kind", ["redis", "postgres"])
@@ -102,8 +104,8 @@ class TestCapabilitySecret:
         if raw is not None:
             env["KOHAKU_CAPABILITY_SECRET"] = raw
         with pytest.raises(ValueError, match="must be set to a real secret"):
-            capability_secret_from_env(env)
+            create_authz_from_env(env)
 
     def test_a_real_secret_is_returned_untrimmed(self) -> None:
         env = {"KOHAKU_STORAGE": "redis", "KOHAKU_CAPABILITY_SECRET": " s3cret "}
-        assert capability_secret_from_env(env) == " s3cret "
+        assert create_authz_from_env(env).capability_secret == " s3cret "

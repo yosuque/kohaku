@@ -42,8 +42,17 @@ evidence = ["cryptography>=43"]
 # libpq: install `psycopg[binary]` (or a system libpq) alongside -- the extra deliberately does not pick for you.
 redis = ["redis>=5.2"]
 postgres = ["psycopg[pool]>=3.2"]
+# JWT / OIDC identity resolution (kohaku.authz_jwt). Symmetric with the TS side's `jose` dependency. The
+# `crypto` extra is needed for the asymmetric algorithms a JWKS carries (RS256 / ES256 / EdDSA). Floor 2.14.0
+# (released 2026-09-11, past ADR-0002's 7-day cooldown), per ADR-0002's security-fix exception. Per PyJWT's
+# CHANGELOG: 2.13.0 made PyJWKClient refuse non-http(s) URIs and bound the token's header `alg` to a PyJWK's
+# algorithm; 2.14.0 added the one this module depends on for a remote JWKS, PyJWKClient not following redirects
+# (a redirect could hand the key fetch to another host), and also hardened HMAC-key validation. The advisory ids
+# (GHSA-993g-76c3-p5m4, GHSA-jq35-7prp-9v3f, GHSA-9v7f-9g4p-ffgj) are as cited there; the advisories themselves
+# were not opened. The unknown-`kid` cooldown and the cache are this module's own (identity.py), not PyJWKClient's.
+jwt =["PyJWT[crypto]>=2.14.0"]
 # Convenience bundle: every optional feature set, for demos and quickstarts that don't want to pick individually.
-all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence,redis,postgres]"]
+all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence,jwt,redis,postgres]"]
 
 [build-system]
 requires = ["hatchling"]

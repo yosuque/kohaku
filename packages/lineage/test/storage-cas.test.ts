@@ -214,13 +214,14 @@ describe("promotion writes carry the revision they read", () => {
     expect(typeof storage.promotionWrites[0]?.state.revision).toBe("string");
   });
 
-  it("stamps a revision on the batch nomination write too, which stays unconditional", async () => {
+  it("bulk nomination on a CAS port writes each candidate conditionally on its scan-time revision (null when no state existed), not through the unconditional batch", async () => {
     const storage = casStorage();
     seedGenerated(storage, "a1");
-    const batches: PromotionState[][] = [];
+    seedGenerated(storage, "a2");
+    let batchCalls = 0;
     const original = storage.putPromotionStates!.bind(storage);
     storage.putPromotionStates = async (states) => {
-      batches.push(states);
+      batchCalls++;
       await original(states);
     };
     const promotions = createPromotions({
@@ -231,10 +232,66 @@ describe("promotion writes carry the revision they read", () => {
 
     await promotions.evaluateAndList();
 
-    expect(batches).toHaveLength(1);
-    expect(typeof batches[0]?.[0]?.revision).toBe("string");
-    // The batch method has no expectedRevision parameter, and no per-state write happened.
-    expect(storage.promotionWrites).toEqual([]);
+    expect(batchCalls).toBe(0);
+    expect(storage.promotionWrites.map((w) => w.options)).toEqual([
+      { expectedRevision: null },
+      { expectedRevision: null },
+    ]);
+    expect(storage.promotionWrites.every((w) => typeof w.state.revision === "string")).toBe(true);
+  });
+
+  it("a concurrent approve during the nomination scan is not rolled back: the conflicting candidate is skipped (no nominated event), the others are nominated", async () => {
+    const storage = casStorage();
+    seedGenerated(storage, "a1");
+    seedGenerated(storage, "a2");
+    const promotions = createPromotions({
+      lineage: createLineage({ storage }),
+      storage,
+      policy: { minUses: 0, minDistinctSessions: 0, judgeBlocking: true },
+    });
+    // The scan reads a1 as "no state yet"; right after that read another instance records a decision for it.
+    storage.hooks.afterPromotionRead = () => {
+      storage.states.set("a1", {
+        artifactId: "a1",
+        status: "approved",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        data: {},
+        revision: "other-writer",
+      });
+    };
+
+    const listed = await promotions.evaluateAndList();
+
+    expect(storage.states.get("a1")).toMatchObject({ status: "approved", revision: "other-writer" });
+    expect(storage.states.get("a2")?.status).toBe("candidate");
+    const nominated = storage.events
+      .filter((e) => e.type === "component.nominated")
+      .map((e) => e.payload["artifactId"]);
+    expect(nominated).toEqual(["a2"]);
+    // The returned list does not claim a transition that was not stored.
+    expect(listed.find((c) => c.artifactId === "a1")?.status).toBe("in_use");
+    expect(listed.find((c) => c.artifactId === "a2")?.status).toBe("candidate");
+  });
+
+  it("bulk nomination on a port without the declaration keeps using the single batch write", async () => {
+    const storage = casStorage({ supportsCompareAndSet: false });
+    seedGenerated(storage, "a1");
+    let batchCalls = 0;
+    const original = storage.putPromotionStates!.bind(storage);
+    storage.putPromotionStates = async (states) => {
+      batchCalls++;
+      await original(states);
+    };
+    const promotions = createPromotions({
+      lineage: createLineage({ storage }),
+      storage,
+      policy: { minUses: 0, minDistinctSessions: 0, judgeBlocking: true },
+    });
+
+    await promotions.evaluateAndList();
+
+    expect(batchCalls).toBe(1);
+    expect(typeof storage.states.get("a1")?.revision).toBe("string");
   });
 });
 
@@ -263,7 +320,7 @@ describe("act() with a concurrent writer", () => {
     expect(storage.states.get("a1")).toMatchObject({ status: "withdrawn", revision: "other-writer" });
   });
 
-  it("a write that lands between the recheck and the state write still cannot overwrite: the CAS write throws and the other state stays (the recorded audit event is the documented orphan)", async () => {
+  it("a write that lands between the recheck and the state write cannot overwrite; the orphan review event it leaves has no effect on reconcile", async () => {
     const storage = casStorage();
     seedGenerated(storage, "a1");
     const promotions = createPromotions({ lineage: createLineage({ storage }), storage });
@@ -271,13 +328,15 @@ describe("act() with a concurrent writer", () => {
     await promotions.act("a1", { kind: "judge.start" }, actor);
     await promotions.act("a1", { kind: "judge.result", verdict: { pass: true, score: 1 } }, actor);
 
-    // The audit append is the window between the recheck and the CAS write.
+    // The audit append is the window between the recheck and the CAS write. The other instance publishes
+    // the artifact there, so reconcile has a real projection to apply.
     storage.hooks.beforeAppend = (event) => {
       if (event.type !== "component.reviewed") return;
       storage.states.set("a1", {
         ...storage.states.get("a1")!,
-        status: "rejected",
+        status: "published",
         revision: "other-writer",
+        data: { draft, html: "<html></html>", sha256: "s", componentType: draft.componentType },
       });
     };
 
@@ -285,21 +344,28 @@ describe("act() with a concurrent writer", () => {
       promotions.act("a1", { kind: "review.approve", reviewer: actor }, actor),
     ).rejects.toBeInstanceOf(StorageConflictError);
 
-    expect(storage.states.get("a1")).toMatchObject({ status: "rejected", revision: "other-writer" });
-    // The orphan audit event exists ...
+    expect(storage.states.get("a1")).toMatchObject({ status: "published", revision: "other-writer" });
     expect(storage.events.some((e) => e.type === "component.reviewed")).toBe(true);
-    // ... and reconcile ignores an event that has no matching state: nothing is projected, nothing throws.
-    const projected: string[] = [];
-    const reconciler = createPromotions({
-      lineage: createLineage({ storage }),
-      storage,
-      onPublish: async (args) => {
-        projected.push(args.artifactId);
-      },
-    });
-    const summary = await reconciler.reconcile();
-    expect(summary).toEqual({ published: 0, withdrawn: 0, skipped: 0 });
-    expect(projected).toEqual([]);
+
+    // Reconcile's result must be decided by the snapshot alone: run it with the orphan on the log, then with
+    // the orphan removed, and require the identical outcome (the projection the published snapshot calls for).
+    const runReconcile = async () => {
+      const projected: string[] = [];
+      const summary = await createPromotions({
+        lineage: createLineage({ storage }),
+        storage,
+        onPublish: async (args) => {
+          projected.push(args.artifactId);
+        },
+      }).reconcile();
+      return { summary, projected };
+    };
+    const withOrphan = await runReconcile();
+    expect(withOrphan.projected).toEqual(["a1"]);
+    expect(withOrphan.summary).toMatchObject({ published: 1 });
+    const orphanIndex = storage.events.findIndex((e) => e.type === "component.reviewed");
+    storage.events.splice(orphanIndex, 1);
+    expect(await runReconcile()).toEqual(withOrphan);
   });
 
   it("publish: a concurrent change after the load throws without publishing, auditing or projecting", async () => {
@@ -345,7 +411,8 @@ describe("fixation writes carry the revision they read", () => {
       storage.fixations.set(HASH, fixationRecord("new", "r2", "fp-new"));
     };
 
-    await expect(api.refreshFingerprint(HASH, "fp2")).rejects.toBeInstanceOf(StorageConflictError);
+    // Self-healing that loses the race is a no-op, not an error: another instance already moved it on.
+    await expect(api.refreshFingerprint(HASH, "fp2")).resolves.toBeUndefined();
 
     const stored = storage.fixations.get(HASH);
     expect(stored?.revision).toBe("r2");
@@ -404,6 +471,22 @@ describe("fixation writes carry the revision they read", () => {
 
     expect(storage.fixationDeletes[0]?.options).toEqual({ expectedRevision: "r1" });
     expect(storage.fixations.has(HASH)).toBe(false);
+  });
+
+  it("invalidate (self-heal) that loses the race is a no-op: the other instance's fixation survives and nothing is audited", async () => {
+    const storage = casStorage();
+    storage.fixations.set(HASH, fixationRecord("old", "r1", "fp-old"));
+    const api = fixations(storage);
+    storage.hooks.afterFixationRead = () => {
+      storage.fixations.set(HASH, fixationRecord("re-approved", "r2", "fp-old"));
+    };
+
+    await expect(
+      api.invalidate(HASH, "stale", { guard: { ifCatalogFingerprint: "fp-old" } }),
+    ).resolves.toBeUndefined();
+
+    expect(storage.fixations.get(HASH)?.revision).toBe("r2");
+    expect(storage.events.some((e) => e.type === "intent.unfixated")).toBe(false);
   });
 
   it("a legacy fixation without a revision is written and deleted unconditionally", async () => {

@@ -100,7 +100,7 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             # fixate is an unconditional overwrite so it cannot lose a compare-and-set race itself, but a
             # wrapped port may still raise one; answer it with the contract's CONFLICT rather than a 500.
             if is_storage_conflict_error(e):
-                return _storage_conflict(request, deps)
+                return await _storage_conflict(request, deps, e)
             await report_host_error(deps, "fixations/approve", request_id, e)
             return _intent_invalid(e, request_id)
         try:
@@ -157,7 +157,7 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 await fixations.unfixate(intent_hash, principal, tenant=tenant)
         except BaseException as e:
             if is_storage_conflict_error(e):
-                return _storage_conflict(request, deps)
+                return await _storage_conflict(request, deps, e)
             if getattr(e, "code", None) == GovernanceErrorDiscriminators.FIXATION_UNSUPPORTED_CODE:
                 return _error("NOT_IMPLEMENTED", _message(e), 501)
             request_id = request_id_of(request, deps)

@@ -34,14 +34,17 @@ async def main() -> None:
         ) from err
 
     setup = await create_kohaku_mcp_setup()
-    server = setup.create_server()
+    try:
+        server = setup.create_server()
 
-    print(
-        f"kohaku-sales-sample MCP server: ready (stdio) / LLM: {setup.llm.provider}",
-        file=sys.stderr,
-    )
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+        print(
+            f"kohaku-sales-sample MCP server: ready (stdio) / LLM: {setup.llm.provider}",
+            file=sys.stderr,
+        )
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
+    finally:
+        await setup.close()
 
 
 if __name__ == "__main__":

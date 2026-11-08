@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from kohaku.spec import supports_compare_and_set
+from kohaku.spec import is_single_process, supports_compare_and_set
 from kohaku.storage import FileStoragePort, MemoryStoragePort
 from kohaku.storage.postgres import create_postgres_storage_port
 from kohaku.storage.redis import create_redis_storage_port
@@ -110,5 +110,21 @@ def test_storage_contract(open_port: PortOpener, adapter: str, case: ContractCas
                     pytest.fail(f"{adapter} must declare supports_compare_and_set")
                 pytest.skip(f"{adapter} does not declare compare-and-set (single process)")
             await case.run(port)
+
+    asyncio.run(go())
+
+
+def test_adapters_declare_their_concurrency_story(open_port: PortOpener, adapter: str) -> None:
+    """memory / file mark themselves `single_process` (no cross-process guarantee to declare, so a host does not
+    warn); redis / postgres serve several host instances, so they declare compare-and-set instead and are never
+    `single_process` (TS: `singleProcess` / `supportsCompareAndSet`)."""
+
+    async def go() -> None:
+        async with open_port() as port:
+            if adapter in SHARED_BACKEND_ADAPTERS:
+                assert supports_compare_and_set(port)
+                assert not is_single_process(port)
+            else:
+                assert is_single_process(port)
 
     asyncio.run(go())

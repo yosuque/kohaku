@@ -33,9 +33,6 @@ StorageKind = Literal["file", "memory", "redis", "postgres"]
 
 _STORAGE_KINDS: tuple[StorageKind, ...] = ("file", "memory", "redis", "postgres")
 
-DEV_CAPABILITY_SECRET = "dev-secret-change-me"
-"""The file/hmac demo default of KOHAKU_CAPABILITY_SECRET; refused once storage is a shared backend."""
-
 
 @dataclass
 class StorageFromEnv:
@@ -68,20 +65,6 @@ def _required(env: Mapping[str, str], name: str, for_kind: str) -> str:
     if value == "":
         raise ValueError(f"{name} is required when KOHAKU_STORAGE={for_kind}")
     return value
-
-
-def capability_secret_from_env(env: Mapping[str, str]) -> str:
-    """Resolves ``KOHAKU_CAPABILITY_SECRET`` (default `DEV_CAPABILITY_SECRET`, a file/hmac demo convenience only). An
-    empty or whitespace-only value counts as unset, exactly like TS's capabilitySecretFromEnv. The fixed fallback is
-    refused once storage leaves the single-process shape: a capability signed with a secret every clone of this
-    repository also knows is a real forgery risk next to a shared backend, not a quickstart nicety."""
-    raw = env.get("KOHAKU_CAPABILITY_SECRET")
-    secret = raw if raw is not None and raw.strip() != "" else DEV_CAPABILITY_SECRET
-    if secret == DEV_CAPABILITY_SECRET and storage_kind_from_env(env) in ("redis", "postgres"):
-        raise ValueError(
-            "KOHAKU_CAPABILITY_SECRET must be set to a real secret when KOHAKU_STORAGE=redis|postgres"
-        )
-    return secret
 
 
 def create_storage_from_env(env: Mapping[str, str], *, data_dir: str | Path) -> StorageFromEnv:

@@ -3,6 +3,7 @@ import {
   type FixationRecord,
   FixationRecordSchema,
   GOVERNANCE_ERROR_DISCRIMINATORS,
+  isStorageConflictError,
   type LineageEventRecord,
   type Principal,
   type StoragePort,
@@ -480,13 +481,20 @@ export function createFixations(opts: {
       // decision), do not delete (see guardMatches).
       if (!guardMatches(existing, guard)) return;
       // Since this is self-healing invalidation, the actor is system (distinguished from human-approved unfixate).
-      await deleteFixationAndAudit(
-        intentHash,
-        tenant,
-        { intentHash, reason, ...(detail != null ? { detail } : {}) },
-        { kind: "system" },
-        existing.revision,
-      );
+      try {
+        await deleteFixationAndAudit(
+          intentHash,
+          tenant,
+          { intentHash, reason, ...(detail != null ? { detail } : {}) },
+          { kind: "system" },
+          existing.revision,
+        );
+      } catch (e) {
+        // Self-healing lost a compare-and-set race: another instance already re-approved, replaced or removed
+        // the fixation after this one read it, so there is nothing left for this heal to do. Not an error
+        // (nothing was deleted and nothing is audited); unfixate, a human decision, still surfaces it.
+        if (!isStorageConflictError(e)) throw e;
+      }
     },
 
     async refreshFingerprint(intentHash, catalogFingerprint, scope) {
@@ -502,7 +510,17 @@ export function createFixations(opts: {
       // behavior, so this is a strict hardening, not a required contract change).
       // On a compare-and-set port the write is also conditional on the revision just read (kept unchanged: a
       // fingerprint re-stamp is not a governance decision), so it cannot overwrite a concurrent replace.
-      await opts.storage.putFixation({ ...existing, catalogFingerprint }, rewriteOptions(existing.revision));
+      try {
+        await opts.storage.putFixation(
+          { ...existing, catalogFingerprint },
+          rewriteOptions(existing.revision),
+        );
+      } catch (e) {
+        // Self-healing lost a compare-and-set race (another instance already replaced or re-stamped the
+        // fixation): the fixation it would have re-stamped is no longer the one it read, so this is a no-op,
+        // not an error. `replace`, a human-approved migration, still surfaces the conflict.
+        if (!isStorageConflictError(e)) throw e;
+      }
     },
 
     async replace(intentHash, pinnedSpec, options) {

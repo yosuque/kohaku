@@ -847,11 +847,11 @@ name = "kohaku-sample-sales-api"
 version = "0.0.0"
 source = { editable = "examples/sales-api" }
 dependencies = [
-    { name = "kohaku-ui", extra = ["mcp", "rest"] },
+    { name = "kohaku-ui", extra = ["jwt", "mcp", "rest"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "kohaku-ui", extras = ["rest", "mcp"], editable = "kohaku" }]
+requires-dist = [{ name = "kohaku-ui", extras = ["rest", "mcp", "jwt"], editable = "kohaku" }]
 
 [[package]]
 name = "kohaku-ui"
@@ -870,6 +870,7 @@ all = [
     { name = "httpx" },
     { name = "mcp" },
     { name = "psycopg", extra = ["pool"] },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "redis" },
     { name = "uvicorn" },
 ]
@@ -881,6 +882,9 @@ evidence = [
 ]
 gemini = [
     { name = "google-genai" },
+]
+jwt = [
+    { name = "pyjwt", extra = ["crypto"] },
 ]
 llm = [
     { name = "httpx" },
@@ -906,14 +910,15 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'rest'", specifier = ">=0.115" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0" },
     { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.28" },
-    { name = "kohaku-ui", extras = ["rest", "mcp", "llm", "claude", "gemini", "evidence", "redis", "postgres"], marker = "extra == 'all'", editable = "kohaku" },
+    { name = "kohaku-ui", extras = ["rest", "mcp", "llm", "claude", "gemini", "evidence", "jwt", "redis", "postgres"], marker = "extra == 'all'", editable = "kohaku" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.2" },
     { name = "psycopg", extras = ["pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.10" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'jwt'", specifier = ">=2.14.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.2" },
     { name = "uvicorn", marker = "extra == 'rest'", specifier = ">=0.34" },
 ]
-provides-extras = ["rest", "mcp", "llm", "claude", "gemini", "evidence", "redis", "postgres", "all"]
+provides-extras = ["rest", "mcp", "llm", "claude", "gemini", "evidence", "redis", "postgres", "jwt", "all"]
 
 [[package]]
 name = "kohaku-workspace"

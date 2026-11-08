@@ -23,7 +23,7 @@ from .approval_port import (
     create_hmac_approval_port,
 )
 from .approval_store import MemoryApprovalStore, create_memory_approval_store
-from .authz_port import HmacAuthzPort, create_hmac_authz_port
+from .authz_port import HmacAuthzPort, create_hmac_authz_port, is_valid_tenant_claim
 from .revocation_store import MemoryRevocationStore, create_memory_revocation_store
 
 __all__ = [
@@ -43,4 +43,5 @@ __all__ = [
     "create_hmac_authz_port",
     "create_memory_approval_store",
     "create_memory_revocation_store",
+    "is_valid_tenant_claim",
 ]
