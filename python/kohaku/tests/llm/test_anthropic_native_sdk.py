@@ -105,16 +105,21 @@ def _stream_body(partials: list[str]) -> bytes:
 
 
 def _install_mock(
-    monkeypatch: pytest.MonkeyPatch, respond: Callable[[Any], Any]
+    monkeypatch: pytest.MonkeyPatch,
+    respond: Callable[[Any], Any],
+    requests: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Make the factory's default path build a REAL `AsyncAnthropic` whose HTTP layer is in-memory.
 
-    Returns the list that collects every request body (parsed JSON) the SDK actually put on the wire.
+    Returns the list that collects every request body (parsed JSON) the SDK actually put on the wire. When
+    `requests` is given, every raw request (URL + headers) is appended to it as well.
     """
     bodies: list[dict[str, Any]] = []
 
     def handler(request: Any) -> Any:
         bodies.append(json.loads(request.content))
+        if requests is not None:
+            requests.append(request)
         return respond(request)
 
     http_client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
@@ -202,3 +207,61 @@ def test_default_stream_transport_sends_no_sampling_params(
     assert len(bodies) == 1
     assert bodies[0]["stream"] is True
     _assert_no_sampling_params(bodies[0])
+
+
+def _run_generate_text(config: Any) -> None:
+    async def run() -> None:
+        llm = create_anthropic_native_llm(config, deps=DEPS)
+        result = await llm.generate_text(GenerateTextRequest(prompt="p"))
+        assert result.text == "hello"
+
+    asyncio.run(run())
+
+
+def _text_response(_req: Any) -> Any:
+    return httpx2.Response(200, json=_message([{"type": "text", "text": "hello"}], "end_turn"))
+
+
+def test_default_transport_authentication_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin how the real SDK authenticates when kohaku passes `api_key=`.
+
+    anthropic SDK 2.x sends `Authorization: Bearer <key>` for `api_key=` (and for `auth_token=`); it does NOT
+    send `x-api-key` any more, and it always sends `anthropic-version`. Pinned so an SDK upgrade that changes
+    the scheme shows up here instead of as a production 401.
+    """
+    requests: list[Any] = []
+    _install_mock(monkeypatch, _text_response, requests)
+
+    _run_generate_text(CONFIG)
+
+    assert len(requests) == 1
+    headers = requests[0].headers
+    assert headers["authorization"] == "Bearer k"
+    assert "x-api-key" not in headers
+    assert headers["anthropic-version"]
+    assert requests[0].url.host == "api.anthropic.com"
+    assert requests[0].url.path == "/v1/messages"
+
+
+def test_default_transport_honours_base_url_with_the_same_auth_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[Any] = []
+    _install_mock(monkeypatch, _text_response, requests)
+    # The Python SDK appends `/v1/messages` itself, so (unlike the TypeScript provider, whose baseURL already
+    # ends in `/v1`) the base URL given here has no `/v1` suffix.
+    config = resolve_llm_env(
+        {
+            "KOHAKU_LLM_PROVIDER": "claude",
+            "KOHAKU_LLM_API_KEY": "k",
+            "KOHAKU_LLM_BASE_URL": "https://gw.example",
+        }
+    )
+
+    _run_generate_text(config)
+
+    assert len(requests) == 1
+    assert requests[0].url.host == "gw.example"
+    assert requests[0].url.path == "/v1/messages"
+    assert requests[0].headers["authorization"] == "Bearer k"
+    assert "x-api-key" not in requests[0].headers
