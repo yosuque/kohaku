@@ -2,6 +2,7 @@ import {
   type CanonicalIntent,
   combineDataVersions,
   type DataShape,
+  type FilterDescriptor,
   type QueryHandle,
 } from "@kohaku-ui/spec-core";
 import type { ComposeContext } from "./context.js";
@@ -15,6 +16,12 @@ export interface ResolvedRefs {
   dataVersion: string;
   /** $ref URI → the dataVersion of that reference alone. The fill source for Spec.refVersions. */
   versionsByRef: Record<string, string>;
+  /**
+   * The Intent's GUI filters (`SemanticPort.describeFilters`), resolved only under `ComposePolicy.l1Filters`.
+   * Absent otherwise (and when the port does not implement it or the call failed -- fail-open, like
+   * describeShape); `fixation.ts` builds a ResolvedRefs without it.
+   */
+  descriptors?: FilterDescriptor[];
 }
 
 /** The result of resolveHandleVersions: resolved handles + their combined/per-ref dataVersion. */
@@ -94,5 +101,24 @@ export async function resolveRefs(
     );
   }
 
-  return { handles, uris: handles.map((h) => h.uri), shapesByRef, dataVersion, versionsByRef };
+  // Intent-declared filters for L1 injection (ComposePolicy.l1Filters). No locale is passed: the composed Spec
+  // is cached under a locale-free key, so descriptor labels must not vary by caller. A failure only means
+  // "no filters" (an optional enhancement must not fail the compose), like describeShape above.
+  let descriptors: FilterDescriptor[] | undefined;
+  if (ctx.policy?.l1Filters === true && ctx.semantic.describeFilters != null) {
+    try {
+      descriptors = await ctx.semantic.describeFilters(intent, tenant != null ? { tenant } : undefined);
+    } catch {
+      descriptors = undefined;
+    }
+  }
+
+  return {
+    handles,
+    uris: handles.map((h) => h.uri),
+    shapesByRef,
+    dataVersion,
+    versionsByRef,
+    ...(descriptors != null && descriptors.length > 0 ? { descriptors } : {}),
+  };
 }

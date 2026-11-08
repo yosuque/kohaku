@@ -176,6 +176,22 @@ export interface ComposeL1Policy {
    * actually sent to the LLM, which can change the generated output for the same Intent.
    */
   refConstraint?: "schema" | "validate";
+  /**
+   * Opt in (default false) to deterministic filter injection into L1-generated Specs. When true, the
+   * composer asks `SemanticPort.describeFilters` for the Intent's filters (derived from its facet
+   * declarations, never from the model) and, after a successful L1 generation, adds a `control.select` +
+   * `state` + `state.set` event + `data.bind` per filter whose query param appears in a generated
+   * component's `$ref` (`post/inject-filters.ts`). Changing a filter then re-resolves the data with no
+   * recompose and no model call. Skipped (the Spec is delivered as generated) when the Intent has no
+   * filters, the SemanticPort does not implement `describeFilters`, the bind variants would exceed
+   * spec-core's MAX_BIND_VARIANTS, or the injected Spec would not validate; the reason is recorded in
+   * `ComposeTrace.filters`.
+   *
+   * Included in `policyFingerprint` (only when `true`, as an absent key) because it changes the delivered
+   * Spec for the same Intent and model. The generation prompt is unchanged, so PROMPT_REVISION is not
+   * bumped. Filter labels are canonical (the Spec cache key is locale-free, so no session locale is used).
+   */
+  l1Filters?: boolean;
 }
 
 /**

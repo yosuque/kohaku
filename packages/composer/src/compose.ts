@@ -367,9 +367,9 @@ export async function generateSpec(
   // 6-7. L1 constrained generation → L2 free generation → deterministic fallback (the branching is consolidated in runTierGeneration).
   const attempts: ComposeAttempt[] = [];
   const outcome = await runTierGeneration(prepared, ctx, attempts, onDraftPartial);
-  const spec = buildSpecFromOutcome(prepared, ctx, outcome);
+  const { spec, filters } = buildSpecFromOutcome(prepared, ctx, outcome);
   // 9-10. Cache store + leader trace assembly.
-  return persistAndTrace(prepared, ctx, spec, outcome, attempts);
+  return persistAndTrace(prepared, ctx, spec, outcome, attempts, filters);
 }
 
 /**
@@ -394,7 +394,7 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
     // Carry the fixed template's state over to the delivered Spec (preserve visibleWhen's initial state).
     ...(template.state != null ? { state: template.state } : {}),
   };
-  const spec = buildSpecFromOutcome(prepared, ctx, outcome);
+  const { spec } = buildSpecFromOutcome(prepared, ctx, outcome);
   return persistAndTrace(prepared, ctx, spec, outcome, []);
 }
 
@@ -402,7 +402,11 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
  * Builds the delivered Spec from a TierOutcome. If ok, assemble + post-processing; if fallback, returns
  * the deterministic fallback Spec and fires the observation hook exactly once (the once-per-generation contract is fixed here).
  */
-function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, outcome: TierOutcome): UISpec {
+function buildSpecFromOutcome(
+  prepared: PreparedCompose,
+  ctx: ComposeContext,
+  outcome: TierOutcome,
+): { spec: UISpec; filters?: ComposeTrace["filters"] } {
   const { intent, refs, cacheMode, traceBase } = prepared;
   const cacheLabel = cacheLabelOf(cacheMode);
 
@@ -418,7 +422,24 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       ...provenanceStampsOf(ctx.policy),
       ...(outcome.state != null ? { state: outcome.state } : {}),
     });
-    return postAndValidate(assembled, refs, ctx);
+    // ComposePolicy.l1Filters: Intent-declared filters are injected into a freshly generated L1 Spec only
+    // (never L0 -- a hand-written template owns its own controls -- nor L2 nor the fallback Spec).
+    let filters: ComposeTrace["filters"] | undefined;
+    const descriptors = outcome.tier === "L1" && prepared.policy.l1Filters === true ? refs.descriptors : undefined;
+    const spec = postAndValidate(
+      assembled,
+      refs,
+      ctx,
+      descriptors != null
+        ? {
+            descriptors,
+            report: (r) => {
+              filters = { injected: r.injected, ...(r.skipped != null ? { skipped: r.skipped } : {}) };
+            },
+          }
+        : undefined,
+    );
+    return { spec, ...(filters != null ? { filters } : {}) };
   }
 
   const spec = buildFallbackSpec({
@@ -451,7 +472,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
     },
     outcome.error,
   );
-  return spec;
+  return { spec };
 }
 
 /**
@@ -464,6 +485,7 @@ async function persistAndTrace(
   spec: UISpec,
   outcome: TierOutcome,
   attempts: ComposeAttempt[],
+  filters?: ComposeTrace["filters"],
 ): Promise<GenerateOutcome> {
   const { cacheMode } = prepared;
   const cacheLabel = cacheLabelOf(cacheMode);
@@ -489,6 +511,7 @@ async function persistAndTrace(
     ...(outcome.kind === "fallback" && outcome.cancelled === true ? { cancelled: true } : {}),
     ...(outcome.kind === "ok" && outcome.model != null ? { model: outcome.model } : {}),
     ...(usage != null ? { usage } : {}),
+    ...(filters != null ? { filters } : {}),
   });
   return { spec, trace };
 }

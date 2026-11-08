@@ -93,7 +93,8 @@ export function tierLlmFingerprintMaterial(ctx: ComposeContext): TierLlmFingerpr
  * its current cache key, so leaving them `null` changes nothing further. **It is not the pattern to copy**
  * — `fingerprintDesignSystem` below appears to write `?? null` ten times over, but that is historical
  * grandfathering, not a model for a new field. `designSystem.kit` / `designSystem.enforceKitClasses`
- * and the top-level `tierGate` row (`fingerprintTierGate`, Policy as Code) show the correct
+ * and the top-level `tierGate` (`fingerprintTierGate`, Policy as Code) and `l1Filters`
+ * (`fingerprintL1Filters`) rows show the correct
  * shape for a field added *after* callers already depend on this material's bytes: fold to `undefined`
  * (an absent key), never `null` — see the ABSENT-key paragraph on their own extractor below.
  * **Any new fingerprinted field must follow `kit`/`enforceKitClasses`/`tierGate`, not the other
@@ -165,6 +166,16 @@ function fingerprintTierGate(policy: ComposePolicy): unknown {
   return { allowL2, routeTierId: routeTier != null ? (routeTier.id ?? "anonymous") : null };
 }
 
+/**
+ * `l1Filters` participates **only when `true`**, as an ABSENT key otherwise (`undefined`, never `null` -- this
+ * row was added after callers already depend on the material's bytes; see policyFingerprint's doc). It
+ * changes the delivered Spec (filter controls and binds are injected) for the same Intent and model, so a
+ * cache entry composed without it must not be served to a policy that wants it, and vice versa.
+ */
+function fingerprintL1Filters(policy: ComposePolicy): unknown {
+  return policy.l1Filters === true ? true : undefined;
+}
+
 function fingerprintFewShotId(policy: ComposePolicy): unknown {
   const { fewShot } = policy;
   return fewShot != null ? (fewShot.id ?? "anonymous") : null;
@@ -217,6 +228,7 @@ export const FINGERPRINTED: ReadonlyArray<readonly [string, PolicyFingerprintExt
   ["effort", fingerprintEffort],
   ["tierLlm", fingerprintTierLlm],
   ["tierGate", fingerprintTierGate],
+  ["l1Filters", fingerprintL1Filters],
 ];
 
 export async function policyFingerprint(
