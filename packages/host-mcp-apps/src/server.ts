@@ -545,7 +545,7 @@ function composeOrStartTask(
 ): ReturnType<typeof composeAndPackage> {
   if (taskCapable(call, extra)) {
     return asComposePackage<ReturnType<typeof composeAndPackage>>(
-      mcpRateLimitKey(call.deps, call.principal, extra).then((owner) => startComposeTask(call, input, owner)),
+      mcpTaskOwnerKey(call.deps, call.principal, extra).then((owner) => startComposeTask(call, input, owner)),
     );
   }
   return composeAndPackage(call, input);
@@ -691,8 +691,6 @@ function registerResolveBindingTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "resolve");
-        if (rateLimited != null) return rateLimited;
         // Server-side paging/sorting: as on the REST surface, verify the capability against base (with reserved
         // parameters removed), and merge the reserved parameters into domain.invoke (the `_` namespace convention).
         // Unknown `_` keys are rejected as on the REST surface (to prevent changing the data range via unauthorized parameters).
@@ -711,6 +709,10 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           principal,
         );
         if ("isError" in authorized) return authorized;
+        // Taken after the capability verified so a tenant rule keys on the capability's signed tenant
+        // (SPEC CAP-TEN-002; the principal component stays the MCP rate-limit key).
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "resolve", authorized.tenant);
+        if (rateLimited != null) return rateLimited;
         // The read path never runs a governed Action (SPEC ACT-RD-001, design.md #77): a ref naming an
         // operation whose tier is "confirm" / "approve" is refused before domain.invoke (only `_action` holds
         // such an operation for a confirmation or an approval), and an unreadable operation index fails closed.
@@ -893,8 +895,6 @@ function registerActionTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "action");
-        if (rateLimited != null) return rateLimited;
         const payloadBytes = new TextEncoder().encode(canonicalStringify(payload)).length;
         if (payloadBytes > MAX_ACTION_PAYLOAD_BYTES) {
           return toolError(`payload exceeds the maximum size (${MAX_ACTION_PAYLOAD_BYTES} bytes)`);
@@ -908,6 +908,10 @@ function registerActionTool(ctx: ToolContext): void {
           principal,
         );
         if ("isError" in authorized) return authorized;
+        // Taken after the capability verified so a tenant rule keys on the capability's signed tenant
+        // (SPEC CAP-TEN-002; the principal component stays the MCP rate-limit key).
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "action", authorized.tenant);
+        if (rateLimited != null) return rateLimited;
         const { principal: resolvedPrincipal, tenant } = authorized;
 
         // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
@@ -1128,13 +1132,11 @@ function unknownTaskError(taskId: string): ProtocolError {
 }
 
 /**
- * The owner a `tasks/get` / `tasks/cancel` caller is matched against: the key the rate limiter would use for
- * this call (see `mcpRateLimitKey`) — `deps.rateLimitKey`, else the resolved principal's id, else the session id,
- * else `"anonymous"`. A throw from `resolvePrincipal` / `rateLimitKey` propagates and fails the request closed,
- * like a tool call.
+ * The owner a `tasks/get` / `tasks/cancel` caller is matched against (see `mcpTaskOwnerKey`). A throw from
+ * `resolvePrincipal` / `rateLimitKey` propagates and fails the request closed, like a tool call.
  */
 async function taskOwnerKey(ctx: ToolContext, extra: ServerContext): Promise<string> {
-  return mcpRateLimitKey(ctx.deps, await ctx.principalOf(extra), extra);
+  return mcpTaskOwnerKey(ctx.deps, await ctx.principalOf(extra), extra);
 }
 
 /**
@@ -1358,9 +1360,9 @@ function approvalRequiredToolError(message: string, approval: ApprovalRequiredIn
 }
 
 /**
- * The bucket-key "principal" component for a rate-limit check (this profile has no tenant — see
- * `McpHostDeps.rateLimiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
- * undefined here). Every unauthenticated call resolves to the same constant fallback principal
+ * The bucket-key "principal" component for a rate-limit check (the tenant component is separate: `compose`
+ * checks carry none, `action` / `resolve` checks carry the verified capability's tenant — see
+ * `checkMcpRateLimit`). Every unauthenticated call resolves to the same constant fallback principal
  * (`McpHostDeps.principal ?? ANONYMOUS`), so keying on `principal.id` alone in that case would put every
  * anonymous caller into one shared bucket — exactly the failure a per-caller budget exists to prevent.
  * In order: `deps.rateLimitKey(extra)` when wired (a product keying by transport identity, e.g. a client
@@ -1384,12 +1386,34 @@ async function mcpRateLimitKey(
 }
 
 /**
+ * The identity a task is bound to (`tasks/get` / `tasks/cancel` match the caller against it). Deliberately
+ * NOT `mcpRateLimitKey`: a transport-identity `rateLimitKey` (a client IP behind a NAT) is shared by distinct
+ * authenticated callers, which would let one read another's task result (a bearer capability) and cancel it.
+ * In order: the resolved principal's id when `resolvePrincipal` is wired AND it resolved a caller-specific
+ * identity (an id other than the default principal's, `deps.principal ?? ANONYMOUS`, which a resolver returns
+ * for a guest / unauthenticated call and which would merge every such caller into one owner); else
+ * `deps.rateLimitKey(extra)`; else `ServerContext.sessionId`; else the literal `"anonymous"`. Without
+ * `resolvePrincipal` the principal is the constant default one, so it is only consulted when wired.
+ * `resolvePrincipal` must therefore return a distinct id per caller.
+ */
+async function mcpTaskOwnerKey(
+  deps: McpHostDeps,
+  principal: Principal,
+  extra: ServerContext,
+): Promise<string> {
+  if (deps.resolvePrincipal != null && principal.id !== (deps.principal ?? ANONYMOUS).id) return principal.id;
+  if (deps.rateLimitKey != null) return deps.rateLimitKey(extra);
+  return extra.sessionId ?? "anonymous";
+}
+
+/**
  * Checks `deps.rateLimiter` (host-core's `PolicyRateLimiter`, typically `PolicyRuntime.rateLimiter`)
  * before a tool handler proceeds with its actual work. Returns `null` (proceed) when `deps.rateLimiter`
  * is unset or the limiter allows; a structured `RATE_LIMITED` tool error otherwise (see
  * `rateLimitToolError`), after notifying `deps.onRateLimited` (fire-and-forget). Port of the REST
  * profile's `createRateLimitMiddleware` — called inline, as the first statement after resolving
- * `principal`, at the top of each of the 6 tool handlers below, since this profile has no per-path
+ * `principal` (for `action` / `resolve`: after the capability verified, so the tenant rule keys on the
+ * capability's signed tenant, SPEC CAP-TEN-002), in each of the 6 tool handlers below, since this profile has no per-path
  * middleware layer to mount a single check on (mirroring how the Python REST mirror calls
  * `check_rate_limit` inline for the same reason). Reuses the principal each handler already resolved via
  * `ctx.principalOf(extra)` rather than invoking that hook a second time. A throw from
@@ -1401,12 +1425,15 @@ async function checkMcpRateLimit(
   principal: Principal,
   extra: ServerContext,
   routeClass: "compose" | "action" | "resolve",
+  tenant?: string,
 ): Promise<ReturnType<typeof rateLimitToolError> | null> {
   if (deps.rateLimiter == null) return null;
   const key = await mcpRateLimitKey(deps, principal, extra);
-  const result = await deps.rateLimiter.take({ principal: key, routeClass });
+  const tenantPart = tenant != null ? { tenant } : {};
+  const result = await deps.rateLimiter.take({ ...tenantPart, principal: key, routeClass });
   if (result.allow) return null;
   void hostCore.notifyHook(deps.onRateLimited, {
+    ...tenantPart,
     principal: key,
     routeClass,
     requestId: mcpCorrelationId(extra),

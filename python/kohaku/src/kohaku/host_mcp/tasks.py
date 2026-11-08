@@ -138,8 +138,10 @@ def create_task_store(now: Callable[[], float] = _now_ms) -> TaskStore:
     `COMPOSE_TASK_TTL_MS`) and created only by explicit task-capable tool calls, not by a background process. A
     still-working task that expires is also aborted (its body must not keep running unobservably).
 
-    Ownership: every task is bound to an `owner` string (server.py derives it from the same key the rate limiter
-    uses: `rate_limit_key`, else the resolved principal's id, else the connection id). `get` / `request_cancel`
+    Ownership: every task is bound to an `owner` string (server.py's `_mcp_task_owner_key`: the resolved principal's
+    id when `resolve_principal` is wired and resolved a caller-specific id, else `rate_limit_key`, else the
+    connection id; `rate_limit_key` is consulted only when `resolve_principal` is unwired or resolves the default
+    principal, because a NAT'd IP-based `rate_limit_key` is shared between distinct principals). `get` / `request_cancel`
     answer exactly like an unknown id when the caller's owner differs, so a leaked task id alone neither reveals
     that the task exists, nor lets its holder read the completed result (which carries the bearer write
     capability in `_meta`), nor cancel it. The binding is only as strong as that key: with no `resolve_principal`
