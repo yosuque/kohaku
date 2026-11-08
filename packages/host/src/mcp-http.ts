@@ -151,7 +151,15 @@ export function createMcpHttpServer(options: McpHttpServerOptions): Server {
     }
 
     if (options.routes != null || options.path != null) {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      let url: URL;
+      try {
+        url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      } catch {
+        // A request-target the URL parser rejects (for example `//`, `//[` or `//x:99999`, which parse as a
+        // protocol-relative reference) must not escape as an unhandled rejection that kills the process.
+        sendJsonError(res, { status: 400, code: -32600, message: "Invalid Request" });
+        return;
+      }
       if (options.routes != null && (await options.routes(req, res, url))) return;
       if (options.path != null && url.pathname !== options.path) {
         sendJsonError(res, { status: 404, code: -32601, message: `Not found: ${url.pathname}` });

@@ -15,6 +15,7 @@ export function mcpDependencies(): Record<string, string> {
     "@kohaku-ui/host-mcp-apps": `^${CLI_VERSION}`,
     "@kohaku-ui/mcp-renderer": `^${CLI_VERSION}`,
     "@modelcontextprotocol/server": EXTERNAL_VERSIONS["@modelcontextprotocol/server"],
+    // Not imported by the template: kept because it is an optional peer of @kohaku-ui/host/mcp-http.
     "@modelcontextprotocol/node": EXTERNAL_VERSIONS["@modelcontextprotocol/node"],
   };
 }
@@ -45,7 +46,7 @@ npm run mcp:claude-desktop           # registers this project with Claude Deskto
 \`\`\`
 
 Restart Claude Desktop, then ask it about your data -- it calls this project's MCP server (\`npm run mcp\`, stdio) and
-renders the same UI Specs the web dashboard does. \`npm run mcp:http\` starts a Streamable HTTP server on :8788 instead,
+renders the same UI Specs the web dashboard does. \`npm run mcp:http\` starts a Streamable HTTP server at http://127.0.0.1:8788/mcp instead,
 for claude.ai / ChatGPT (no authentication -- see server/mcp-http.ts before exposing it beyond localhost; it only accepts
 localhost Host / Origin headers unless you set \`KOHAKU_MCP_ALLOWED_HOSTS\` / \`KOHAKU_MCP_ALLOWED_ORIGINS\`, e.g. behind a tunnel).
 Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-contained HTML snapshot instead
@@ -219,7 +220,7 @@ import { createPorts } from "./ports.js";
  * from a server) are unaffected. Behind a tunnel or a reverse proxy the Host is your public name -- allow it
  * with KOHAKU_MCP_ALLOWED_HOSTS=name1,name2 (hostnames, no port); allow a browser-based caller's origin with
  * KOHAKU_MCP_ALLOWED_ORIGINS=name1,name2 (hostnames, no scheme or port -- which also means the Origin check is
- * port-agnostic; see the comment above createMcpHttpServer below for how to pin an exact origin).
+ * port-agnostic; the note above createMcpHttpServer says how to pin one).
  *
  * The Host / Origin guards, CORS, the body-size cap and the stateless handler live in
  * @kohaku-ui/host/mcp-http (createMcpHttpServer); this file only supplies the host and the env parsing.
@@ -247,7 +248,7 @@ const extraNames = (value: string | undefined): string[] =>
 // server, or replace createMcpHttpServer with your own copy of its scaffold.
 //
 // Stateless serving (MCP protocol version 2026-07-28 removed protocol-level sessions): a fresh McpServer
-// per exchange, all attached to the one host above. Closing the returned server also tears down the handler.
+// per exchange, all attached to the one host above.
 const httpServer = createMcpHttpServer({
   path: "/mcp",
   allowedHosts: extraNames(process.env["KOHAKU_MCP_ALLOWED_HOSTS"]),
@@ -277,6 +278,11 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 // Bind to 127.0.0.1 by default (local only); override with HOST for LAN/container exposure.
 const bindHost = process.env["HOST"] ?? "127.0.0.1";
+httpServer.on("error", (err: Error & { code?: string }) => {
+  const hint = err.code === "EADDRINUSE" ? \` (port \${port} is in use; set PORT to another port)\` : "";
+  console.error(\`__NAME__ MCP server: failed to start: \${err.message}\${hint}\`);
+  process.exit(1);
+});
 httpServer.listen(port, bindHost, () => {
   console.log(\`__NAME__ MCP server: ready (Streamable HTTP) at http://\${bindHost}:\${port}/mcp\`);
 });

@@ -94,7 +94,7 @@ describe("kohaku init --mcp", () => {
     await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
     const http = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
     expect(http.match(/createPorts\(/g)).toHaveLength(1);
-    const factory = http.slice(http.indexOf("createServer: () =>"), http.indexOf("// Graceful shutdown"));
+    const factory = http.slice(http.indexOf("createServer: () =>"), http.indexOf("for (const signal of"));
     expect(factory).toContain("attachMcpServer(server, host)");
     expect(factory).not.toContain("createPorts");
     // attachMcpServer takes the host instead of building one itself.
@@ -112,10 +112,11 @@ describe("kohaku init --mcp", () => {
     await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
     const src = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
     expect(src).toContain('from "@kohaku-ui/host/mcp-http"');
-    const call = src.slice(src.indexOf("createMcpHttpServer({"), src.indexOf("// Graceful shutdown"));
-    for (const option of ["createServer:", "allowedHosts:", "allowedOrigins:"]) {
-      expect(call, option).toContain(option);
-    }
+    const call = src.slice(src.indexOf("createMcpHttpServer({"), src.indexOf("for (const signal of"));
+    expect(call).toContain("createServer:");
+    // Pin the env -> option mapping so the two allow-lists cannot be swapped unnoticed.
+    expect(call).toMatch(/allowedHosts: extraNames\(process\.env\["KOHAKU_MCP_ALLOWED_HOSTS"\]\)/);
+    expect(call).toMatch(/allowedOrigins: extraNames\(process\.env\["KOHAKU_MCP_ALLOWED_ORIGINS"\]\)/);
     expect(src).toContain('path: "/mcp"');
     // The guards, CORS and the body cap are the shared scaffold's job now, not copied into the project.
     expect(src).not.toContain("hostHeaderValidation(");
