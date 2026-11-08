@@ -109,6 +109,13 @@ jobs:
         run: |
           pnpm meta:sync
           git diff --exit-code -- packages cli spec
+      # `kohaku init` pins a projection of the pnpm catalog (cli/src/init/versions.ts); without this check a
+      # catalog bump (Dependabot's included) leaves the table stale and the render test red.
+      - name: Init version table drift
+        if: matrix.node-version == 26
+        run: |
+          pnpm init:versions
+          git diff --exit-code -- cli/src/init/versions.ts
       # The two implementations are one protocol implemented twice and are checked against each other, so
       # a given version has to mean the same behaviour in either language. Changesets owns the TypeScript
       # version; this fails if the Python distribution has drifted from it.

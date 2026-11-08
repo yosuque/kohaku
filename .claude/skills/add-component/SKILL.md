@@ -27,7 +27,10 @@ Key points that are easy to miss:
   `_FALLBACK_MAP_PROPS` (`python/kohaku/src/kohaku/registry/core/__init__.py`)
   — it's a hand-ported dict keyed by `fallbackType`, not derived from the JSON
   automatically. A missing entry raises `RuntimeError` at `core_catalog()`
-  construction time, not at the call site that needed the fallback.
+  construction time, not at the call site that needed the fallback. A
+  `migrateProps` is hand-ported the same way, into `_MIGRATE_PROPS` in that
+  file; the exporter emits a `hasMigrateProps: true` marker for it, and the
+  Python loader raises `RuntimeError` if the marker and the table disagree.
 - Add one entry to `STRUCTURAL_CORPUS` in
   `packages/renderer-wc/test/parity/corpus.ts` and both the structural and a11y
   parity tests (React ⇄ Web Components) pick it up automatically — no other
