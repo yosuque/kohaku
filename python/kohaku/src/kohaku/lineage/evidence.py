@@ -284,6 +284,7 @@ EVIDENCE_APPROVAL_EVENT_TYPES: tuple[LineageEventType, ...] = (
     "intent.migrated",
     "action.approvalRequested",
     "action.approved",
+    "action.approvalIssued",
     "action.denied",
     "policy.applied",
 )

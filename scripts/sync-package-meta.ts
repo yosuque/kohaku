@@ -35,6 +35,7 @@ const PUBLISHED_DIRS = [
     "client",
     "composer",
     "data-binding",
+    "domain-mcp",
     "evals",
     "host",
     "host-a2ui",

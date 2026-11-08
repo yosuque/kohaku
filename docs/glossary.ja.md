@@ -10,7 +10,7 @@
 
 **導入ラダー** — 既存の製品に kohaku を組み込む段階的な道筋です。Zero-Port quickstart から始め、Step 0(LLM なしの Server-Driven UI)、Step 1(L1 宣言的合成)、Step 2(L2・昇格・固定化)と進みます。次の段に進んでも、それまでの段は動き続けます。[ユーザーガイド §6](user-guide.ja.md#6-自分のプロダクトに組み込む) を参照してください。
 
-**承認(approval)トークン** — `"approve"` tier の統制された Actionを実行可能にする、短命で用途が 1 つに決まったトークンです。第二の principal(承認者。依頼者本人は不可)が `POST /approvals` で発行します。トークンは特定の action・ペイロードのハッシュ・依頼者・テナントに束縛され、既定では 5 分で失効し、単回使用にもできます。capability トークンとは別のトークンドメインなので、どちらも相手として使い回せません。[SPEC §5](../spec/SPEC.ja.md#5-セキュリティ-normative)(ACT-APR-001)、[仕様 §4.7](specification.ja.md#47-任意の統制-portapprovalport--approvalstore--ratelimitstore) を参照してください。
+**承認(approval)トークン** — `"approve"` tier の統制された Actionを実行可能にする、短命で用途が 1 つに決まったトークンです。第二の principal(承認者。依頼者本人は不可)が `POST /approvals` で発行します。トークンは特定の action・ペイロードのハッシュ・依頼者・テナントに束縛され、既定では 5 分で失効し、単回使用にもできます。監査証跡上のライフサイクルは、要求(`action.approvalRequested`)→ 発行(`action.approvalIssued`。承認者がトークンを発行したとき)→ 承認済み(`action.approved`。依頼者がトークンを提示し、invoke 時に検証・消費されたときに記録される。承認者が承認ボタンを押した時点ではない)または失効(発行イベントの `expiresAt` から導出する。失効のイベントは無い)です。capability トークンとは別のトークンドメインなので、どちらも相手として使い回せません。[SPEC §5](../spec/SPEC.ja.md#5-セキュリティ-normative)(ACT-APR-001)、[仕様 §4.7](specification.ja.md#47-任意の統制-portapprovalport--approvalstore--ratelimitstore) を参照してください。
 
 **capability(トークン)** — compose の応答が Spec とともに返す bearer トークンです。どの `data.$ref` を読めるか、どの宣言済みの書き込み(`action.invoke`)を呼べるかを期限付きで絞り込むので、部品は LLM に認証情報を持たせることなく自分のデータを読み書きできます。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative)、[SPEC §5 セキュリティ](../spec/SPEC.ja.md#5-セキュリティ-normative) を参照してください。
 

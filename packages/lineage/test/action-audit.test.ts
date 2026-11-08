@@ -140,6 +140,38 @@ describe("Lineage.actionInvoked / actionDenied / actionApprovalRequested / actio
     });
   });
 
+  it("actionApprovalIssued records the issuance without any token id", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+
+    await lineage.actionApprovalIssued(
+      {
+        action: "delete",
+        payloadHash: "sha256:eee",
+        requesterId: "requester-1",
+        approverId: "approver-1",
+        ttlSeconds: 300,
+        expiresAt: "2026-11-08T00:05:00.000Z",
+      },
+      { kind: "user", id: "approver-1" },
+      "tenant-a",
+    );
+
+    const event = storage.events[0]!;
+    expect(event.type).toBe("action.approvalIssued");
+    expect(event.actor).toEqual({ kind: "user", id: "approver-1" });
+    expect(event.tenant).toBe("tenant-a");
+    expect(event.payload).toEqual({
+      action: "delete",
+      payloadHash: "sha256:eee",
+      requesterId: "requester-1",
+      approverId: "approver-1",
+      ttlSeconds: 300,
+      expiresAt: "2026-11-08T00:05:00.000Z",
+    });
+    expect(event.payload).not.toHaveProperty("jti");
+  });
+
   it("is retrievable via list({type: [...]})", async () => {
     const storage = memoryStorage();
     const lineage = createLineage({ storage });
@@ -242,5 +274,34 @@ describe("createActionAuditRecorder", () => {
     const event = storage.events[0]!;
     expect(event.type).toBe("action.approved");
     expect(event.payload).toMatchObject({ approverId: "approver-1", requesterId: "u1" });
+  });
+
+  it("approvalIssued() stamps the approver (not the requester) as actor and records no jti", async () => {
+    const storage = memoryStorage();
+    const recorder = createActionAuditRecorder(createLineage({ storage }));
+
+    await recorder.approvalIssued({
+      action: "delete",
+      payloadHash: "sha256:x",
+      requesterId: "u1",
+      approverId: "approver-1",
+      ttlSeconds: 60,
+      expiresAt: "2026-11-08T00:01:00.000Z",
+      principal: { id: "approver-1", roles: ["approver"] },
+      tenant: "tenant-a",
+    });
+
+    const event = storage.events[0]!;
+    expect(event.type).toBe("action.approvalIssued");
+    expect(event.actor).toEqual({ kind: "user", id: "approver-1" });
+    expect(event.tenant).toBe("tenant-a");
+    expect(event.payload).toEqual({
+      action: "delete",
+      payloadHash: "sha256:x",
+      requesterId: "u1",
+      approverId: "approver-1",
+      ttlSeconds: 60,
+      expiresAt: "2026-11-08T00:01:00.000Z",
+    });
   });
 });

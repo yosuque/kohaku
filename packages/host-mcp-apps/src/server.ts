@@ -417,11 +417,19 @@ const COMPOSE_TASK_POLL_INTERVAL_MS = 2_000;
  * task at (composeWithFixation never throws for an aborted call — it degrades to the same fallback Spec
  * any other L1/L2 failure would, just marked `trace.cancelled: true` — so this is the only reliable signal).
  *
+ * `owner` binds the task to its creator (`taskOwnerKey`): `tasks/get` / `tasks/cancel` from any other caller
+ * answer exactly like an unknown task id.
+ *
  * The compose is deliberately NOT awaited here — it runs to completion (or cancellation, or failure) in the
  * background, and the tool call returns immediately with the task descriptor.
  */
-function startComposeTask(ctx: ToolCallContext, input: ComposeSource): { resultType: "task" } & DetailedTask {
+function startComposeTask(
+  ctx: ToolCallContext,
+  input: ComposeSource,
+  owner: string,
+): { resultType: "task" } & DetailedTask {
   const { taskId, abort, task } = ctx.tasks.create({
+    owner,
     ttlMs: COMPOSE_TASK_TTL_MS,
     pollIntervalMs: COMPOSE_TASK_POLL_INTERVAL_MS,
   });
@@ -533,7 +541,7 @@ function composeOrStartTask(
 ): ReturnType<typeof composeAndPackage> {
   if (taskCapable(call, extra)) {
     return asComposePackage<ReturnType<typeof composeAndPackage>>(
-      Promise.resolve(startComposeTask(call, input)),
+      mcpRateLimitKey(call.deps, call.principal, extra).then((owner) => startComposeTask(call, input, owner)),
     );
   }
   return composeAndPackage(call, input);
@@ -1071,6 +1079,26 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   if (options.tasksEnabled === true) registerTaskMethods(ctx);
 }
 
+/** Cap on how much of a client-supplied task id an error message echoes back. */
+const MAX_ECHOED_TASK_ID_LEN = 128;
+
+/** The InvalidParams answer for an unknown, expired or foreign task id (the three are indistinguishable). */
+function unknownTaskError(taskId: string): ProtocolError {
+  const shown =
+    taskId.length <= MAX_ECHOED_TASK_ID_LEN ? taskId : `${taskId.slice(0, MAX_ECHOED_TASK_ID_LEN)}...`;
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown or expired taskId: ${shown}`);
+}
+
+/**
+ * The owner a `tasks/get` / `tasks/cancel` caller is matched against: the key the rate limiter would use for
+ * this call (see `mcpRateLimitKey`) — `deps.rateLimitKey`, else the resolved principal's id, else the session id,
+ * else `"anonymous"`. A throw from `resolvePrincipal` / `rateLimitKey` propagates and fails the request closed,
+ * like a tool call.
+ */
+async function taskOwnerKey(ctx: ToolContext, extra: ServerContext): Promise<string> {
+  return mcpRateLimitKey(ctx.deps, await ctx.principalOf(extra), extra);
+}
+
 /**
  * Registers this profile's two Task-extension methods (see tasks.ts's module doc for why kohaku defines its
  * own types rather than the SDK's deprecated 2025-11-25 `tasks/*` vocabulary). `tasks/update` is deliberately
@@ -1109,20 +1137,18 @@ function registerTaskMethods(ctx: ToolContext): void {
   const protocol = ctx.server.server;
   protocol.registerCapabilities({ extensions: { [TASKS_EXTENSION_ID]: {} } });
   const taskIdParams = z.object({ taskId: z.string() });
-  protocol.setRequestHandler("tasks/get", { params: taskIdParams }, async ({ taskId }) => {
-    const task = ctx.tasks.get(taskId);
-    if (task == null)
-      throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown or expired taskId: ${taskId}`);
+  protocol.setRequestHandler("tasks/get", { params: taskIdParams }, async ({ taskId }, extra) => {
+    const task = ctx.tasks.get(taskId, await taskOwnerKey(ctx, extra));
+    if (task == null) throw unknownTaskError(taskId);
     // No `result` schema is supplied above (RequestHandlerSchemas.result is optional and, per its own doc,
     // unvalidated at runtime either way), so the inferred return type falls back to the SDK's generic Result
     // shape (a string index signature). DetailedTask's discriminated union deliberately has no such index
     // signature (it is meant to be narrowed on `status`), so this is a plain type-level cast, not a runtime one.
     return task as unknown as Record<string, unknown>;
   });
-  protocol.setRequestHandler("tasks/cancel", { params: taskIdParams }, async ({ taskId }) => {
-    const verdict = ctx.tasks.requestCancel(taskId);
-    if (!verdict.ok)
-      throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown or expired taskId: ${taskId}`);
+  protocol.setRequestHandler("tasks/cancel", { params: taskIdParams }, async ({ taskId }, extra) => {
+    const verdict = ctx.tasks.requestCancel(taskId, await taskOwnerKey(ctx, extra));
+    if (!verdict.ok) throw unknownTaskError(taskId);
     return {};
   });
 }

@@ -41,6 +41,22 @@ const approved = (ts: string, requesterId: string | null = "demo-viewer") =>
 const invoked = (ts: string, tier = "approve") =>
   ev("action.invoked", ts, { action: "sales.refund", payloadHash: "sha256:aaa", tier });
 
+const issuedEv = (ts: string, expiresAt: string, over: Record<string, unknown> = {}) =>
+  ev(
+    "action.approvalIssued",
+    ts,
+    {
+      action: "sales.refund",
+      payloadHash: "sha256:aaa",
+      requesterId: "demo-viewer",
+      approverId: "demo-approver",
+      ttlSeconds: 300,
+      expiresAt,
+      ...over,
+    },
+    "demo-approver",
+  );
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -189,5 +205,120 @@ describe("derivePendingApprovals", () => {
       ["a.without-payload", undefined],
       ["a.with-payload", "unverifiable"],
     ]);
+  });
+
+  describe("action.approvalIssued", () => {
+    const NOW = Date.parse("2026-10-05T10:03:00.000Z");
+
+    it("keeps the row pending and attaches issued when requested -> issued", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:02:00.000Z", "2026-10-05T10:07:00.000Z"),
+        ],
+        { now: NOW },
+      );
+      expect(out).toHaveLength(1);
+      expect(out[0]!.issued).toEqual({
+        issuedAt: "2026-10-05T10:02:00.000Z",
+        expiresAt: "2026-10-05T10:07:00.000Z",
+        approverId: "demo-approver",
+      });
+    });
+
+    it("removes the row for issued -> approved (settlement is decided by action.approved only)", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:02:00.000Z", "2026-10-05T10:07:00.000Z"),
+          approved("2026-10-05T10:02:30.000Z"),
+        ],
+        { now: NOW },
+      );
+      expect(out).toEqual([]);
+    });
+
+    it("an issuance alone never settles a row and never creates one", async () => {
+      expect(
+        await derivePendingApprovals([issuedEv("2026-10-05T10:02:00.000Z", "2026-10-05T10:07:00.000Z")], {
+          now: NOW,
+        }),
+      ).toEqual([]);
+    });
+
+    it("drops an expired issuance and the row goes back to plain pending", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T09:50:00.000Z", "2026-10-05T09:55:00.000Z"),
+        ],
+        { now: NOW },
+      );
+      expect(out).toHaveLength(1);
+      expect(out[0]!.issued).toBeUndefined();
+    });
+
+    it("an issuance at or past its expiry instant is expired", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:00:30.000Z", "2026-10-05T10:03:00.000Z"),
+        ],
+        { now: NOW },
+      );
+      expect(out[0]!.issued).toBeUndefined();
+    });
+
+    it("ignores an issuance older than the latest approved (a stale token for a settled request)", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:00:30.000Z", "2026-10-05T10:05:30.000Z"),
+          approved("2026-10-05T10:01:00.000Z"),
+          requested("2026-10-05T10:02:00.000Z"),
+        ],
+        { now: NOW },
+      );
+      expect(out).toHaveLength(1);
+      expect(out[0]!.issued).toBeUndefined();
+    });
+
+    it("uses the latest issuance and matches only its own (requester, action, payloadHash)", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:01:00.000Z", "2026-10-05T10:06:00.000Z", { approverId: "first" }),
+          issuedEv("2026-10-05T10:02:00.000Z", "2026-10-05T10:07:00.000Z", { approverId: "second" }),
+          issuedEv("2026-10-05T10:02:30.000Z", "2026-10-05T10:07:30.000Z", { requesterId: "someone-else" }),
+        ],
+        { now: NOW },
+      );
+      expect(out[0]!.issued?.approverId).toBe("second");
+    });
+
+    it("does not attach an issuance whose action or payloadHash differs from the row", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:02:00.000Z", "2026-10-05T10:07:00.000Z", { action: "sales.other" }),
+          issuedEv("2026-10-05T10:02:10.000Z", "2026-10-05T10:07:00.000Z", { payloadHash: "sha256:bbb" }),
+        ],
+        { now: NOW },
+      );
+      expect(out).toHaveLength(1);
+      expect(out[0]!.issued).toBeUndefined();
+    });
+
+    it("skips a malformed issuance (no expiresAt / unparseable)", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:02:00.000Z", "not-a-date"),
+          issuedEv("2026-10-05T10:02:10.000Z", "", { expiresAt: undefined }),
+        ],
+        { now: NOW },
+      );
+      expect(out[0]!.issued).toBeUndefined();
+    });
   });
 });

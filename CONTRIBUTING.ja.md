@@ -40,7 +40,7 @@ LLM キーが無くても始められます。L0 の固定 Spec(`pnpm test` が�
 
 ## 5. 生成物
 
-このリポジトリのいくつかのファイルは手書きではなく生成物です。CI は各生成物を再生成し、差分があればビルドを失敗させます(`git diff --exit-code`)。**再生成が必要な変更は、再生成した出力を同じコミットに含めてください。** 下表の生成物を手で編集しないでください。
+このリポジトリのいくつかのファイルは手書きではなく生成物です。CI は各生成物を再生成し、差分があればビルドを失敗させます(`git diff --exit-code`。init の golden だけは `pnpm test` がバイト単位で比較します)。**再生成が必要な変更は、再生成した出力を同じコミットに含めてください。** 下表の生成物を手で編集しないでください。
 
 | コマンド | 出力 | 必要になるタイミング |
 |---|---|---|
@@ -49,8 +49,17 @@ LLM キーが無くても始められます。L0 の固定 Spec(`pnpm test` が�
 | `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures` | `spec/test/fixtures/cross-language-canonical.json` | canonical JSON / hash / cacheKey / sanitize 許可リストを変えたとき |
 | `pnpm intents:emit` | `apps/sample-web/src/generated/facet-views.json` | `apps/sample-api/src/intents/catalog.ts` の facet を変えたとき |
 | `pnpm seed` | `apps/sample-api/src/domain/seed/` | seed 生成器を変えたとき |
+| `pnpm meta:sync` | 公開パッケージ(`packages/*`、`cli`、`spec`)の `package.json` にある `publishConfig` と共通の公開メタデータ | 公開パッケージの `exports` を追加・変更したとき |
+| `pnpm python:version` | `python/kohaku/pyproject.toml`、`python/kohaku/src/kohaku/__init__.py`、`python/uv.lock` | TypeScript 側のバージョンが変わったとき(`pnpm version` が実行します) |
+| `pnpm init:versions` | `cli/src/init/versions.ts` | `pnpm-workspace.yaml` の `catalog:` のうち `kohaku init` が固定している版を変えたとき(対象パッケージの一覧は `scripts/lib/init-versions.mjs`) |
+| `KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts` | `cli/test/init/__golden__/` | `kohaku init` のテンプレートを意図して変えたとき(テストが生成プロジェクトをバイト単位で比較します。通常版と `--mcp` の両方) |
 
-複数が該当する場合は次の順で実行してください(後段の手順はワークスペースがインストール済みであることに依存するため、まず install から始めます)。
+ほかに 2 つ、テストで固定されているものの手で書く成果物があります。値がソースからの関数ではなく判断によるためです。
+
+- core カタログのフィンガープリント: `packages/registry/test/catalog.test.ts`(TS)と `python/kohaku/tests/registry/test_fingerprint.py`(Python)。core コンポーネントを追加・変更すると変わります。テストを一度走らせ、失敗の差分に出る新しい値を貼ってください([add-component.md](docs/runbooks/add-component.md) を参照)。
+- `apps/docs-site/snippets/` の docs スニペット: `docs/paths/*.md` の各ページの最初のコードブロックはここから貼ります(スニペットを編集してから両言語のページへ貼る。不一致は `apps/docs-site/test/snippets.test.ts` が検出します)。
+
+**`pnpm regen` は上の表のコマンドをすべて正しい順で実行し、最初に失敗した時点で止まります**(先に `pnpm install` を実行してください。各手順はワークスペースがインストール済みであることに依存するためです)。手で固定する 2 つの成果物には触れません。該当するものが分かっているなら、そのコマンドだけを実行するほうが速く済みます。自分で実行する場合の順序は次のとおりです。
 
 ```
 pnpm install
@@ -59,6 +68,10 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog
 pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures
 pnpm intents:emit
 pnpm seed
+pnpm meta:sync
+pnpm python:version
+pnpm init:versions
+KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts
 ```
 
 ## 6. バイリンガルドキュメント
@@ -109,7 +122,7 @@ pnpm changeset
 ```
 
 changeset を含む PR が `main` にマージされると、Version ワークフローが `chore(release): version packages`
-PR を作成・更新します。マージ前にこの PR の diff をレビューしてください: 29 パッケージのマニフェスト全て、28
+PR を作成・更新します。マージ前にこの PR の diff をレビューしてください: 30 パッケージのマニフェスト全て、30
 件の `CHANGELOG.md`、`python/kohaku/pyproject.toml`、`python/kohaku/src/kohaku/__init__.py`、ロックファイルが
 変更されます。この PR をマージしても**公開はされません**——下書きの GitHub Release `vX.Y.Z` が現れるだけです
 (本文は CHANGELOG から自動生成されます)。公開は別の、意図的な操作です: まず `main` から Release ワークフロー
@@ -117,7 +130,7 @@ PR を作成・更新します。マージ前にこの PR の diff をレビュ�
 PyPI の順に公開するのを見守ります。手順全体と公開前チェックリストは
 [docs/runbooks/release.ja.md](docs/runbooks/release.ja.md) を参照してください。
 
-`@kohaku-ui/*` の 29 パッケージは**常に同一バージョン**です。1 つのワイヤプロトコルの 1 実装であり、バージョンが割れると利用者のツリーに互換性のない `spec-core` が 2 つ入りうるためです。詳細は [.changeset/README.md](.changeset/README.md)。**開発者のマシンから publish することはありません。**
+`@kohaku-ui/*` の 30 パッケージは**常に同一バージョン**です。1 つのワイヤプロトコルの 1 実装であり、バージョンが割れると利用者のツリーに互換性のない `spec-core` が 2 つ入りうるためです。詳細は [.changeset/README.md](.changeset/README.md)。**開発者のマシンから publish することはありません。**
 
 ## 12. 依存関係
 

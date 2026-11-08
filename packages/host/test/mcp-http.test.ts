@@ -2,7 +2,7 @@ import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { McpServer } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { createMcpHttpServer, type McpHttpServerOptions } from "../src/mcp-http.js";
+import { createMcpHttpServer, DEFAULT_MAX_BODY_BYTES, type McpHttpServerOptions } from "../src/mcp-http.js";
 
 interface Reply {
   status: number;
@@ -130,6 +130,30 @@ describe("createMcpHttpServer (defaults follow the kohaku init --mcp server)", (
     });
   });
 
+  it("applies a 4 MiB default body limit when maxBodyBytes is unset", async () => {
+    expect(DEFAULT_MAX_BODY_BYTES).toBe(4 * 1024 * 1024);
+    const port = await start();
+    // Declare the oversized length instead of streaming 4 MiB: the Content-Length pre-check answers before
+    // reading, and the client does not race a connection the server closes after the 413.
+    const res = await send(
+      port,
+      "POST",
+      "/mcp",
+      { "Content-Type": "application/json", "Content-Length": String(DEFAULT_MAX_BODY_BYTES + 1) },
+      "x",
+    );
+    expect(res.status).toBe(413);
+    expect(JSON.parse(res.body).error.code).toBe(-32000);
+  });
+
+  it("accepts an Origin listed in allowedOrigins and echoes it back", async () => {
+    const port = await start({ allowedOrigins: ["app.example"] });
+    const res = await send(port, "OPTIONS", "/mcp", { Origin: "https://app.example" });
+    expect(res.status).toBe(204);
+    expect(res.headers["access-control-allow-origin"]).toBe("https://app.example");
+    expect((await send(port, "OPTIONS", "/mcp", { Origin: "https://other.example" })).status).toBe(403);
+  });
+
   it("serves every path through the MCP handler when no path is set", async () => {
     const port = await start();
     // The handler answers GET with 405 (stateless serving has no standalone stream); a 404 would mean the helper routed it.
@@ -196,4 +220,28 @@ describe("createMcpHttpServer options", () => {
     expect(huge.status).toBe(413);
     expect(JSON.parse(huge.body).error).toEqual({ code: -32000, message: "too big" });
   });
+
+  it("runs the Host guard before routing: a bad Host on an unknown path gets 403, not 404", async () => {
+    const port = await start({ path: "/mcp", routes: () => false });
+    expect((await send(port, "GET", "/other", { Host: "evil.example" })).status).toBe(403);
+    expect((await send(port, "GET", "/other")).status).toBe(404);
+  });
+
+  it.each(["//", "//[", "//x:99999"])(
+    "answers a request-target the URL parser rejects (%s) with 400 / -32600 instead of crashing",
+    async (target) => {
+      for (const overrides of [{ path: "/mcp" }, { routes: () => false }]) {
+        const port = await start(overrides);
+        const res = await send(port, "GET", target);
+        expect(res.status).toBe(400);
+        expect(JSON.parse(res.body)).toEqual({
+          jsonrpc: "2.0",
+          error: { code: -32600, message: "Invalid Request" },
+          id: null,
+        });
+        // The server is still alive afterwards.
+        expect((await send(port, "OPTIONS", "/mcp")).status).toBe(204);
+      }
+    },
+  );
 });

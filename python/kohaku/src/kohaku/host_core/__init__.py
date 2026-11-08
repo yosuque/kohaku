@@ -6,7 +6,7 @@ source of truth for the fixation (L1->L0) delivery + staleness self-healing sequ
 a composed Spec, and fail-open observability-hook helpers.
 """
 
-from .action_audit import ActionAuditRecorder
+from .action_audit import ActionAuditRecorder, ApprovalIssuedRecorder
 from .action_effects import (
     ActionEffectsHook,
     ActionEffectsResponse,
@@ -177,6 +177,7 @@ __all__ = [
     "ActionManifest",
     "ActionManifestEntry",
     "AllowedActions",
+    "ApprovalIssuedRecorder",
     "CatalogDeprecatedUsageEntry",
     "CatalogDeprecatedUsageFixation",
     "CatalogDeprecatedUsagePromotion",

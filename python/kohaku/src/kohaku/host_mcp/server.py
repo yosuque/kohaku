@@ -67,6 +67,7 @@ from kohaku.host_core import notify_hook_nowait as _host_core_notify_hook_nowait
 from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.host_core import start_operation_index_validation as _host_core_start_index_validation
+from kohaku.llm import AbortSignal
 from kohaku.spec import (
     MAX_JSON_OBJECT_DEPTH,
     ActionParamIssue,
@@ -101,6 +102,14 @@ from .meta import (
     tool_ui_meta,
 )
 from .snapshot import inject_snapshot
+from .tasks import (
+    COMPOSE_TASK_POLL_INTERVAL_MS,
+    COMPOSE_TASK_TTL_MS,
+    TASKS_EXTENSION_ID,
+    TaskStore,
+    create_task_result,
+    create_task_store,
+)
 from .types import (
     AttachOptions,
     McpErrorInfo,
@@ -393,6 +402,59 @@ def _trace_context_of(ctx: ServerRequestContext[Any]) -> TraceContext | None:
     return parse_trace_context(meta.get("traceparent"), meta.get("tracestate"))
 
 
+# The 2026-07-28 per-request envelope key under which a client states its own capabilities (the mcp SDK's
+# CLIENT_CAPABILITIES_META_KEY, re-spelled here as a literal like `_trace_context_of`'s traceparent keys).
+_CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
+
+
+def _task_extension_declared(ctx: ServerRequestContext[Any]) -> bool:
+    """Whether THIS SPECIFIC request declared the MCP Tasks extension (io.modelcontextprotocol/tasks, 2026-07-28
+    dated-stable) via its per-request `_meta` envelope claim
+    (`_meta["io.modelcontextprotocol/clientCapabilities"].extensions["io.modelcontextprotocol/tasks"]`). This is a
+    spec MUST, not a style choice: a server MUST NOT return a `CreateTaskResult` to a client that did not declare
+    the extension on that request — so every task-capable tool handler gates on this before ever considering an
+    async/task response, and executes exactly as before (byte-identical) when it is absent. Port of TS
+    `taskExtensionDeclared` (which reads the same claim off `extra.mcpReq.envelope`).
+    """
+    meta = ctx.meta
+    if meta is None:
+        return False
+    capabilities = meta.get(_CLIENT_CAPABILITIES_META_KEY)
+    if not isinstance(capabilities, dict):
+        return False
+    extensions = capabilities.get("extensions")
+    return isinstance(extensions, dict) and TASKS_EXTENSION_ID in extensions
+
+
+def _client_failure_message(exc: BaseException) -> str:
+    """The client-visible message for a failure that reached a tool boundary (a synchronous tool call's catch in
+    `_safe_tool`, or a background MCP Tasks compose failing in `_start_compose_task`). An unavailable LLM provider
+    (LlmError PROVIDER / CONFIG / ABORTED) is an operator-side failure whose raw SDK wording must not reach the
+    model: host_core's `classify_host_error` gives it the same fixed message the REST profile answers with on 503.
+    A typed host error passes its own message through; everything else collapses to
+    `_TOOL_INTERNAL_ERROR_MESSAGE`. Port of TS `clientFailureMessage`.
+    """
+    cls = classify_host_error(exc)
+    if cls.kind == "upstream_unavailable":
+        return LLM_PROVIDER_UNAVAILABLE_MESSAGE
+    return str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE
+
+
+# Cap on how much of a client-supplied task id an error message echoes back.
+_MAX_ECHOED_TASK_ID_LEN = 128
+
+# Side channel from a low-level `Server` instance to the in-memory `TaskStore` `attach_kohaku_to_mcp_server` built
+# for it, read by `_get_task_store_for_test`. Exists so a test can seed a task (or inspect one) without going
+# through a task-backed tool call. Weakly keyed, so it never keeps a Server alive.
+_task_stores_by_server: weakref.WeakKeyDictionary[Any, TaskStore] = weakref.WeakKeyDictionary()
+
+
+def _get_task_store_for_test(server: Server) -> TaskStore | None:
+    """Test-only (not part of the public surface): the `TaskStore` `attach_kohaku_to_mcp_server` built for
+    `server` (built even when `AttachOptions.tasks_enabled` is off, as in TS — it is simply never used then)."""
+    return _task_stores_by_server.get(server)
+
+
 def _with_locale_input(input_schema: dict[str, Any], tool_name: str) -> dict[str, Any]:
     """Return a copy of an intent tool's inputSchema with the shared `locale` property injected.
 
@@ -635,12 +697,15 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         )
         return _rate_limit_tool_error(result.retryAfterMs)
 
-    async def _safe_tool(
+    async def _safe_tool[T](
         endpoint: str,
         ctx: ServerRequestContext[Any],
-        fn: Callable[[], Awaitable[mcp_types.CallToolResult]],
-    ) -> mcp_types.CallToolResult:
+        fn: Callable[[], Awaitable[T]],
+    ) -> T | mcp_types.CallToolResult:
         """Route a handler failure through the observation hook then convert it to a tool error (the success return value is unchanged).
+
+        `T` is `CallToolResult` for every tool except the task-capable compose family, whose success value may
+        instead be a `CreateTaskResult` dict (`_compose_or_start_task`).
 
         An arbitrary/untyped exception's message never reaches the caller (it may leak internals); a typed
         host error (kohaku.host_core.is_typed_host_error — SpecError/ComposeError/QueryRefError, or any
@@ -662,11 +727,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             )
             # An unavailable LLM provider (LlmError PROVIDER / CONFIG / ABORTED) gets host_core's fixed message
             # (the same text the REST profile answers with on 503); its raw SDK wording must not reach the model.
-            cls = classify_host_error(exc)
-            if cls.kind == "upstream_unavailable":
-                return _tool_error(LLM_PROVIDER_UNAVAILABLE_MESSAGE)
-            message = str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE
-            return _tool_error(message)
+            return _tool_error(_client_failure_message(exc))
 
     async def _compose_and_package(
         source: _ComposeSource,
@@ -674,7 +735,27 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         principal: Principal,
         correlation_id: str | None = None,
     ) -> mcp_types.CallToolResult:
-        result = await _compose_with_fixation(source, deps, locale, principal, correlation_id)
+        packaged, _result = await _compose_and_package_with_result(
+            source, locale, principal, correlation_id
+        )
+        return packaged
+
+    async def _compose_and_package_with_result(
+        source: _ComposeSource,
+        locale: str | None,
+        principal: Principal,
+        correlation_id: str | None = None,
+        abort: AbortSignal | None = None,
+    ) -> tuple[mcp_types.CallToolResult, ComposeResult]:
+        """compose -> capability -> action manifest -> audit -> package. Also hands back the raw `ComposeResult`
+        (TS splits this as `composeForDelivery` + `packageComposed`): a background task needs
+        `result.trace.cancelled` to tell a genuine `tasks/cancel`-driven cancellation apart from an ordinary
+        completion or generation fallback, and the packaged tool result does not carry that distinction.
+        `abort` is the task's own signal (a synchronous tool call passes None: see the NOTE on tool-call
+        cancellation in `_call_tool`'s doc comment)."""
+        result = await _compose_with_fixation(
+            source, deps, locale, principal, correlation_id, abort=abort
+        )
         try:
             allowed = await _allowed_actions()
         except Exception as exc:  # noqa: BLE001 — reported, then fail-closed for writes (delivery proceeds)
@@ -744,36 +825,145 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 )
             except Exception as exc:  # noqa: BLE001 — fail-open
                 await _report_mcp_error(deps, "compose.legacyUiResource", exc)
-        return mcp_types.CallToolResult(
+        packaged = mcp_types.CallToolResult(
             content=content,
             # capability is deliberately NOT included here (see CAPABILITY_META_KEY's doc comment):
             # structured_content is model-visible, and a bearer write token must never enter the model's context.
             structured_content={"spec": result.spec.to_wire()},
             _meta=meta,
         )
+        return packaged, result
+
+    # --- MCP Tasks extension (io.modelcontextprotocol/tasks), port of TS startComposeTask / taskCapable ---
+    # One in-memory store per attach call (see tasks.py's create_task_store doc comment). It exists even when
+    # `options.tasks_enabled` is off (the store is just never reached then), as in TS.
+    _tasks = create_task_store()
+    _task_stores_by_server[server] = _tasks
+    # Strong references to in-flight task bodies: asyncio keeps only a weak reference to a running Task, so an
+    # unreferenced background compose could be garbage-collected mid-flight.
+    _task_bodies: set[asyncio.Future[None]] = set()
+
+    def _task_capable(ctx: ServerRequestContext[Any]) -> bool:
+        """Whether a task-capable tool call should actually take the async/task branch for THIS request: the
+        product-level `AttachOptions.tasks_enabled` kill switch (default off) AND the per-request opt-in
+        (`_task_extension_declared`) both have to hold. It is a default-off product decision (whether to hand a
+        declaring client a task handle at all), so the default keeps every compose-family tool synchronous
+        regardless of what a request declares. See `AttachOptions.tasks_enabled`'s doc comment."""
+        return options.tasks_enabled is True and _task_extension_declared(ctx)
+
+    def _start_compose_task(
+        source: _ComposeSource,
+        locale: str | None,
+        principal: Principal,
+        correlation_id: str | None,
+        owner: str,
+        trace_context: TraceContext | None,
+    ) -> dict[str, Any]:
+        """Starts a compose (any `_ComposeSource`) as a background task instead of awaiting it inline, returning
+        the `CreateTaskResult` describing the just-created "working" task. Only called after `_task_capable` has
+        already gated the request.
+
+        Cancellation: `tasks/cancel` (see `_register_task_methods`) fires the same `AbortController` the task
+        store hands back from `create`, which rides into `_compose_with_fixation`'s `abort` — the exact same
+        client-abort path TS wires for `${prefix}_compose`. A `tasks/cancel` IS a client abort. The task body
+        observes `result.trace.cancelled` to tell a genuine cancellation apart from an ordinary completion or
+        generation fallback when deciding which terminal status to settle the task at (compose_with_fixation
+        never raises for an aborted call — it degrades to the same fallback Spec any other L1/L2 failure would,
+        just marked `trace.cancelled` — so this is the only reliable signal).
+
+        `owner` binds the task to its creator (`_task_owner_key`): `tasks/get` / `tasks/cancel` from any other
+        caller answer exactly like an unknown task id.
+
+        The compose is deliberately NOT awaited here — it runs to completion (or cancellation, or failure) in the
+        background, and the tool call returns immediately with the task descriptor.
+        """
+        created = _tasks.create(
+            owner=owner,
+            ttl_ms=COMPOSE_TASK_TTL_MS,
+            poll_interval_ms=COMPOSE_TASK_POLL_INTERVAL_MS,
+        )
+
+        async def _body() -> None:
+            try:
+                packaged, result = await _compose_and_package_with_result(
+                    source, locale, principal, correlation_id, created.abort.signal
+                )
+                if result.trace.cancelled is True:
+                    _tasks.cancelled(created.task_id)
+                else:
+                    _tasks.complete(
+                        created.task_id,
+                        packaged.model_dump(by_alias=True, mode="json", exclude_none=True),
+                    )
+            except Exception as exc:  # noqa: BLE001 — a failed task settles as "failed", never propagates
+                # Same correlation id the tool call's compose pipeline recorded, and the same client-visible
+                # classification as _safe_tool: a task's failure message reaches the client through tasks/get,
+                # so a raw provider SDK message (e.g. an LlmError naming the missing API key) must not be
+                # stored there.
+                await _report_mcp_error(
+                    deps,
+                    "tasks.compose",
+                    exc,
+                    correlation_id=correlation_id,
+                    trace_context=trace_context,
+                )
+                _tasks.fail(created.task_id, {"message": _client_failure_message(exc)})
+
+        body = asyncio.ensure_future(_body())
+        _task_bodies.add(body)
+        body.add_done_callback(_task_bodies.discard)
+        return create_task_result(created.task)
+
+    async def _compose_or_start_task(
+        source: _ComposeSource,
+        locale: str | None,
+        principal: Principal,
+        correlation_id: str | None,
+        ctx: ServerRequestContext[Any],
+    ) -> mcp_types.CallToolResult | dict[str, Any]:
+        """The shared tail of every task-capable compose-family handler (`${prefix}_compose` and the intent
+        tools): the async/task branch when this request may take it (`_task_capable`), otherwise the plain
+        synchronous `_compose_and_package`. Rate limiting and principal resolution happened before this (in each
+        handler), as in TS."""
+        if _task_capable(ctx):
+            return _start_compose_task(
+                source,
+                locale,
+                principal,
+                correlation_id,
+                await _mcp_rate_limit_key(deps, principal, ctx),
+                _trace_context_of(ctx),
+            )
+        return await _compose_and_package(source, locale, principal, correlation_id)
 
     # --- Tool definitions (name -> Tool + handler) --------------------------
+    # A handler's success value is a CallToolResult, except that a task-capable compose-family tool may return a
+    # `CreateTaskResult` dict instead (see `_compose_or_start_task`).
     registered: list[
         tuple[
             mcp_types.Tool,
-            Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]],
+            Callable[
+                [ServerRequestContext[Any], JsonObject],
+                Awaitable[mcp_types.CallToolResult | dict[str, Any]],
+            ],
         ]
     ] = []
 
     # model-visible: natural language -> UI
     async def _handle_compose(
         ctx: ServerRequestContext[Any], args: JsonObject
-    ) -> mcp_types.CallToolResult:
-        async def _run() -> mcp_types.CallToolResult:
+    ) -> mcp_types.CallToolResult | dict[str, Any]:
+        async def _run() -> mcp_types.CallToolResult | dict[str, Any]:
             principal = await _current_principal(ctx)
             rate_limited = await _check_mcp_rate_limit(principal, "compose", ctx)
             if rate_limited is not None:
                 return rate_limited
-            return await _compose_and_package(
+            return await _compose_or_start_task(
                 _NlSource(text=_arg_str(args, "question")),
                 _locale_of(args),
                 principal,
                 _correlation_id_of(ctx),
+                ctx,
             )
 
         return await _safe_tool(f"{prefix}_compose", ctx, _run)
@@ -885,7 +1075,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 _make_intent_handler(
                     tool,
                     _safe_tool,
-                    _compose_and_package,
+                    _compose_or_start_task,
                     _current_principal,
                     _check_mcp_rate_limit,
                 ),
@@ -1214,7 +1404,11 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
     )
 
     by_name: dict[
-        str, Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]
+        str,
+        Callable[
+            [ServerRequestContext[Any], JsonObject],
+            Awaitable[mcp_types.CallToolResult | dict[str, Any]],
+        ],
     ] = {tool_def.name: handler for tool_def, handler in registered}
     tools_list: list[mcp_types.Tool] = [tool_def for tool_def, _ in registered]
 
@@ -1254,10 +1448,11 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
     # object to pass to composeWithFixation the way the TS profile's `extra.signal` is threaded through. If a
     # future mcp SDK version adds a per-request cancellation token to `ServerRequestContext`, thread it into
     # `_compose_with_fixation`'s `ComposeFixationContext(materialize=deps.compose, abort=...)` the same way
-    # the TS `abort` parameter is used.
+    # the TS `abort` parameter is used. (The one exception: a compose started as an MCP Task owns its own
+    # AbortController, fired by `tasks/cancel`, and DOES thread it as `abort` -- see `_start_compose_task`.)
     async def _call_tool(
         ctx: ServerRequestContext[Any], params: mcp_types.CallToolRequestParams
-    ) -> mcp_types.CallToolResult:
+    ) -> mcp_types.CallToolResult | dict[str, Any]:
         handler = by_name.get(params.name)
         if handler is None:
             return _tool_error(f'unknown tool "{params.name}"')
@@ -1317,6 +1512,81 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         "resources/read", mcp_types.ReadResourceRequestParams, _read_resource
     )
 
+    # tasks/get and tasks/cancel are not tools (no tools/list visibility), so their registration is not subject to
+    # any tool-ordering constraint. Gated behind AttachOptions.tasks_enabled (default off): the default is a
+    # product decision (whether to hand a declaring client a task handle at all); leave the server silent about
+    # the extension entirely unless asked.
+    async def _task_owner_key(ctx: ServerRequestContext[Any]) -> str:
+        """The owner a `tasks/get` / `tasks/cancel` caller is matched against: the key the rate limiter would
+        use for this call (see `_mcp_rate_limit_key`) -- `deps.rate_limit_key`, else the resolved principal's id,
+        else the connection id. A throw from `resolve_principal` / `rate_limit_key` propagates and fails the
+        request closed, like a tool call."""
+        return await _mcp_rate_limit_key(deps, await _current_principal(ctx), ctx)
+
+    if options.tasks_enabled is True:
+        _register_task_methods(server, _tasks, _task_owner_key)
+
+
+def _register_task_methods(
+    server: Server,
+    tasks: TaskStore,
+    owner_key_of: Callable[[ServerRequestContext[Any]], Awaitable[str]],
+) -> None:
+    """Registers this profile's two Task-extension methods and advertises the extension (see tasks.py's module doc
+    for why kohaku defines its own snapshots rather than the SDK's 2025-11-25 `tasks/*` types). `tasks/update` is
+    deliberately NOT implemented: it exists for a server that reaches `status: "input_required"` to collect
+    mid-flight input, and kohaku's compose takes none (an Intent's params are supplied up front; there is no
+    server-side "waiting on the client for more input" state anywhere in the composition pipeline) — so that half
+    of the extension has nothing to hook onto and is omitted rather than stubbed.
+
+    Uses the mcp SDK's pluggable-extension seam: `Server.add_request_handler` for the two method names — which the
+    SDK's frozen per-version method tables deliberately leave out (`tasks/*` absent), so they route as extension
+    methods rather than answering METHOD_NOT_FOUND — and `Server.extensions` for the `ServerCapabilities.extensions`
+    advertisement (surfaced on `server/discover`). With nothing registered both names answer METHOD_NOT_FOUND,
+    which is what `tasks_enabled` off relies on.
+
+    Both methods are bound to the task's creator (`owner_key_of`, see `TaskStore`): a caller whose owner key
+    differs gets the same InvalidParams answer as for an unknown id, so a leaked task id reveals nothing.
+    """
+    import mcp_types
+    from mcp.shared.exceptions import MCPError
+
+    class _TaskIdParams(mcp_types.RequestParams):
+        task_id: str
+
+    def _unknown(task_id: str) -> MCPError:
+        # The id is client-controlled input echoed back: bound it.
+        shown = (
+            task_id
+            if len(task_id) <= _MAX_ECHOED_TASK_ID_LEN
+            else task_id[:_MAX_ECHOED_TASK_ID_LEN] + "..."
+        )
+        return MCPError(
+            code=mcp_types.INVALID_PARAMS, message=f"Unknown or expired taskId: {shown}"
+        )
+
+    async def _tasks_get(ctx: ServerRequestContext[Any], params: _TaskIdParams) -> dict[str, Any]:
+        task = tasks.get(params.task_id, await owner_key_of(ctx))
+        if task is None:
+            raise _unknown(params.task_id)
+        return task
+
+    async def _tasks_cancel(
+        ctx: ServerRequestContext[Any], params: _TaskIdParams
+    ) -> dict[str, Any]:
+        if not tasks.request_cancel(params.task_id, await owner_key_of(ctx)):
+            raise _unknown(params.task_id)
+        return {}
+
+    # NOTE: this relies on the low-level `Server.extensions` attribute (identifier -> settings), which
+    # `Server.get_capabilities()` reads when it builds `ServerCapabilities.extensions` -- the public seam the SDK's
+    # own `MCPServer(extensions=[...])` populates. On an `mcp` upgrade re-check that (a) that attribute still
+    # exists and feeds `server/discover`, (b) `add_request_handler` still routes the non-spec `tasks/*` names, and
+    # (c) a `resultType: "task"` tools/call result still passes the outbound sieve: test_tasks.py pins all three.
+    server.extensions[TASKS_EXTENSION_ID] = {}
+    server.add_request_handler("tasks/get", _TaskIdParams, _tasks_get)
+    server.add_request_handler("tasks/cancel", _TaskIdParams, _tasks_cancel)
+
 
 # ---------------------------------------------------------------------------
 # Internal logic for compose / fixation / reference resolution (independent of mcp types)
@@ -1373,6 +1643,7 @@ async def _compose_with_fixation(
     locale: str | None = None,
     principal: Principal | None = None,
     correlation_id: str | None = None,
+    abort: AbortSignal | None = None,
 ) -> ComposeResult:
     # One session per tool call: the caller-provided locale rides SessionContext.locale so NL
     # normalization, the fixation gate, and the compose policy (ComposeContext.policyFor) all see it.
@@ -1411,7 +1682,7 @@ async def _compose_with_fixation(
     return await _host_core_compose_with_fixation(
         intent,
         session,
-        ComposeFixationContext(materialize=deps.compose),
+        ComposeFixationContext(materialize=deps.compose, abort=abort),
         _fixation_host(deps),
         correlation_id=correlation_id,
     )
@@ -1644,39 +1915,49 @@ def _to_wire_data(data: object) -> Any:
     return data
 
 
+# What a task-capable compose-family tool handler yields: the packaged `CallToolResult`, or (only when the
+# request opted in and `AttachOptions.tasks_enabled` is on) a `CreateTaskResult` dict. A PEP 695 `type` alias is
+# lazily evaluated, so it never touches `mcp_types` at runtime (which is imported lazily; see
+# `_MCP_MISSING_MESSAGE`).
+type _ToolResult = mcp_types.CallToolResult | dict[str, Any]
+
+
 def _make_intent_handler(
     tool: IntentToolDef,
     safe_tool: Callable[
-        [str, ServerRequestContext[Any], Callable[[], Awaitable[mcp_types.CallToolResult]]],
-        Awaitable[mcp_types.CallToolResult],
+        [str, ServerRequestContext[Any], Callable[[], Awaitable[_ToolResult]]],
+        Awaitable[_ToolResult],
     ],
-    compose_and_package: Callable[
-        [_ComposeSource, str | None, Principal, str | None], Awaitable[mcp_types.CallToolResult]
+    compose_or_start_task: Callable[
+        [_ComposeSource, str | None, Principal, str | None, ServerRequestContext[Any]],
+        Awaitable[_ToolResult],
     ],
     current_principal: Callable[[ServerRequestContext[Any]], Awaitable[Principal]],
     check_rate_limit: Callable[
         [Principal, Literal["compose", "action", "resolve"], ServerRequestContext[Any]],
         Awaitable[mcp_types.CallToolResult | None],
     ],
-) -> Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]:
-    """Build the handler for an intent tool (avoids late binding of the loop variable tool)."""
+) -> Callable[[ServerRequestContext[Any], JsonObject], Awaitable[_ToolResult]]:
+    """Build the handler for an intent tool (avoids late binding of the loop variable tool). Task-capable on the
+    same basis as `${prefix}_compose` (`compose_or_start_task`)."""
 
-    async def handler(ctx: ServerRequestContext[Any], args: JsonObject) -> mcp_types.CallToolResult:
+    async def handler(ctx: ServerRequestContext[Any], args: JsonObject) -> _ToolResult:
         # Pull the shared language input out before it reaches the intent params (ObjectSchema.parse
         # would silently strip it anyway, but the canonical intent must never see it).
         locale = _locale_of(args)
         params = {key: value for key, value in args.items() if key != "locale"}
 
-        async def _run() -> mcp_types.CallToolResult:
+        async def _run() -> _ToolResult:
             principal = await current_principal(ctx)
             rate_limited = await check_rate_limit(principal, "compose", ctx)
             if rate_limited is not None:
                 return rate_limited
-            return await compose_and_package(
+            return await compose_or_start_task(
                 _IntentSource(intent=tool.to_intent(params)),
                 locale,
                 principal,
                 _correlation_id_of(ctx),
+                ctx,
             )
 
         return await safe_tool(tool.name, ctx, _run)

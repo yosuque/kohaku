@@ -40,7 +40,7 @@ An LLM key is not required to get started: the L0 fixed Specs (and everything `p
 
 ## 5. Generated artifacts
 
-Several files in this repository are generated, not hand-written. CI regenerates each one and fails the build on any diff (`git diff --exit-code`), so **a change that requires regeneration must include the regenerated output in the same commit**. Never hand-edit a generated file listed below.
+Several files in this repository are generated, not hand-written. CI regenerates each one and fails the build on any diff (`git diff --exit-code`; the init goldens are instead byte-compared by `pnpm test`), so **a change that requires regeneration must include the regenerated output in the same commit**. Never hand-edit a generated file listed below.
 
 | Command | Output | When it is needed |
 |---|---|---|
@@ -49,8 +49,17 @@ Several files in this repository are generated, not hand-written. CI regenerates
 | `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures` | `spec/test/fixtures/cross-language-canonical.json` | After changing canonical JSON / hash / cacheKey / the sanitize allowlist |
 | `pnpm intents:emit` | `apps/sample-web/src/generated/facet-views.json` | After changing facets in `apps/sample-api/src/intents/catalog.ts` |
 | `pnpm seed` | `apps/sample-api/src/domain/seed/` | After changing the seed generator |
+| `pnpm meta:sync` | `publishConfig` and the shared publishing metadata in the publishable packages' `package.json` (`packages/*`, `cli`, `spec`) | After adding or changing an `exports` entry of a publishable package |
+| `pnpm python:version` | `python/kohaku/pyproject.toml`, `python/kohaku/src/kohaku/__init__.py`, `python/uv.lock` | After the TypeScript version changes (`pnpm version` runs it) |
+| `pnpm init:versions` | `cli/src/init/versions.ts` | After changing a version in the `catalog:` block of `pnpm-workspace.yaml` that `kohaku init` pins (the package list is in `scripts/lib/init-versions.mjs`) |
+| `KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts` | `cli/test/init/__golden__/` | After an intentional change to a `kohaku init` template (the test byte-compares the generated project, plain and `--mcp`) |
 
-If more than one applies, run them in this order (install first, since later steps depend on the workspace being installed):
+Two more artifacts are pinned by a test but written by hand, because their value is a judgement rather than a function of the source:
+
+- The core catalog's fingerprint: `packages/registry/test/catalog.test.ts` (TS) and `python/kohaku/tests/registry/test_fingerprint.py` (Python). Adding or changing a core component changes it; run the test once and paste the new value from the failure diff (see [add-component.md](docs/runbooks/add-component.md)).
+- The docs snippets under `apps/docs-site/snippets/`: the first code block of each `docs/paths/*.md` page is pasted from there (edit the snippet, then paste it into both language pages; `apps/docs-site/test/snippets.test.ts` fails on a mismatch).
+
+**`pnpm regen` runs every command in the table above, in the right order, and stops at the first failure** (run `pnpm install` first, since the steps depend on the workspace being installed). It does not touch the two hand-pinned artifacts. If you know which one applies, running only that command is faster; the order, if you run them yourself, is:
 
 ```
 pnpm install
@@ -59,6 +68,10 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog
 pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures
 pnpm intents:emit
 pnpm seed
+pnpm meta:sync
+pnpm python:version
+pnpm init:versions
+KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts
 ```
 
 ## 6. Bilingual documentation
@@ -110,7 +123,7 @@ pnpm changeset
 
 Once a changeset-carrying pull request merges to `main`, the Version workflow opens or updates a
 `chore(release): version packages` pull request. Review that pull request's diff before merging it: it
-touches all twenty-nine package manifests, the twenty-nine `CHANGELOG.md` files, `python/kohaku/pyproject.toml`,
+touches all thirty package manifests, the thirty `CHANGELOG.md` files, `python/kohaku/pyproject.toml`,
 `python/kohaku/src/kohaku/__init__.py`, and the lockfile. Merging it does **not** publish — it makes a
 draft GitHub Release `vX.Y.Z` appear, with a body generated from the CHANGELOGs. Publishing is a
 separate, deliberate step: run the Release workflow with `dry_run=true` from `main` first, then publish
@@ -118,7 +131,7 @@ the draft (which creates the tag), then watch the Release workflow publish to np
 [docs/runbooks/release.md](docs/runbooks/release.md) for the full procedure and the pre-publish
 checklist.
 
-All twenty-nine `@kohaku-ui/*` packages share one version — they are one implementation of one wire protocol,
+All thirty `@kohaku-ui/*` packages share one version — they are one implementation of one wire protocol,
 and a version split would let a consumer end up with two incompatible `spec-core` copies. See
 [.changeset/README.md](.changeset/README.md). Nothing is published from a developer's machine.
 

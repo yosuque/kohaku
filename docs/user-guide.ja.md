@@ -72,6 +72,8 @@ pnpm dev                 # API :8787 + Web :5173
 | **Ollama(キー不要・ローカル)** | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b` 等(モデル未指定時の既定は `llama3.3`) |
 | llama.cpp / vLLM 等 | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL=http://…/v1` + `KOHAKU_LLM_MODEL=…` |
 
+`KOHAKU_LLM_BASE_URL` は、どのプロバイダでもゲートウェイやプロキシを指すのに使えます。値の書き方はプロバイダごとに違い、TypeScript と Python で同じです。**Claude** と **Gemini** は API バージョンのパスを含まないベンダーの根を指定します(`https://gw.example`。末尾の `/v1` や `/v1beta` が付いていても取り除きます)。**OpenAI・Ollama・llama.cpp**(OpenAI 互換)は `/v1` まで含めたベースを指定します(`http://…/v1`)。未設定ならベンダー自身のエンドポイントを使います。Ollama 用に残した値は Claude・OpenAI・Gemini のリクエストも向け先を変えてしまうので、プロバイダを切り替えるときは外してください。
+
 `@kohaku-ui/llm` と一緒にプロバイダの SDK をインストールしてください: Claude → `@ai-sdk/anthropic`、OpenAI → `@ai-sdk/openai`、Gemini → `@ai-sdk/google`、Ollama / llama.cpp → `@ai-sdk/openai-compatible`(任意の peer dependency。使わないプロバイダの分は何もインストールされません)。
 
 > **Ollama の注意**: 非思考(non-reasoning)のインストラクトモデルを推奨します。思考モデル(qwen3.5 等)は推論で出力トークンを使い切り、UI 合成が遅い・空になることがあります。また llama.cpp 系は大きなスキーマの構造化出力が不安定なことがありますが、既定の `KOHAKU_LLM_STRUCTURED_MODE=auto` が自動でプロンプト JSON 方式にフォールバックします。
@@ -156,7 +158,7 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
   修正は次の提案に反映されます: `createSchemaExtractor({ llm, timeoutMs, examples })` に `examples: schemaEditExamples(storage, { limit: 2 })`(`@kohaku-ui/lineage` 由来。sample-api は配線済み)を渡すと、レビュアーが直した直近の提案(最終 draft、置き換えられた提案、HTML の先頭部分)が「Reviewer-corrected examples」として抽出器のプロンプトに加わり、以降の提案がレビュアーの守らせている慣習に沿うようになります。provider は `SchemaExtractionInput.tenant` を読みます: `extract` を呼ぶときに候補のテナントを渡すと、そのテナントの修正だけが再利用され、渡さなければテナントを持たない記録だけが再利用されます(design.md #73)。provider は修正の窓を 1 回だけ読み、実際に使う artifact だけを個別に引き、テナントごとの結果を 5 秒間(`cacheTtlMs`、`0` で無効)再利用するので、レビュアーの修正がプロンプトに届くまでにその分の遅れが出ることがあります。この読み込みには独立した予算 `examplesTimeoutMs`(既定 `min(3000, timeoutMs / 4)` ms)があり、遅い読み込み元で失うのは提案そのものではなく例だけです。`extractorVersion` は `0.2` です。
 - **固定化(L1→L0)**: 頻出 L1 Intent の候補(利用回数・構造安定度)→ 「L0 に固定化」。
-- **承認**(Approvals): `"approve"` tier の統制 Action の承認者向け受信箱。Lineage の末尾から導出する(`action.approvalRequested` から後続の `action.approved` を差し引く。デモ 5)。**承認する**(Approve)で持参人トークン(`POST /approvals`)を発行し、コピーして要求者に渡す。`action.approve` と `lineage.read` が必要で、つまり `admin` か `approver` ロール。
+- **承認**(Approvals): `"approve"` tier の統制 Action の承認者向け受信箱。Lineage の末尾から導出する(`action.approvalRequested` から後続の `action.approved` を差し引く。デモ 5。トークン発行済みの行には、`action.approvalIssued` から「Issued by … — expires in …」を表示する)。**承認する**(Approve)で持参人トークン(`POST /approvals`)を発行し、コピーして要求者に渡す。`action.approve` と `lineage.read` が必要で、つまり `admin` か `approver` ロール。
 - 「データ更新を模擬(bump)」: dataVersion を進めてキャッシュ無効化を再現します。`POST /api/kohaku/admin/bump-data-version` は Admin の他の操作と同じ identity + governance RBAC 配下にあり(`admin.bumpDataVersion`、admin のみ)、`KOHAKU_AUTHZ=jwt` ではサーバーが `KOHAKU_DEMO_ADMIN_ROUTES=1` を設定しない限りルート自体が無効(§7)で、その場合ボタンの実行は 404 になり赤いエラーバナーが出ます。
 - 5 タブとも上部バーで選択中の**テナント**でスコープされます(切り替えると各一覧が再取得され、テナント別に分離されていることが見えます)。分析タブの集計も選択テナントのイベントのみが対象です。
 - ロールを `viewer` にすると、承認・削除系の操作に加えて**昇格候補のプレビューも 403** になります(データ read capability の発行を伴うため。閲覧は可能)。RBAC の一連の動きはデモ 7 を参照してください。
@@ -310,7 +312,7 @@ KOHAKU_MCP_ALLOWED_HOSTS=<ランダム>.trycloudflare.com \
 
 トンネルが払い出した `https://<ランダム>.trycloudflare.com` に `/mcp` を付けた URL を、ホストのカスタムコネクタ(claude.ai)/ MCP サーバー(ChatGPT の developer mode)に登録します。ブラウザから呼ぶ側のオリジンを許可するには `KOHAKU_MCP_ALLOWED_ORIGINS`(カンマ区切りのホスト名。スキーム・ポートなし)を追加します。`Origin` を持たないリクエスト(コネクタ自身のサーバー側呼び出し、Claude Desktop)には何も要りません。
 
-このエントリの HTTP 足場(Host / Origin ガード、CORS、ボディ上限、ステートレスなハンドラ)は `@kohaku-ui/host/mcp-http` の `createMcpHttpServer` で、`@modelcontextprotocol/node` は optional peer です。`apps/sample-mcp/src/http.ts` はその上にスナップショット配信と環境変数の解釈を加えています。クロスオリジンのブラウザ呼び出し元に対し、CORS プリフライトは `Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name` を許可します(末尾の 2 つは MCP SDK クライアントが送る標準リクエストヘッダーです)。ツールの `inputSchema` に `x-mcp-header` を宣言するプロダクトでは、クライアントが `Mcp-Param-<Name>` ヘッダーも送ります。CORS の許可リストはプレフィックスのワイルドカードを使えないため、`corsAllowHeaders` オプションでそれらを追加してください。`kohaku init --mcp` が生成するサーバーは今のところ独自のコピーを持ち、次のリリース後に共有版へ切り替えます。
+このエントリの HTTP 足場(Host / Origin ガード、CORS、ボディ上限、ステートレスなハンドラ)は `@kohaku-ui/host/mcp-http` の `createMcpHttpServer` で、`@modelcontextprotocol/node` は optional peer です。`apps/sample-mcp/src/http.ts` はその上にスナップショット配信と環境変数の解釈を加えています。クロスオリジンのブラウザ呼び出し元に対し、CORS プリフライトは `Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name` を許可します(末尾の 2 つは MCP SDK クライアントが送る標準リクエストヘッダーです)。ツールの `inputSchema` に `x-mcp-header` を宣言するプロダクトでは、クライアントが `Mcp-Param-<Name>` ヘッダーも送ります。CORS の許可リストはプレフィックスのワイルドカードを使えないため、`corsAllowHeaders` オプションでそれらを追加してください。`kohaku init --mcp` が生成するサーバー(`server/mcp-http.ts`)も同じ `createMcpHttpServer` の上に作られています。配信するパスは `/mcp` だけで(それ以外は 404)、`.env` の読み込み、`KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` の解釈、グレースフルシャットダウンは生成側に残ります。
 
 > ⚠️ **認証なしのデモです。** この HTTP エントリには一切の認証がありません。公開トンネルで露出すると、**URL を知る誰もが売上データを閲覧・操作できます**。信頼できる相手にのみ URL を渡し、機微データを載せないでください。停止したらトンネルも閉じます。ブラウザからの Host 偽装やクロスサイトのリクエストを弾く DNS リバインディング保護は既定で有効です(上記のとおり、`KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` で足さない限り Host と Origin は localhost 名でなければならず、CORS 応答は検証を通った Origin だけを返し `*` は返しません)。従来の `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` は `KOHAKU_MCP_ALLOWED_HOSTS` の非推奨エイリアスとして引き続き使えます。Python サンプル(`sales_api.mcp_http`)も同じ動作です。
 >
@@ -375,6 +377,63 @@ Chat は生成された Intent カタログの範囲内でのみ回答し、範�
 **認識される日付形式**: 年が先頭に来る日付だけを曖昧さなしとして扱い、時間列になります — `YYYY-MM-DD`、`YYYY-MM`、またはこれらの `/` 区切り版で、ゼロ埋めの有無は問いません(`2026-04-01`、`2026-4-1`、`2026/4` など)。US 式 `MM/DD/YYYY` や欧州式 `DD/MM/YYYY` のような日/月が先頭の形式は意図的に推測しません — 月が 12 以下の日付ではこの 2 つを区別できず、誤って推測すると行の日付を静かに取り違えてしまい、グラフが出ないことよりも悪い結果になるためです。データがこの形式の場合、`init` のサマリに列名を挙げた警告が出ます。`YYYY-MM-DD` に変換してから `init` をやり直せば、時間列と Trend ビューが得られます。
 
 **「最初の compose までの時間」の計測**(クイックスタートの KPI、目標 15 分以内): `npx @kohaku-ui/cli init` の前にストップウォッチを開始し、Dashboard に Summary ビュー(L0)が表示された時点と、キーを設定した状態で最初の Chat の回答が描画された時点(L1)で止めます。クリーンなマシン・温まった npm キャッシュで両方を記録してください。CI の `pack-smoke` ジョブは同じ生成処理をエンドツーエンドで実行します(`scripts/pack-smoke.mjs` の step 7b)。
+
+### 既存の MCP サーバーから始める(`@kohaku-ui/domain-mcp`)
+
+データがすでに MCP サーバーの後ろにあるなら、`@kohaku-ui/domain-mcp` がそれを `DomainPort` にするので、Port のコードを書く必要はありません。サーバーの `tools/list` を一度だけ読み、全てのツールを MCP のヒント 1 つで振り分けます。
+
+| ツールの宣言 | kohaku での扱い |
+|---|---|
+| `annotations.readOnlyHint: true` | `query://<source>/<ツール名>` 参照。結果は `TabularData` になります(配列、`{ rows: [...] }`、または配列 1 つだけを包んだオブジェクトを、`structuredContent` か最初の JSON テキストブロックから読みます)。 |
+| それ以外。アノテーション無しも含む(MCP の既定は `false`) | `tier: "approve"` の統制付き Action。`tierFor(tool)` で上書きできます。 |
+
+> **信頼できる MCP サーバーにだけ使ってください。** `readOnlyHint` はサーバーが自分について述べるヒントです。書き込みツールを read-only と宣言するサーバーでは、そのツールが承認ゲートなしの通常の読み取りとして解決されます。自分で分類するには `isReadOnly(tool)` や `include(tool)` を渡します。
+
+```bash
+npm install @kohaku-ui/domain-mcp @kohaku-ui/host @kohaku-ui/authz-hmac @kohaku-ui/llm zod @modelcontextprotocol/client
+```
+
+```ts
+import { createHmacApprovalPort } from "@kohaku-ui/authz-hmac";
+import { createMcpDomainPort, createMcpIntents } from "@kohaku-ui/domain-mcp";
+import { createGovernancePolicy, createKohakuHost } from "@kohaku-ui/host";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+
+// MCP クライアントは自分で用意して接続します。このパッケージは SDK を import しません。
+const client = new Client({ name: "my-kohaku-host", version: "1.0.0" });
+await client.connect(new StreamableHTTPClientTransport(new URL("https://upstream.example/mcp")));
+
+const domain = await createMcpDomainPort({
+  client,
+  onSchemaProjection: (r) => console.warn("paramsSchema", r), // ツールごとに何を捨てた/省いたか
+});
+const host = createKohakuHost({
+  domain,
+  querySource: "orders",
+  llm: createLlmFromEnv(),
+  intents: createMcpIntents(domain, { source: "orders" }), // 読み取り専用ツールごとに Intent を 1 つ
+  describeShape: (ref) => domain.describeShape(ref), //   列はツールの outputSchema から
+  dataVersion: domain.dataVersion, //                     port がデータに刻むのと同じ関数
+  routes: {
+    approvals: createHmacApprovalPort(process.env.KOHAKU_CAPABILITY_SECRET!),
+    authorizeGovernance: createGovernancePolicy({ roles: { approver: ["action.approve"] } }),
+    // さらに `auth` でリクエストに principal を持たせます(Demo 5 の「統制付き Action」を参照)
+  },
+});
+```
+
+実際のサーバーに向ける前に知っておくこと:
+
+- **書き込みには承認 Port が要ります。** `approve` tier の Action は、依頼者以外の誰かがトークンを発行する(`POST /approvals`。Demo 5 の「統制付き Action」を参照)まで 403 `APPROVAL_REQUIRED` で拒否されます。上のように `routes.approvals` と `routes.authorizeGovernance` を配線しないと、書き込みは全て拒否されたままです。
+- **Action の `paramsSchema` は射影です。** ツールの `inputSchema` を kohaku の閉じた JSON Schema 部分集合へ写します。`description`・`title`・`default`・`format`・`pattern` などの制約は捨て(`onSchemaProjection` で報告され、承認者が見る operation の description にも件数が付きます)、全てのオブジェクトを `additionalProperties: false` で閉じるので、サーバーが受け付けるキーでも拒否されることがあります。`anyOf: [X, null]`(Pydantic の `Optional[X]`)と書かれたプロパティは、省略可能なプロパティ `X` になります。それ以外の `anyOf` / `oneOf` / `$ref`、型の配列、`additionalProperties: true`、未知のキーワードを使う schema は**丸ごと省かれ**、その Action の payload を kohaku は検証せず、承認者が生の payload を見て判断します。`omitted` の報告を確認し、`include` や `tierFor` で調整してください。
+- **書き込みツールが読み取られることはありません。** `createMcpIntents` は読み取り専用ツールにしか Intent を作らず、read capability は Intent が解決した参照にしか発行されないので、`query://orders/refund_order` に対応する capability は存在しません。手書きの Intent が action の op(`domain.actionOps`)を指してはいけません。Intent が運べない型(boolean・配列・オブジェクト)の省略可能パラメタは黙って除かれ、それを必須とするツールはスキップされます(`onSkip`。`[A-Za-z0-9_.-]{1,128}` に合わない名前と重複もここで報告されます)。
+- **MCP には data version がありません。** port の既定の `mcpDataVersion` は時間の区切り `mcp:<floor(now / 300 秒)>` です。境界の直前に compose した Spec は、境界を越えた後に一度だけ stale になり、書き込みに成功しても次の区切りまでバージョンは変わりません。本物のバージョン(ETag のような自前のツール)を使うなら port に `dataVersion` を渡します。
+- **参照のパラメタは文字列です。** port はツールの `inputSchema` の型(`number`・`integer`・`boolean`)で変換します。不正な値はツールを呼ぶ前に `MCP_ARGUMENT_INVALID` のコードを持つエラーになり、REST では他の失敗した読み取りと同じく 404 `REF_NOT_FOUND` で報告されます。`_cursor` / `_sort` / `_dir` は捨て、`_limit` はツールの数値の `limit` へ写します。`_limit` は署名された `limit` を下げることしかできず(小さい方が勝ちます)、`maxLimit`(既定 1000)が上限になります。
+- **上限。** upstream への 1 回の呼び出しには `callTimeoutMs`(既定 30 秒)があり、タイムアウトすると中断され、再試行はされません。書き込みがタイムアウトした場合は「効果は不明」と報告されます。クエリ結果は `maxRows`(10 000)と `maxResultBytes`(10 MiB)までです。列は最初の 50 行から推定します。
+- **追従・提供しないもの:** `tools/list_changed`(新しいツールはホストの再起動で反映)、再接続(クライアントは呼び出し側が管理)、キャッシュ(`/binding/resolve` のたびにサーバーを呼びます)、呼び出し元の ID(サーバーへの認証は MCP クライアントのトランスポートが 1 度行うので、全ての呼び出し元が 1 つの upstream 資格情報を共有し、principal は転送されません)。
+
+Python 版は `kohaku.domain_mcp`(`create_mcp_domain_port` / `create_mcp_intents` / `mcp_data_version`)で、既存の `mcp` extra に含まれます。
 
 ### Step 0 — LLM なしの Server-Driven UI
 
@@ -742,7 +801,7 @@ export const myCard = defineComponent({
   type: "myapp.card", version: "1.0.0",
   // … description / propsSchema / capabilities は従来どおり …
   deprecated: { reason: "myapp.cardV2 に置き換え", replacedBy: { type: "myapp.cardV2" } },
-  migrateProps: (props) => ({ title: props.title }), // TS のみ: `kohaku migrate` が props を書き換える際に使う
+  migrateProps: (props) => ({ title: props.title }), // `kohaku migrate` が props を書き換える際に使う(Python では `migrate_props=`)
 });
 ```
 

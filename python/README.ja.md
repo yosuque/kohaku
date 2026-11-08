@@ -70,6 +70,58 @@ uv run python -m sales_api.mcp_http
 #   pnpm --filter @kohaku-ui-sample/mcp build:renderer
 ```
 
+## Coding agent で導入する
+
+既存の FastAPI プロジェクトのルートで、Claude Code・Codex・Cursor にそのまま貼ります。既存のアプリに kohaku の REST プロファイルをマウントし、プロトコルの適合性スイートで自分の結果を確かめます。送る前に `<...>` のプレースホルダーを置き換えてください。
+
+```text
+You are adding kohaku (https://github.com/yosuque/kohaku) to an existing FastAPI app. Work in
+small steps and run the project's own tests after each one.
+
+GOAL
+Mount the kohaku REST profile on the app's FastAPI instance, so the frontend can ask for
+UI Specs (GET/POST under /api/kohaku) over the app's EXISTING data access.
+
+INSTALL
+pip install "kohaku-ui[rest,llm]"      # imports as `kohaku`; add [claude] or [gemini] for those providers
+
+RULES
+1. Never put row data in a Spec: Specs carry query:// references, and rows reach the screen
+   only through DomainPort.invoke, with a capability the host issues.
+2. Every write is a DomainPort operation in the operation list, with a paramsSchema and a
+   tier ("auto" | "confirm" | "approve"). Never mutate inside a read operation.
+3. Tests never call a real LLM: use FakeLlm.
+4. Demo auth and dev mode are localhost-only. Before anyone else can reach the host, wire real
+   authentication and governance authorization (else every request runs as ANONYMOUS and the
+   governance routes are open). Never remove auth to make a check pass.
+5. Generate KOHAKU_CAPABILITY_SECRET with openssl rand -base64 32; keep it in the environment,
+   never commit it, never hard-code a fallback.
+
+STEPS
+1. DomainPort (kohaku.spec): list_operations() and invoke(op, args, ctx) wrap EXISTING data access.
+2. The Python library has no one-call facade, so write the other Ports by hand, following
+   https://github.com/yosuque/kohaku/tree/main/python/examples/sales-api/src/sales_api/ :
+   authz_port.py (HmacAuthzPort: fail when the secret is unset, do not copy its dev
+   fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
+   (define_intent from kohaku.intents), fixed_specs.py (L0 Specs: no model, no key).
+   Storage: kohaku.storage.FileStoragePort.
+3. Compose context: ComposeContext(catalog=resolve_catalog(core_catalog()), semantic=...,
+   storage=..., llm=create_llm_from_env()); core_catalog/resolve_catalog are in
+   kohaku.registry, ComposeContext in kohaku.composer, create_llm_from_env in kohaku.llm.
+4. Mount: attach_kohaku_routes(app, KohakuHostDeps(compose=..., domain=..., authz=...,
+   query_source="<source>", auth=<resolve the principal from the app's own identity>,
+   authorize_governance=create_governance_policy(...)), "/api/kohaku") with those names
+   from kohaku.host_rest. query_source must equal the source of every Intent. Leave existing
+   routes untouched; run with the app's usual uvicorn command.
+
+DONE WHEN
+- npx @kohaku-ui/cli conformance --rest http://localhost:<port>/api/kohaku
+  --intent '{"canonical":"<an L0 Intent of yours>","params":{}}' reports CONFORMANT (the CLI
+  sends no credentials: use a dev instance whose auth resolves a fixed dev principal);
+- POST /api/kohaku/compose with an Intent returns a Spec that holds no row values;
+- the project's tests (pytest), mypy and ruff pass.
+```
+
 ## 構成
 
 ```
@@ -81,9 +133,15 @@ python/
 │  │  ├─ data_binding/     # ← packages/data-binding(予約パラメータ分割)
 │  │  ├─ intents/          # ← packages/intents(Intent DSL)
 │  │  ├─ llm/              # ← packages/llm(OpenAI 互換アダプタ / FakeLlm)
+│  │  ├─ semantic_llm/     # ← packages/semantic-llm(既定の SemanticPort: create_llm_semantic_port +
+│  │  │                    #   IntentCatalog。TS のファイルごとに 1 モジュール。sales サンプルはこの上に構築)
 │  │  ├─ composer/         # ← packages/composer(L0/L1/L2・single-flight・修復ループ。TS と異なり
 │  │  │                    #   tier ladder・single-flight・結果組み立てを compose.py から別モジュール
 │  │  │                    #   に分割していない — 挙動は同一で、ファイル構成が粗いだけ)
+│  │  ├─ domain_mcp/       # ← packages/domain-mcp(MCP サーバーを DomainPort にする: port.py・
+│  │  │                    #   schema_projection.py・coerce.py・tabular.py・shape.py・intents.py・
+│  │  │                    #   data_version.py・types.py。MCP クライアントは引数で渡し、ここでは
+│  │  │                    #   `mcp` を import しない。下の「MCP サーバーを DomainPort にする」を参照)
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
 │  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
@@ -440,6 +498,9 @@ canonical-JSON sha256 である。`packages/spec-core/src/action-params.ts` に�
 を呼ぶ前に参照する同じ形である。`kohaku.host_core.action_audit` の `ActionAuditRecorder` プロトコルは
 任意の `action.*` lineage イベントの記録先である(`action.invoked` / `action.denied` /
 `action.approvalRequested` / `action.approved`。fail-open — recorder の失敗が書き込みを止めることは無い)。
+`POST /approvals` が記録する `action.approvalIssued`(actor は承認者)は、任意の
+`ApprovalIssuedRecorder.approval_issued` フックで、`getattr` で探すため、これを持たない recorder は
+飛ばされる。
 
 ステートレスな HMAC `ApprovalPort` の参照実装(`HmacApprovalPort` / `create_hmac_approval_port` /
 `MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v2."` prefix の
@@ -453,9 +514,34 @@ Python 側ではそもそも独立パッケージ境界を持たないため(TS 
 `test_approval_port.py` は、TS サンプル自身の統制された Action デモを写している(全体の手順は
 [ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。
 
+## MCP サーバーを DomainPort にする(`kohaku.domain_mcp`、TS と対称)
+
+`kohaku.domain_mcp` は `@kohaku-ui/domain-mcp` のミラーで、既存の MCP サーバーをホストの `DomainPort` にします。
+`annotations.read_only_hint is True` のツールは `query://` の op(結果は `TabularData`)、それ以外のツールは
+`tier="approve"` の Action(`tier_for` で上書き可)で、その `paramsSchema` は `inputSchema` を閉じた
+`ActionParamsSchema` の部分集合へ射影したものです(nullable な `Optional[X]` 形以外の `anyOf`、`oneOf`、`$ref`、`additionalProperties: true` を使う場合は付きません)。
+既存の `mcp` extra(`pip install 'kohaku-ui[mcp]'`)に含まれ、`mcp` 自体は import しません: 公式 SDK の `Client` を
+引数で渡します(`list_tools(cursor=...)` / `call_tool(name, arguments)` を持つ任意のオブジェクトで可)。
+
+```python
+from mcp import Client
+from kohaku.domain_mcp import create_mcp_domain_port, create_mcp_intents
+
+async with Client("http://upstream.example/mcp") as client:
+    domain = await create_mcp_domain_port(client=client)
+    intents = create_mcp_intents(domain, source="orders")  # 読み取り専用ツールごとに Intent を 1 つ
+    # domain.describe_shape(ref) -> DataShape | None, domain.data_version() -> "mcp:<区切り>"
+```
+
+`mcp_data_version()` は時間の区切り(`mcp:<floor(now / 300)>`)です。`now` が受け取るのはエポック**秒**で、TS の
+`now` はミリ秒です。射影・文字列 ref パラメタの型変換・結果 → `TabularData` の変換・`outputSchema` → `DataShape` は、
+言語間 golden fixture の `domainMcp` セクションで TS の出力に固定されています。`query_ops` / `action_ops` は `frozenset`(TS は
+`ReadonlySet`)、`tools` はツール一覧の順の読み取り専用 mapping で、Intent はこの順に作られます。`call_timeout_ms` は TS と同じくミリ秒です。
+[docs/user-guide.ja.md](../docs/user-guide.ja.md)(「既存の MCP サーバーから始める」)も参照してください。
+
 ## capability のテナント(TS と対称)
 
-`AuthzPort.issue_capability(principal, scopes, *, ttl_seconds=None, tenant=None)` と `VerifyResult.tenant` は TS の契約を写す(SPEC CAP-TEN-001 / CAP-TEN-002、design.md #75): REST の発行は解決済みテナントを束縛し、`/binding/*` は capability のテナントを正として扱い(`InvocationContext.tenant`。不一致は 403 `CAPABILITY_DENIED`)、MCP のデータ面ツールは検証済み capability が束縛するテナントを運ぶ。**独自 Port には破壊的**: 独自の Python `AuthzPort` は `issue_capability` に `tenant: str | None = None` を足すべきである(値は無視してよい)— Protocol がこのキーワードを要求するため、古いシグネチャは mypy で失敗する。実行時には REST ホストがシグネチャを一度だけ検査し(`inspect.signature`。`try/except TypeError` は使わない)、キーワードを持たない Port に対してはテナント束縛**なし**で capability を発行して `on_error`(エンドポイント `capability.tenant_unsupported`)に一度だけ報告する。したがってそうした Port では束縛が黙って失われる — アップグレードすること。sales-api の `HmacAuthzPort` は `tenant` claim(と `require_tenant=True`)を持ち、TS とワイヤ互換である。
+`AuthzPort.issue_capability(principal, scopes, *, ttl_seconds=None, tenant=None)` と `VerifyResult.tenant` は TS の契約を写す(SPEC CAP-TEN-001 / CAP-TEN-002、design.md #76): REST の発行は解決済みテナントを束縛し、`/binding/*` は capability のテナントを正として扱い(`InvocationContext.tenant`。不一致は 403 `CAPABILITY_DENIED`)、MCP のデータ面ツールは検証済み capability が束縛するテナントを運ぶ。**独自 Port には破壊的**: 独自の Python `AuthzPort` は `issue_capability` に `tenant: str | None = None` を足すべきである(値は無視してよい)— Protocol がこのキーワードを要求するため、古いシグネチャは mypy で失敗する。実行時には REST ホストがシグネチャを一度だけ検査し(`inspect.signature`。`try/except TypeError` は使わない)、キーワードを持たない Port に対してはテナント束縛**なし**で capability を発行して `on_error`(エンドポイント `capability.tenant_unsupported`)に一度だけ報告する。したがってそうした Port では束縛が黙って失われる — アップグレードすること。sales-api の `HmacAuthzPort` は `tenant` claim(と `require_tenant=True`)を持ち、TS とワイヤ互換である。
 
 ## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)
 
@@ -511,28 +597,23 @@ failed catalog/structure validation」という文言とは別物にし、この
   そのノードの `description` に退避する(`@ai-sdk/anthropic` の `sanitizeJsonSchema` と
   同じ変換であり、TS と Python の両アダプタは同じスキーマに対して同じ劣化のしかたをする)。
   返ってきたオブジェクトの検証は、退避前の元のスキーマに対して行われる。
-- **Python の `claude` アダプタは `temperature` を送らない**(`KOHAKU_LLM_TEMPERATURE` と
-  呼び出しごとの `temperature` は受け付けるが Anthropic へは転送しない。TS のアダプタは
-  `@ai-sdk/anthropic` 経由で今も送る)。`anthropic` SDK の `messages.create` にはこの
+- **`claude` アダプタは `temperature` を送らない**(`KOHAKU_LLM_TEMPERATURE` と
+  呼び出しごとの `temperature` は受け付けるが Anthropic へは転送しない。TS のアダプタも
+  送らなくなったので、両言語は一致している)。`anthropic` SDK の `messages.create` にはこの
   パラメータが無く、SDK 2.x が送る `anthropic-version: 2026-10-21` では `temperature` /
   `top_p` / `top_k` を含むリクエストを Messages API が 400 で拒否するため。kohaku の
   同一表示の保証は Spec キャッシュによるもので temperature 0 は補助にすぎず、旧モデルでの
   影響は小さい。
+- **`kohaku.semantic_llm` のカタログ doc は TS とバイト一致しない**: `render_catalog_doc` は
+  各 Intent の params JSON Schema を params DSL(`kohaku.intents.ObjectSchema`)から描画する
+  (TS は zod の `toJSONSchema`)。この doc は NL 正規化の LLM 呼び出しにしか使われず、キャッシュ
+  キーにも検証にも入らない。そのため言語間 golden が押さえるのは `build_normalize_system_prompt` /
+  `build_normalize_user_prompt`(純粋な文字列ビルダー)、`normalize_gui_action`、
+  `default_output_locale` で、`render_catalog_doc` は含まない。ほかに、`describe_shape` は
+  オプション省略時に(欠落ではなく)`None` を返すこと、`IntentCatalogLike` の任意メンバー
+  (`revision`、`validate_params`)は `getattr` で探ることが TS との違いである。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
-- **`ComponentDefinition.deprecated` に `migrateProps` 相当が無い**(design.md #65):
-  TS の `migrateProps(props)` は `fallback` の隣に付く関数であるため
-  `core-catalog.json` へは決して export されず、`fallback.mapProps` のように
-  手で移植する先の Python 側フィールドも存在しない。そのため
-  `host_core.catalog_migration` の `plan_catalog_migration` は、Python 側では
-  deprecated なノードの `type`/`version` のみを書き換える。置き換え先のスキーマに
-  合わせて props の形を変える必要がある書き換えは(TS で `migrateProps` を宣言しなかった
-  カタログと同じ結果として)`steps` ではなく `blocked` に入る。
-- **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
-  (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
-  `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と
-  intent ツール群がタスク対応になる。`host_mcp` は compose ファミリを常に同期実行し、
-  リクエストの `_meta` が何を求めていてもこの拡張を宣言しない。
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
   `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
   フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
@@ -541,15 +622,9 @@ failed catalog/structure validation」という文言とは別物にし、この
   design.md #74 / #73。`review` ブロックは引き続き未反映)、TS 側の rubric 0.4(Python の
   `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
   を欠く)、`CapabilityRevocationStore` と jti ベースの capability 失効、
-  `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、
+  `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、
   `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
-  (ただし `semantic-llm` 自体の `validateIntent` 挙動はこのギャップに取り残されていない:
-  同パッケージには Python 移植先が無いため、そのロジックは `examples/sales-api` の
-  `semantic_port.py` / `intents_catalog.py` に直接存在し、このサンプルは TS の
-  `createLlmSemanticPort` と同じ `validate_intent` / `IntentCatalog.validate_params` を
-  実装している — `kohaku.spec.ports.SupportsValidateIntent` と
-  `kohaku.host_core.intent.resolve_intent` を参照。)
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch

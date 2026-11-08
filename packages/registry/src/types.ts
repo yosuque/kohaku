@@ -68,10 +68,11 @@ export interface ComponentDefinition<P extends z.ZodObject = z.ZodObject> {
   implementation?: ImplementationDecl;
   fallback?: FallbackDecl;
   /**
-   * TS-only migration hook: rewrites props from this part's shape into replacedBy's shape (used by
-   * host-core's planCatalogMigration). A function value can't survive JSON export — never emitted by
-   * export-core-catalog and never present in the wire /catalog response; a Python catalog contribution
-   * has no equivalent field.
+   * Migration hook: rewrites props from this part's shape into replacedBy's shape (used by host-core's
+   * planCatalogMigration). A function value can't survive JSON export — export-core-catalog emits only a
+   * `hasMigrateProps` marker and it is never present in the wire /catalog response. The Python port's
+   * equivalent is `ComponentDefinition.migrate_props`; a core part's hook is hand-ported into its
+   * `_MIGRATE_PROPS` table.
    */
   migrateProps?: (props: JsonObject) => JsonObject;
   /** Present once a part is superseded. See DeprecationDecl. */

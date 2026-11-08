@@ -32,6 +32,7 @@ from kohaku.lineage import (
     sign_manifest,
     verify_manifest_signature,
 )
+from kohaku.llm.base_url import normalize_vendor_base_url
 from kohaku.registry.core import core_catalog
 from kohaku.spec import (
     ALLOWED_ATTRS,
@@ -132,6 +133,82 @@ def test_action_payload_scan(cross_language_fixture: dict[str, Any]) -> None:
         assert got == case["issues"], f"scan mismatch for payload={case['payload']!r}"
 
 
+def _canonical_equal(actual: object, expected: object, label: str) -> None:
+    """Compare as canonical JSON: the representation both languages are pinned to (True vs 1, 3 vs 3.0)."""
+    assert canonical_stringify(actual) == canonical_stringify(expected), label
+
+
+def test_domain_mcp(cross_language_fixture: dict[str, Any]) -> None:
+    """kohaku.domain_mcp's pure functions (schema projection, argument coercion, tabular conversion,
+    outputSchema -> DataShape) must reproduce the TS-generated fixture. TS counterpart:
+    spec/test/cross-language.test.ts (domainMcp)."""
+    from types import SimpleNamespace
+
+    from kohaku.domain_mcp import (
+        McpArgumentError,
+        McpResultError,
+        McpToolError,
+        coerce_tool_arguments,
+        project_input_schema,
+        shape_from_output_schema,
+        to_tabular_data,
+    )
+
+    fixture = cross_language_fixture["domainMcp"]
+
+    assert fixture["schemaProjection"]
+    for case in fixture["schemaProjection"]:
+        got = project_input_schema(case["inputSchema"]).to_wire()
+        _canonical_equal(got, case["expected"], f"projection mismatch for {case['inputSchema']!r}")
+
+    assert fixture["schemaProjectionRaw"]
+    for case in fixture["schemaProjectionRaw"]:
+        # The fixture holds raw JSON text: a number beyond the double range is Infinity in JS, which a
+        # re-serialized value could not carry. Python parses the text itself (a huge int stays an exact int).
+        got = project_input_schema(json.loads(case["json"])).to_wire()
+        _canonical_equal(
+            got, case["expected"], f"raw projection mismatch for {case['json'][:80]!r}"
+        )
+
+    assert fixture["argumentCoercion"]
+    for case in fixture["argumentCoercion"]:
+        coerced: object
+        try:
+            coerced = coerce_tool_arguments(
+                case["args"], case["inputSchema"], max_limit=case.get("maxLimit", 1000)
+            )
+        except McpArgumentError:
+            coerced = None  # McpArgumentError: the fixture's `expected: null`
+        _canonical_equal(coerced, case["expected"], f"coercion mismatch for {case['args']!r}")
+
+    assert fixture["tabular"]
+    for case in fixture["tabular"]:
+        raw = case["result"]
+        result = SimpleNamespace(
+            content=[SimpleNamespace(**block) for block in raw.get("content", [])],
+            structured_content=raw.get("structuredContent"),
+            is_error=raw.get("isError", False),
+        )
+        tabular: object
+        try:
+            limits = case.get("limits", {})
+            tabular = to_tabular_data(
+                result,
+                case["dataVersion"],
+                max_rows=limits.get("maxRows", 10_000),
+                max_result_bytes=limits.get("maxResultBytes", 10 * 1024 * 1024),
+            ).to_wire()
+        except (McpResultError, McpToolError):
+            tabular = None  # McpResultError / McpToolError: the fixture's `expected: null`
+        _canonical_equal(tabular, case["expected"], f"tabular mismatch for {raw!r}")
+
+    assert fixture["shape"]
+    for case in fixture["shape"]:
+        shape = shape_from_output_schema(case["outputSchema"])
+        dumped = None if shape is None else shape.model_dump(exclude_none=True)
+        _canonical_equal(dumped, case["expected"], f"shape mismatch for {case['outputSchema']!r}")
+
+
 def test_sandbox_dom_allowlist(cross_language_fixture: dict[str, Any]) -> None:
     """The sandbox DOM allowlist mirror (kohaku.spec.sandbox_dom) must not drift from the TS source."""
     expected = cross_language_fixture["sandboxDom"]
@@ -175,6 +252,15 @@ def test_export_distillation_dataset(cross_language_fixture: dict[str, Any]) -> 
         export_distillation_dataset([record], [spec])
         == cross_language_fixture["distillation"]["jsonl"]
     )
+
+
+def test_llm_base_url_normalisation(cross_language_fixture: dict[str, Any]) -> None:
+    """normalize_vendor_base_url must reproduce the TS-generated KOHAKU_LLM_BASE_URL goldens (the real-SDK
+    request URLs are asserted by the llm wire tests, which read the same fixture)."""
+    cases = cross_language_fixture["llmBaseUrl"]
+    assert cases
+    for case in cases:
+        assert normalize_vendor_base_url(case["provider"], case["baseUrl"]) == case["root"], case
 
 
 def test_design_kit_prompt_fragment(cross_language_fixture: dict[str, Any]) -> None:

@@ -72,6 +72,8 @@ Example `.env` settings:
 | **Ollama (no key needed, local)** | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b`, etc. (the default when no model is specified is `llama3.3`) |
 | llama.cpp / vLLM, etc. | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL=http://…/v1` + `KOHAKU_LLM_MODEL=…` |
 
+`KOHAKU_LLM_BASE_URL` points any provider at a gateway or proxy. The convention differs by provider, and is the same in the TypeScript and Python ports: for **Claude** and **Gemini** give the vendor root without the API-version path (`https://gw.example`; a trailing `/v1` or `/v1beta` is also accepted and stripped), for **OpenAI, Ollama and llama.cpp** (OpenAI-compatible) give the full base including `/v1` (`http://…/v1`). Leave it unset to use the vendor's own endpoint. A value left over in your environment for Ollama will redirect Claude, OpenAI and Gemini too, so unset it when you switch provider.
+
 Install the provider SDK next to `@kohaku-ui/llm`: Claude → `@ai-sdk/anthropic`, OpenAI → `@ai-sdk/openai`, Gemini → `@ai-sdk/google`, Ollama / llama.cpp → `@ai-sdk/openai-compatible` (optional peer dependencies; nothing is installed for providers you do not use).
 
 > **Note on Ollama**: We recommend non-reasoning instruct models. Reasoning models (qwen3.5, etc.) may spend their output tokens on reasoning, making UI synthesis slow or empty. Also, llama.cpp-family backends can be unstable when producing structured output for large schemas, but the default `KOHAKU_LLM_STRUCTURED_MODE=auto` automatically falls back to the prompt-JSON method.
@@ -156,7 +158,7 @@ The five tabs below are the published **`@kohaku-ui/admin-react`** console; `app
 
   Corrections feed back: when `createSchemaExtractor({ llm, timeoutMs, examples })` is given `examples: schemaEditExamples(storage, { limit: 2 })` (from `@kohaku-ui/lineage`; sample-api wires it), the most recent proposals a reviewer changed are added to the extractor's prompt as "Reviewer-corrected examples" (the final draft, the replaced proposal and the head of the HTML), so later proposals follow the conventions reviewers keep enforcing. The provider reads `SchemaExtractionInput.tenant`: pass the candidate's tenant when you call `extract` and only that tenant's corrections are reused, with no tenant only tenant-less records are (design.md #73). The provider reads the edit window once, looks up only the artifacts it uses, and reuses a tenant's result for 5 seconds (`cacheTtlMs`, `0` turns it off), so a reviewer's correction can take that long to reach the prompt. The read has its own budget, `examplesTimeoutMs` (default `min(3000, timeoutMs / 4)` ms): a slow source costs the suggestion its examples, not the suggestion itself. `extractorVersion` is `0.2`.
 - **Fixation (L1→L0)**: Candidates from frequent L1 Intents (usage count, structural stability) → "Fixate to L0".
-- **Approvals**: the approver's inbox for `"approve"`-tier governed Actions, derived from the Lineage tail (`action.approvalRequested` minus later `action.approved`; Demo 5). **Approve** mints a bearer token (`POST /approvals`) to copy and hand to the requester. Needs `action.approve` and `lineage.read`, i.e. the `admin` or `approver` role.
+- **Approvals**: the approver's inbox for `"approve"`-tier governed Actions, derived from the Lineage tail (`action.approvalRequested` minus later `action.approved`; Demo 5; a row whose token was already minted shows "Issued by … — expires in …", from `action.approvalIssued`). **Approve** mints a bearer token (`POST /approvals`) to copy and hand to the requester. Needs `action.approve` and `lineage.read`, i.e. the `admin` or `approver` role.
 - "Simulate data update (bump)": Advances the dataVersion to reproduce cache invalidation. `POST /api/kohaku/admin/bump-data-version` sits behind identity + the same governance RBAC as every other Admin action (`admin.bumpDataVersion`, admin only); under `KOHAKU_AUTHZ=jwt` the route itself is disabled unless the server sets `KOHAKU_DEMO_ADMIN_ROUTES=1` (§7), in which case the button's request fails with 404 and a red error banner.
 - All five tabs are scoped by the **tenant** selected in the top bar (switching re-fetches each list, and you can see that they are separated per tenant). The Analytics tab's aggregation also targets only the events of the selected tenant.
 - Setting the role to `viewer` makes not only the approval/deletion operations but also **the preview of promotion candidates return 403** (because it involves issuing a data read capability; viewing is possible). For the full sequence of RBAC behavior, see Demo 7.
@@ -310,7 +312,7 @@ KOHAKU_MCP_ALLOWED_HOSTS=<random>.trycloudflare.com \
 
 Register the URL — the `https://<random>.trycloudflare.com` the tunnel hands out with `/mcp` appended — with the host's custom connector (claude.ai) / MCP server (ChatGPT's developer mode). `KOHAKU_MCP_ALLOWED_ORIGINS` (comma-separated hostnames, no scheme or port) additionally allows a browser-based caller's origin; a request with no `Origin` (the connectors' own server-side calls, Claude Desktop) needs nothing.
 
-The HTTP scaffold behind this entry (the Host/Origin guards, CORS, the body cap and the stateless handler) is `createMcpHttpServer` from `@kohaku-ui/host/mcp-http`, with `@modelcontextprotocol/node` as an optional peer dependency; `apps/sample-mcp/src/http.ts` adds the snapshot route and the env parsing on top of it. For a cross-origin browser caller the CORS preflight allows `Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name` — the last two are the standard request headers the MCP SDK client sends. A product whose tools declare `x-mcp-header` in their `inputSchema` makes the client send `Mcp-Param-<Name>` headers too; a CORS allow-list cannot wildcard a prefix, so add those through the `corsAllowHeaders` option. The server `kohaku init --mcp` generates still carries its own copy and will switch to the shared one after the next release.
+The HTTP scaffold behind this entry (the Host/Origin guards, CORS, the body cap and the stateless handler) is `createMcpHttpServer` from `@kohaku-ui/host/mcp-http`, with `@modelcontextprotocol/node` as an optional peer dependency; `apps/sample-mcp/src/http.ts` adds the snapshot route and the env parsing on top of it. For a cross-origin browser caller the CORS preflight allows `Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name` — the last two are the standard request headers the MCP SDK client sends. A product whose tools declare `x-mcp-header` in their `inputSchema` makes the client send `Mcp-Param-<Name>` headers too; a CORS allow-list cannot wildcard a prefix, so add those through the `corsAllowHeaders` option. The server `kohaku init --mcp` generates (`server/mcp-http.ts`) is built on the same `createMcpHttpServer`; it serves only `/mcp` (any other path answers 404) and keeps the `.env` loading, the `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` parsing and the graceful shutdown itself.
 
 > ⚠️ **This is a no-auth demo.** This HTTP entry has no authentication whatsoever. Once exposed via a public tunnel, **anyone who knows the URL can view and operate the sales data**. Hand the URL only to trusted parties, and do not put sensitive data on it. When you stop it, close the tunnel too. DNS rebinding protection, which rejects Host spoofing and cross-site requests from a browser, is on by default (Host and Origin must be a localhost name unless you list more with `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS`, as above; the CORS response echoes only a validated Origin, never `*`); the older `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` still works as a deprecated alias of `KOHAKU_MCP_ALLOWED_HOSTS`. The Python sample (`sales_api.mcp_http`) behaves the same.
 >
@@ -375,6 +377,63 @@ No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtu
 **Recognized date formats**: only a year-first date is treated as unambiguous and becomes the time column — `YYYY-MM-DD`, `YYYY-MM`, or the same with `/` separators, zero-padded or not (`2026-04-01`, `2026-4-1`, `2026/4`). A day/month-first date such as US `MM/DD/YYYY` or European `DD/MM/YYYY` is deliberately **not** guessed — the two are indistinguishable for any day of the month ≤ 12, and guessing wrong would silently mis-date rows, which is worse than no chart at all. If your data has one of these, `init`'s summary prints a warning naming the column; convert it to `YYYY-MM-DD` and run `init` again to get a time column and a Trend view.
 
 **Measuring "time to first compose"** (the quickstart's KPI, target ≤ 15 minutes): start a stopwatch before `npx @kohaku-ui/cli init`, stop it when the Dashboard shows the Summary view (L0) and, with a key configured, when the first Chat answer renders (L1). Record both on a clean machine with a warm npm cache; the CI `pack-smoke` job runs the same generation end to end (`scripts/pack-smoke.mjs`, step 7b).
+
+### Starting from an existing MCP server (`@kohaku-ui/domain-mcp`)
+
+If your data already sits behind an MCP server, `@kohaku-ui/domain-mcp` turns it into the `DomainPort` so you write no Port code. It reads the server's `tools/list` once and sorts every tool by one MCP hint:
+
+| The tool says | kohaku exposes it as |
+|---|---|
+| `annotations.readOnlyHint: true` | a `query://<source>/<tool>` ref. The result becomes `TabularData` (an array, `{ rows: [...] }` or a single wrapped array, read from `structuredContent` or the first JSON text block). |
+| anything else, including no annotation (MCP's default is `false`) | a governed Action with `tier: "approve"`. Override with `tierFor(tool)`. |
+
+> **Use it only with MCP servers you trust.** `readOnlyHint` is a hint the server makes about itself: a server that marks a write tool read-only gets it resolved as a plain read, with no approval gate. Pass `isReadOnly(tool)` and/or `include(tool)` to decide yourself.
+
+```bash
+npm install @kohaku-ui/domain-mcp @kohaku-ui/host @kohaku-ui/authz-hmac @kohaku-ui/llm zod @modelcontextprotocol/client
+```
+
+```ts
+import { createHmacApprovalPort } from "@kohaku-ui/authz-hmac";
+import { createMcpDomainPort, createMcpIntents } from "@kohaku-ui/domain-mcp";
+import { createGovernancePolicy, createKohakuHost } from "@kohaku-ui/host";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+
+// You bring and connect the MCP client; this package never imports the SDK.
+const client = new Client({ name: "my-kohaku-host", version: "1.0.0" });
+await client.connect(new StreamableHTTPClientTransport(new URL("https://upstream.example/mcp")));
+
+const domain = await createMcpDomainPort({
+  client,
+  onSchemaProjection: (r) => console.warn("paramsSchema", r), // what was dropped / omitted, per tool
+});
+const host = createKohakuHost({
+  domain,
+  querySource: "orders",
+  llm: createLlmFromEnv(),
+  intents: createMcpIntents(domain, { source: "orders" }), // one Intent per read-only tool
+  describeShape: (ref) => domain.describeShape(ref), //   columns from the tool's outputSchema
+  dataVersion: domain.dataVersion, //                     the same function the port stamps on the data
+  routes: {
+    approvals: createHmacApprovalPort(process.env.KOHAKU_CAPABILITY_SECRET!),
+    authorizeGovernance: createGovernancePolicy({ roles: { approver: ["action.approve"] } }),
+    // plus `auth`, so requests carry a principal (see "Governed actions" in Demo 5)
+  },
+});
+```
+
+What to know before you point it at a real server:
+
+- **Writes need an approval port.** An `approve`-tier Action is refused with 403 `APPROVAL_REQUIRED` until someone other than the requester mints a token (`POST /approvals`, see "Governed actions" in Demo 5). Wire `routes.approvals` and `routes.authorizeGovernance` as above, otherwise every write stays refused.
+- **The Action's `paramsSchema` is a projection.** The tool's `inputSchema` is mapped onto kohaku's closed JSON Schema subset: `description`, `title`, `default`, `format`, `pattern` and a few other constraints are dropped (reported through `onSchemaProjection`, and counted in the operation's description the approver sees), and every object is closed with `additionalProperties: false`, so a key the server would have accepted is refused. A property written as `anyOf: [X, null]` (Pydantic's `Optional[X]`) becomes the optional property `X`. A schema that uses any other `anyOf` / `oneOf` / `$ref`, a type array, `additionalProperties: true` or an unknown keyword is **omitted**, so kohaku does not validate that Action's payload and the approver judges the raw payload; check the `omitted` reports and `include` or `tierFor` accordingly.
+- **A write tool can never be read.** `createMcpIntents` only creates Intents for read-only tools, and a read capability is only issued for an Intent's resolved refs, so `query://orders/refund_order` has no capability behind it. A hand-written Intent must never point at an action op (`domain.actionOps`). An optional parameter an Intent cannot carry (boolean, array, object) is silently left out, and a tool that requires one is skipped (`onSkip`, which also reports tool names outside `[A-Za-z0-9_.-]{1,128}` and duplicates).
+- **MCP has no data version.** `mcpDataVersion` (the default of the port) is a time bucket, `mcp:<floor(now / 300 s)>`. A Spec composed just before a boundary is stale once after it, and a successful write does not change the version until the next bucket. Pass `dataVersion` to the port to use a real version (an ETag-like tool of your own).
+- **Ref parameters are strings.** The port converts them by the tool's `inputSchema` type (`number`, `integer`, `boolean`; a bad value raises an error coded `MCP_ARGUMENT_INVALID` before the tool is called, which REST reports like any failed read, as 404 `REF_NOT_FOUND`), drops `_cursor` / `_sort` / `_dir`, and maps `_limit` onto the tool's own numeric `limit`: `_limit` can only lower the signed `limit`, and `maxLimit` (default 1000) caps it.
+- **Bounds.** One upstream call has `callTimeoutMs` (default 30 s): it is aborted, never retried, and a timed-out write is reported as "effect is unknown". A query result is limited to `maxRows` (10 000) and `maxResultBytes` (10 MiB). Columns are inferred from the first 50 rows.
+- **Not followed or provided:** `tools/list_changed` (restart the host to pick up a new tool), reconnection (you own the client), caching (every `/binding/resolve` calls the server), and the caller's identity (the MCP client's transport authenticates once, so every caller shares one upstream credential; the principal is not forwarded).
+
+The Python port is `kohaku.domain_mcp` (`create_mcp_domain_port` / `create_mcp_intents` / `mcp_data_version`), under the existing `mcp` extra.
 
 ### Step 0 — Server-Driven UI without an LLM
 
@@ -748,7 +807,7 @@ export const myCard = defineComponent({
   type: "myapp.card", version: "1.0.0",
   // … description / propsSchema / capabilities as before …
   deprecated: { reason: "superseded by myapp.cardV2", replacedBy: { type: "myapp.cardV2" } },
-  migrateProps: (props) => ({ title: props.title }), // TS-only: rewrites props for `kohaku migrate`
+  migrateProps: (props) => ({ title: props.title }), // rewrites props for `kohaku migrate` (Python: `migrate_props=`)
 });
 ```
 
