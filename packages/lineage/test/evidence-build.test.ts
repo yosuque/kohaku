@@ -160,6 +160,7 @@ describe("buildEvidencePack", () => {
       "action.invoked",
       "action.approvalRequested",
       "action.approved",
+      "action.approvalIssued",
       "action.denied",
       "policy.applied",
       "view.composed",
@@ -181,11 +182,12 @@ describe("buildEvidencePack", () => {
     expect(approvalTypes).toEqual([
       "action.approvalRequested",
       "action.approved",
+      "action.approvalIssued",
       "action.denied",
       "policy.applied",
     ]);
-    expect(result.manifest.counts.approvals).toBe(4);
-    expect(result.manifest.counts.events).toBe(6);
+    expect(result.manifest.counts.approvals).toBe(5);
+    expect(result.manifest.counts.events).toBe(7);
   });
 
   it("records an artifact hash mismatch as a warning instead of failing the export", async () => {

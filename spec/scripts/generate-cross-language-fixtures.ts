@@ -624,6 +624,23 @@ async function main(): Promise<void> {
       },
       tenant: EVIDENCE_TENANT,
     },
+    // action.approvalIssued (design.md #72): an approval-index member whose actor is the approver. It lands
+    // between eev-6 and eev-7 by `ts`; the id is the next free one so the earlier ids stay stable.
+    {
+      id: "eev-10",
+      ts: "2026-06-07T12:00:00.000Z",
+      actor: { kind: "user", id: "reviewer-1" },
+      type: "action.approvalIssued",
+      payload: {
+        action: "annotate",
+        payloadHash: `sha256:${"a".repeat(64)}`,
+        requesterId: "operator-1",
+        approverId: "reviewer-1",
+        ttlSeconds: 300,
+        expiresAt: "2026-06-07T12:05:00.000Z",
+      },
+      tenant: EVIDENCE_TENANT,
+    },
   ];
   const evidenceArtifactBSha256 = await sha256Hex(EVIDENCE_ARTIFACT_B_HTML);
   const evidencePromotions: PromotionState[] = [
