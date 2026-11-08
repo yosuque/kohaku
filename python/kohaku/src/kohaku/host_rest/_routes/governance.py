@@ -264,9 +264,12 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         # Audit the issuance (design.md #72), only now that it succeeded and fail-open like every other
         # action.* record: a recording failure must never turn a minted token into an error response. The
         # event carries the approver as its actor and never the token itself. The ApprovalPort does not report
-        # its own expiry, so `expires_at` is issue time + the requested TTL (or DEFAULT_APPROVAL_TTL_SECONDS).
-        # That is advisory: it differs from the real expiry when the port's own default TTL differs from that
-        # constant, or when the port clamps the TTL. Future fix: ApprovalPort.issue_approval returns the expiry.
+        # its own expiry, so `expires_at` is issue time + the REQUESTED TTL (or DEFAULT_APPROVAL_TTL_SECONDS),
+        # not the lifetime the port granted. That is advisory: it differs from the real expiry when the port's
+        # own default TTL differs from that constant, or when the port clamps the TTL (the HMAC port clamps to
+        # `max_ttl_seconds`, 3600 s by default, so a 24 h request records a 24 h `expires_at` for a token that
+        # dies after 1 h). A reader (the admin console) must therefore treat it as information only, never as
+        # proof a token is still valid or a reason to refuse minting a new one. Future fix: ApprovalPort.issue_approval returns the expiry.
         # A recorder without the optional `approval_issued` hook is skipped.
         recorder = (
             cast(ApprovalIssuedRecorder, deps.action_audit_recorder)

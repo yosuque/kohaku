@@ -78,6 +78,11 @@ export interface McpHostDeps {
    * for a shared Streamable HTTP deployment — see `principal`'s doc comment above for why a single static
    * `principal` is unsafe there. When unwired, every call runs as `principal ?? ANONYMOUS`, unchanged from
    * before this field existed.
+   *
+   * It must return a **distinct id per caller**: the id also binds MCP Tasks (`tasks/get` / `tasks/cancel`
+   * ownership). A resolver that returns the default principal's id (or any shared guest id) for several callers
+   * makes them one task owner; a call that resolves the default principal's id is owned by `rateLimitKey` /
+   * the session id instead.
    */
   resolvePrincipal?: (extra: ServerContext) => Principal | Promise<Principal>;
   /**
@@ -172,10 +177,12 @@ export interface McpHostDeps {
   /**
    * Rate limiter for the tool calls (product responsibility; typically host_core's
    * PolicyRuntime.rateLimiter, which resolves the effective RateLimitRule per routeClass from a Policy
-   * file's rateLimits section — the MCP surface never resolves a tenant, so every call's tenant is
-   * always undefined here, unlike the REST profile). Checked before `${prefix}_compose` /
-   * `${prefix}_render_snapshot` / the intent tools / `${prefix}_event` (routeClass "compose"),
-   * `${prefix}_action` ("action"), and `${prefix}_resolve_binding` ("resolve").
+   * file's rateLimits section — the MCP surface resolves no tenant of its own, so a `compose` check carries
+   * none; `${prefix}_action` / `${prefix}_resolve_binding` are checked after the capability verified and carry
+   * the capability's signed tenant when it binds one, so a tenant's `rateLimits` rule applies there, SPEC
+   * CAP-TEN-002). Checked before `${prefix}_compose` / `${prefix}_render_snapshot` / the intent tools /
+   * `${prefix}_event` (routeClass "compose"), and after capability verification for `${prefix}_action`
+   * ("action") and `${prefix}_resolve_binding` ("resolve").
    *
    * The bucket key's "principal" component is, in order: `rateLimitKey(extra)` when wired; else
    * `resolvePrincipal`'s resolved `principal.id` when `resolvePrincipal` is wired (a real per-caller
@@ -199,13 +206,15 @@ export interface McpHostDeps {
    * (a client IP, an API-key id read from the HTTP request, ...). Takes precedence over
    * `resolvePrincipal`'s `principal.id` and the `sessionId` fallback (see `rateLimiter`). A throw is
    * fail-closed: the tool call returns a structured tool error and the failure reaches `onError`, as with
-   * `resolvePrincipal`.
+   * `resolvePrincipal`. It is NOT the MCP Tasks owner key: a task is bound to the resolved principal's id when
+   * `resolvePrincipal` is wired (see `mcpTaskOwnerKey`), because an IP-based key is shared by distinct
+   * authenticated callers.
    */
   rateLimitKey?: (extra: ServerContext) => string | Promise<string>;
   /**
    * Observer called (fire-and-forget: never awaited, a throw is swallowed) each time `rateLimiter` denies
-   * a tool call, with the route class, the bucket key as `principal` (see `rateLimiter`; this profile has
-   * no tenant) and the call's correlation id as `requestId` (`mcp:<sessionId or per-call uuid>:<jsonrpc
+   * a tool call, with the route class, the bucket key as `principal` (see `rateLimiter`), the
+   * capability's `tenant` for `action` / `resolve` (absent for `compose`) and the call's correlation id as `requestId` (`mcp:<sessionId or per-call uuid>:<jsonrpc
    * id>`, the same value `ComposeTrace.correlationId` carries for a compose-family call).
    */
   onRateLimited?: (info: RateLimitedInfo) => void | Promise<void>;

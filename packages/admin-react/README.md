@@ -41,7 +41,7 @@ export function AdminPage() {
 - The published promotion card has an **Unpublish** action (`PromotionActionKind: "unpublish"`; copy in
   `messages.promotions.opUnpublish` / `unpublishedNotice`) alongside approve/reject/withdraw/request-changes.
 - The **Approvals** tab is the approver's inbox for `"approve"`-tier governed Actions (design.md #72). It derives
-  the pending requests from the lineage tail (`GET /lineage`, last 24 hours, at most 1000 `action.approvalRequested` / `action.approved` / `action.approvalIssued` events, an unexpired issuance marking its row "Issued by … — expires in …" with Approve disabled, with a notice when that cap is reached; also available as the
+  the pending requests from the lineage tail (`GET /lineage`, last 24 hours, at most 1000 `action.approvalRequested` / `action.approved` / `action.approvalIssued` events, an issuance whose recorded (advisory) expiry has not passed marking its row "Issued by … — recorded expiry in …" as information only (Approve stays enabled), with a notice when that cap is reached; also available as the
   `useApprovalInbox` hook) and mints a bearer token with `POST /approvals` that the
   approver copies and hands to the requester. It needs `lineage.read` and `action.approve`; a host that records
   only hashes (the default) shows the payload hash, one that records payloads
