@@ -36,11 +36,18 @@ const SDK_TIMEOUT_MARGIN_MS = 5_000;
 /** How many constraint names the approver-facing description lists before it says "…". */
 const MAX_LISTED_CONSTRAINTS = 5;
 
+/** The `code` of a write's `McpTimeoutError`: the tool may or may not have run (host-core's `isOutcomeUnknownError`). */
+export const MCP_OUTCOME_UNKNOWN = "MCP_OUTCOME_UNKNOWN";
+
 /**
  * An upstream call did not answer within `callTimeoutMs`. The request was aborted, not retried. For a write the
- * description says the effect is unknown: the tool may or may not have run. No wire `code`.
+ * description says the effect is unknown (the tool may or may not have run) and the error carries the code
+ * `MCP_OUTCOME_UNKNOWN`, which the hosts recognise: REST answers 503 `INTERNAL` with a fixed "outcome is unknown;
+ * verify before retrying" message instead of the 404 every failed read gets, and MCP the same text as a tool error.
+ * A read's timeout has no `code`: nothing was changed, so it stays an ordinary failed read.
  */
 export class McpTimeoutError extends Error {
+  readonly code: string | undefined;
   constructor(tool: string, write: boolean) {
     super(
       write
@@ -48,6 +55,7 @@ export class McpTimeoutError extends Error {
         : `MCP tool "${tool}": the upstream tool did not answer in time`,
     );
     this.name = "McpTimeoutError";
+    this.code = write ? MCP_OUTCOME_UNKNOWN : undefined;
   }
 }
 

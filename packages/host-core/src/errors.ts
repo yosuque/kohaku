@@ -63,9 +63,32 @@ export function isLlmUnavailableError(e: unknown): boolean {
  */
 export const STORAGE_CONFLICT_MESSAGE = "the resource was modified concurrently; reload and retry";
 
+/**
+ * The fixed, client-safe message for a governed Action whose effect cannot be told: the write was sent but its
+ * answer never came back (a timeout, a connection lost after the request left), so it may or may not have been
+ * applied. REST answers 503 `INTERNAL` with this text and MCP a structured tool error; the caller must check the
+ * outcome before sending the same approval again (a stateless approval token would run the write twice). The
+ * error's own message (which names the tool) goes only to the observability hook. Follows
+ * {@link LLM_PROVIDER_UNAVAILABLE_MESSAGE}'s precedent: no new wire error code, a fixed text.
+ */
+export const OUTCOME_UNKNOWN_MESSAGE = "the action's outcome is unknown; verify before retrying";
+
+/**
+ * True when `e` is an Error whose string `code` is `OUTCOME_UNKNOWN` or ends in `_OUTCOME_UNKNOWN`: the
+ * convention a `DomainPort` adapter follows to say "the write may have been applied" (`@kohaku-ui/domain-mcp`
+ * throws `MCP_OUTCOME_UNKNOWN` on a write timeout). A suffix rather than one shared code so an adapter keeps its
+ * own namespace, the way its other codes do; host-core knows no adapter by name.
+ */
+export function isOutcomeUnknownError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const code = (e as { code?: unknown }).code;
+  return typeof code === "string" && (code === "OUTCOME_UNKNOWN" || code.endsWith("_OUTCOME_UNKNOWN"));
+}
+
 /** What a host should do with a caught exception: map to 409, map to 503, pass its message through, or use a fixed fallback. */
 export type HostErrorClass =
   | { kind: "conflict"; message: string }
+  | { kind: "outcomeUnknown"; message: string }
   | { kind: "upstreamUnavailable"; message: string }
   | { kind: "typed"; message: string }
   | { kind: "untyped" };
@@ -78,6 +101,8 @@ export function classifyHostError(e: unknown): HostErrorClass {
   // Before the typed check: a StorageConflictError carries a string `code` too, so it would otherwise pass its
   // own message through instead of the fixed STORAGE_CONFLICT_MESSAGE.
   if (isStorageConflictError(e)) return { kind: "conflict", message: STORAGE_CONFLICT_MESSAGE };
+  // Also before the typed check, for the same reason: the error's own text names the upstream tool.
+  if (isOutcomeUnknownError(e)) return { kind: "outcomeUnknown", message: OUTCOME_UNKNOWN_MESSAGE };
   if (isLlmUnavailableError(e))
     return { kind: "upstreamUnavailable", message: LLM_PROVIDER_UNAVAILABLE_MESSAGE };
   if (isTypedHostError(e)) return { kind: "typed", message: errorMessage(e) };
@@ -107,6 +132,7 @@ export function errorMessage(e: unknown): string {
  */
 export function clientMessageFor(e: unknown, fallback: string): string {
   if (isStorageConflictError(e)) return STORAGE_CONFLICT_MESSAGE;
+  if (isOutcomeUnknownError(e)) return OUTCOME_UNKNOWN_MESSAGE;
   return isTypedHostError(e) ? errorMessage(e) : fallback;
 }
 

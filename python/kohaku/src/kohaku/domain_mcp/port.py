@@ -51,13 +51,22 @@ _SDK_TIMEOUT_MARGIN_SECONDS = 5.0
 _MAX_LISTED_CONSTRAINTS = 5
 
 
+MCP_OUTCOME_UNKNOWN = "MCP_OUTCOME_UNKNOWN"
+"""The `code` of a write's `McpTimeoutError`: the tool may or may not have run (host_core's
+`is_outcome_unknown_error`)."""
+
+
 class McpTimeoutError(RuntimeError):
     """An upstream call did not answer within `call_timeout_ms`. The request was cancelled, not retried. For a
-    write the message says the effect is unknown: the tool may or may not have run. No wire `code`."""
+    write the message says the effect is unknown (the tool may or may not have run) and the error carries the
+    code `MCP_OUTCOME_UNKNOWN`, which the hosts recognise: REST answers 503 `INTERNAL` with a fixed "outcome is
+    unknown; verify before retrying" message instead of the 404 every failed read gets, and MCP the same text as
+    a tool error. A read's timeout has no `code`: nothing was changed, so it stays an ordinary failed read."""
 
     def __init__(self, tool: str, write: bool) -> None:
         suffix = "; its effect is unknown" if write else ""
         super().__init__(f'MCP tool "{tool}": the upstream tool did not answer in time{suffix}')
+        self.code: str | None = MCP_OUTCOME_UNKNOWN if write else None
 
 
 @dataclass(frozen=True)

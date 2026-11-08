@@ -495,6 +495,8 @@ def test_times_out_a_query_that_never_answers_cancelling_the_request() -> None:
         with pytest.raises(McpTimeoutError) as info:
             await port.invoke("list_orders", {}, CTX)
         assert "effect is unknown" not in str(info.value)
+        # Nothing was changed, so a read's timeout carries no outcome-unknown code.
+        assert info.value.code is None
 
     asyncio.run(run())
     assert client.cancelled == ["list_orders"]
@@ -508,6 +510,7 @@ def test_times_out_a_write_without_retrying_it_and_says_its_effect_is_unknown() 
         with pytest.raises(McpTimeoutError) as info:
             await port.invoke("refund_order", {"orderId": "o"}, CTX)
         assert "the upstream tool did not answer in time; its effect is unknown" in str(info.value)
+        assert info.value.code == "MCP_OUTCOME_UNKNOWN"
 
     asyncio.run(run())
     assert len(client.calls) == 1

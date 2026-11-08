@@ -3,6 +3,7 @@ export { mcpDataVersion } from "./data-version.js";
 export { createMcpIntents, type McpIntentsOptions } from "./intents.js";
 export {
   createMcpDomainPort,
+  MCP_OUTCOME_UNKNOWN,
   type McpDomainPort,
   type McpDomainPortOptions,
   McpTimeoutError,

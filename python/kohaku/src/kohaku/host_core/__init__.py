@@ -80,6 +80,7 @@ from .catalog_migration import (
 from .daily_token_ledger import DailyTokenLedger, create_daily_token_ledger
 from .errors import (
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+    OUTCOME_UNKNOWN_MESSAGE,
     STORAGE_CONFLICT_MESSAGE,
     ConsoleErrorReporter,
     ConsoleErrorReporterOptions,
@@ -89,6 +90,7 @@ from .errors import (
     fail_open,
     format_error_chain,
     is_llm_unavailable_error,
+    is_outcome_unknown_error,
     is_typed_host_error,
     notify_hook,
     notify_hook_nowait,
@@ -173,6 +175,7 @@ __all__ = [
     "APPROVAL_TOKEN_REQUIRED_MESSAGE",
     "CONFIRMATION_REQUIRED_MESSAGE",
     "LLM_PROVIDER_UNAVAILABLE_MESSAGE",
+    "OUTCOME_UNKNOWN_MESSAGE",
     "STORAGE_CONFLICT_MESSAGE",
     "NO_APPROVAL_PORT_REASON",
     "UNDECLARED_ACTION_MESSAGE",
@@ -269,6 +272,7 @@ __all__ = [
     "format_error_chain",
     "get_lock",
     "is_llm_unavailable_error",
+    "is_outcome_unknown_error",
     "is_typed_host_error",
     "authz_accepts_tenant",
     "issue_capability_for_spec",

@@ -32,6 +32,7 @@ from kohaku.host_core import (
     ACTION_GATE_UNAVAILABLE_MESSAGE,
     GATED_READ_MESSAGE,
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+    OUTCOME_UNKNOWN_MESSAGE,
     STORAGE_CONFLICT_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
@@ -441,7 +442,9 @@ def _client_failure_message(exc: BaseException) -> str:
     `_safe_tool`, or a background MCP Tasks compose failing in `_start_compose_task`). An unavailable LLM provider
     (LlmError PROVIDER / CONFIG / ABORTED) is an operator-side failure whose raw SDK wording must not reach the
     model: host_core's `classify_host_error` gives it the same fixed message the REST profile answers with on 503.
-    A typed host error passes its own message through; everything else collapses to
+    The same goes for a write whose outcome is unknown (an `*_OUTCOME_UNKNOWN` code, e.g. domain_mcp's write
+    timeout): the fixed OUTCOME_UNKNOWN_MESSAGE, so the model checks before retrying and never reads the upstream
+    tool's name from the error. A typed host error passes its own message through; everything else collapses to
     `_TOOL_INTERNAL_ERROR_MESSAGE`. Port of TS `clientFailureMessage`.
     """
     cls = classify_host_error(exc)
@@ -449,6 +452,8 @@ def _client_failure_message(exc: BaseException) -> str:
         return STORAGE_CONFLICT_MESSAGE
     if cls.kind == "upstream_unavailable":
         return LLM_PROVIDER_UNAVAILABLE_MESSAGE
+    if cls.kind == "outcome_unknown":
+        return OUTCOME_UNKNOWN_MESSAGE
     return str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE
 
 

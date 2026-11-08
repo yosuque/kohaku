@@ -75,13 +75,38 @@ def is_llm_unavailable_error(e: object) -> bool:
     return getattr(e, "code", None) in ("PROVIDER", "CONFIG", "ABORTED")
 
 
+OUTCOME_UNKNOWN_MESSAGE = "the action's outcome is unknown; verify before retrying"
+"""The fixed, client-safe message for a governed Action whose effect cannot be told: the write was sent but its
+answer never came back (a timeout, a connection lost after the request left), so it may or may not have been
+applied. REST answers 503 `INTERNAL` with this text and MCP a structured tool error; the caller must check the
+outcome before sending the same approval again (a stateless approval token would run the write twice). The
+error's own message (which names the tool) goes only to the observability hook. Follows
+LLM_PROVIDER_UNAVAILABLE_MESSAGE's precedent: no new wire error code, a fixed text. Identical to TS host-core's
+OUTCOME_UNKNOWN_MESSAGE."""
+
+
+def is_outcome_unknown_error(e: object) -> bool:
+    """True when `e` is an exception whose string `code` is `OUTCOME_UNKNOWN` or ends in `_OUTCOME_UNKNOWN`: the
+    convention a `DomainPort` adapter follows to say "the write may have been applied" (`kohaku.domain_mcp`
+    raises `MCP_OUTCOME_UNKNOWN` on a write timeout). A suffix rather than one shared code so an adapter keeps its
+    own namespace, the way its other codes do; host_core knows no adapter by name. Port of TS host-core's
+    isOutcomeUnknownError (errors.ts)."""
+    if not isinstance(e, BaseException):
+        return False
+    code = getattr(e, "code", None)
+    return isinstance(code, str) and (
+        code == "OUTCOME_UNKNOWN" or code.endswith("_OUTCOME_UNKNOWN")
+    )
+
+
 @dataclass(frozen=True)
 class HostErrorClass:
     """What a host should do with a caught exception: map to 409 (`conflict`), map to 503
-    (`upstream_unavailable`), pass its message through (`typed`), or use a fixed fallback (`untyped`).
-    `message` is set for all but the last kind. Port of TS host-core's HostErrorClass (errors.ts)."""
+    (`outcome_unknown` for a write that may have been applied, `upstream_unavailable` for an unavailable LLM),
+    pass its message through (`typed`), or use a fixed fallback (`untyped`). `message` is set for all but the
+    last kind. Port of TS host-core's HostErrorClass (errors.ts)."""
 
-    kind: Literal["conflict", "upstream_unavailable", "typed", "untyped"]
+    kind: Literal["conflict", "outcome_unknown", "upstream_unavailable", "typed", "untyped"]
     message: str | None = None
 
 
@@ -93,6 +118,9 @@ def classify_host_error(e: object) -> HostErrorClass:
     # its own message through instead of the fixed STORAGE_CONFLICT_MESSAGE.
     if is_storage_conflict_error(e):
         return HostErrorClass("conflict", STORAGE_CONFLICT_MESSAGE)
+    # Also before the typed check, for the same reason: the error's own text names the upstream tool.
+    if is_outcome_unknown_error(e):
+        return HostErrorClass("outcome_unknown", OUTCOME_UNKNOWN_MESSAGE)
     if is_llm_unavailable_error(e):
         return HostErrorClass("upstream_unavailable", LLM_PROVIDER_UNAVAILABLE_MESSAGE)
     if is_typed_host_error(e):
