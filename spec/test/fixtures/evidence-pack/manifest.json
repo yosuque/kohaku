@@ -9,8 +9,8 @@
     "until": "2026-06-30T23:59:59.999Z"
   },
   "counts": {
-    "events": 9,
-    "approvals": 6,
+    "events": 10,
+    "approvals": 7,
     "promotions": 1,
     "fixations": 1,
     "artifacts": 2
@@ -19,15 +19,15 @@
   "files": [
     {
       "path": "events.jsonl",
-      "sha256": "802daa8262418f46c1bbfcc2bd02f4e17274135cf88f330eb41e75a97e0f7a57",
-      "bytes": 2266,
-      "records": 9
+      "sha256": "5fb3610a284bbb95bd86e9e78b8681ee80cd9884f99641ba7aa944457d858aba",
+      "bytes": 2639,
+      "records": 10
     },
     {
       "path": "approvals.jsonl",
-      "sha256": "8c4f5c1f1715161c2fdc734e92d1549dd708b3dbdc5d8b2bf1f2ac4d4c867fcb",
-      "bytes": 1531,
-      "records": 6
+      "sha256": "d3457ba7368e28a70efe315b1733ec696719051fe3525987cddf778ed3425d96",
+      "bytes": 1904,
+      "records": 7
     },
     {
       "path": "promotions.jsonl",

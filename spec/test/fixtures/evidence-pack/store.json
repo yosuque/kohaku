@@ -140,6 +140,24 @@
         ]
       },
       "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-10",
+      "ts": "2026-06-07T12:00:00.000Z",
+      "actor": {
+        "kind": "user",
+        "id": "reviewer-1"
+      },
+      "type": "action.approvalIssued",
+      "payload": {
+        "action": "annotate",
+        "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "requesterId": "operator-1",
+        "approverId": "reviewer-1",
+        "ttlSeconds": 300,
+        "expiresAt": "2026-06-07T12:05:00.000Z"
+      },
+      "tenant": "tenant-acme"
     }
   ],
   "promotions": [

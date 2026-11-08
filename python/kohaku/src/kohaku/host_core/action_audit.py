@@ -86,4 +86,33 @@ class ActionAuditRecorder(Protocol):
         ...
 
 
-__all__ = ["ActionAuditRecorder"]
+class ApprovalIssuedRecorder(Protocol):
+    """The optional `approval_issued` hook of an audit recorder (TS: `ActionAuditRecorder.approvalIssued?`).
+
+    A Python Protocol cannot declare an optional method, and adding a required one to
+    `ActionAuditRecorder` would make every existing custom recorder fail static checking, so the hook is its
+    own Protocol and `POST /approvals` looks it up with `getattr(recorder, "approval_issued", None)`: a
+    recorder without it is simply skipped. `principal` is the *approver*, not the requester
+    (`requester_id`) -- the one place an `action.*` event's actor is not the requester. The token and its id
+    are never passed here. `expires_at` is computed by the host as issue time + `ttl_seconds`.
+    """
+
+    async def approval_issued(
+        self,
+        *,
+        action: str,
+        payload_hash: str,
+        requester_id: str,
+        approver_id: str,
+        ttl_seconds: int,
+        expires_at: str,
+        principal: Principal,
+        tenant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        """Records that `POST /approvals` minted an approval token (design.md #72; REST only -- MCP has no
+        issuance tool)."""
+        ...
+
+
+__all__ = ["ActionAuditRecorder", "ApprovalIssuedRecorder"]

@@ -5,14 +5,17 @@ Split out of the former monolithic `_fastapi_routes.py` to mirror packages/host-
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
+from kohaku.host_core import fail_open
 from kohaku.spec import (
     APPROVAL_ISSUE_ERROR_CODE,
+    DEFAULT_APPROVAL_TTL_SECONDS,
     LineageCursorError,
     LineageEventRecord,
     LineageFilter,
@@ -53,6 +56,11 @@ _APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE = (
 # Aggregation window for usage analytics. Default 200 / max 1000 (aligned with the /lineage window constraint).
 ANALYTICS_DEFAULT_LIMIT = 200
 ANALYTICS_MAX_LIMIT = 1000
+
+
+def _iso_utc(moment: datetime) -> str:
+    """Equivalent to `Date#toISOString()`: UTC, three-digit milliseconds, trailing Z."""
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
 
 
 def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
@@ -243,9 +251,36 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 tenant=tenant,
                 ttl_seconds=body.ttl_seconds,
             )
-            return _json({"approval": token})
         except Exception as e:
             await report_host_error(deps, "approvals", request_id, e)
             if getattr(e, "code", None) == APPROVAL_ISSUE_ERROR_CODE:
                 return _error("BAD_REQUEST", _message(e), 400, request_id)
             return _error("INTERNAL", _APPROVAL_INTERNAL_ERROR_MESSAGE, 500, request_id)
+        # Audit the issuance (design.md #72), only now that it succeeded and fail-open like every other
+        # action.* record: a recording failure must never turn a minted token into an error response. The
+        # event carries the approver as its actor and never the token itself. The ApprovalPort does not report
+        # its own expiry, so `expires_at` is issue time + the requested (or default) TTL -- advisory if the
+        # port clamps it. A recorder without the optional `approval_issued` hook is skipped.
+        record_issued = getattr(deps.action_audit_recorder, "approval_issued", None)
+        if record_issued is not None:
+            ttl_seconds = (
+                body.ttl_seconds if body.ttl_seconds is not None else DEFAULT_APPROVAL_TTL_SECONDS
+            )
+            expires_at = _iso_utc(datetime.now(UTC) + timedelta(seconds=ttl_seconds))
+
+            async def _record_issued() -> None:
+                await record_issued(
+                    action=body.action,
+                    payload_hash=body.payload_hash,
+                    requester_id=body.requester_id,
+                    approver_id=approver.id,
+                    ttl_seconds=ttl_seconds,
+                    expires_at=expires_at,
+                    principal=approver,
+                    tenant=tenant,
+                )
+
+            await fail_open(
+                _record_issued, lambda e: report_host_error(deps, "approvals.audit", request_id, e)
+            )
+        return _json({"approval": token})
