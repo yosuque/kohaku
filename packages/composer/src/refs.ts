@@ -8,6 +8,7 @@ import {
 import type { ComposeContext } from "./context.js";
 import { isClientSafeCause } from "./error-message.js";
 import { ComposeError } from "./errors.js";
+import { dropShapeChangingFilters } from "./filter-shape-guard.js";
 
 export interface ResolvedRefs {
   handles: QueryHandle[];
@@ -114,6 +115,10 @@ export async function resolveRefs(
         intent,
         Object.keys(describeCtx).length > 0 ? describeCtx : undefined,
       );
+      // Defence in depth (design.md #78): a filter whose options rename the result's columns would blank the
+      // generated chart / table, so it is dropped. The cache key hashes the descriptors actually used.
+      const describe = ctx.semantic.describeShape?.bind(ctx.semantic);
+      descriptors = await dropShapeChangingFilters(descriptors, handles, shapesByRef, describe);
     } catch {
       descriptors = undefined;
     }

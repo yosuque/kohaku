@@ -20,6 +20,7 @@ from kohaku.composer.compose_stream import StreamDoneEvent, StreamPatchEvent
 from kohaku.llm import FakeLlm
 from kohaku.registry import core_catalog, resolve_catalog
 from kohaku.spec import (
+    DataShape,
     FilterDescriptor,
     FilterOption,
     Intent,
@@ -417,6 +418,188 @@ def test_l1_filters_max_variants_caps_the_injection_and_joins_the_cache_key_only
         assert explicit.trace.cacheKey == dflt.trace.cacheKey
         assert roomy.trace.cacheKey != dflt.trace.cacheKey
         assert tight.trace.cacheKey != roomy.trace.cacheKey
+
+    asyncio.run(run())
+
+
+# ---- shape guard: a filter whose options rename the result's columns is dropped (design.md #78) ----
+
+_REGION_SHAPE = DataShape.model_validate(
+    {
+        "columns": [
+            {"name": "region", "type": "string", "role": "dimension"},
+            {"name": "revenue", "type": "number", "role": "measure"},
+        ]
+    }
+)
+_PRODUCT_SHAPE = DataShape.model_validate(
+    {
+        "columns": [
+            {"name": "product", "type": "string", "role": "dimension"},
+            {"name": "revenue", "type": "number", "role": "measure"},
+        ]
+    }
+)
+
+type _DescribeShape = Callable[[QueryHandle], Awaitable[DataShape | None]]
+
+
+class _ShapedSemantic(_Semantic):
+    """A `_Semantic` whose `describe_shape` is the given callable."""
+
+    def __init__(self, shape: _DescribeShape | None) -> None:
+        super().__init__(_describe([GROUP_BY]))
+        self._shape = shape
+
+    async def describe_shape(self, handle: QueryHandle) -> DataShape | None:  # type: ignore[override]
+        if self._shape is None:
+            return None
+        return await self._shape(handle)
+
+
+def _shape_by_group_by(seen: list[str] | None = None) -> _DescribeShape:
+    async def shape(handle: QueryHandle) -> DataShape | None:
+        if seen is not None:
+            seen.append(handle.uri)
+        return _REGION_SHAPE if "groupBy=region" in handle.uri else _PRODUCT_SHAPE
+
+    return shape
+
+
+def _constant_shape(value: DataShape) -> _DescribeShape:
+    async def shape(handle: QueryHandle) -> DataShape | None:
+        return value
+
+    return shape
+
+
+def test_shape_guard_drops_a_descriptor_whose_variants_change_the_column_set(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        seen: list[str] = []
+        result = await compose(
+            _INPUT,
+            _ctx(
+                tmp_path,
+                ComposePolicy(l1Filters=True),
+                semantic=_ShapedSemantic(_shape_by_group_by(seen)),
+            ),
+        )
+        assert result.spec.provenance.tier == "L1"
+        assert result.trace.filters is None
+        assert result.spec.state is None
+        assert not any(c.type == "control.select" for c in result.spec.components)
+        assert not any(
+            c.data is not None and c.data.bind is not None for c in result.spec.components
+        )
+        # The first renaming variant (product) settled it; the current one (region) was described once, as the
+        # handle's own baseline shape, never as a variant.
+        assert len([u for u in seen if "groupBy=product" in u]) == 1
+
+    asyncio.run(run())
+
+
+def test_shape_guard_keeps_a_descriptor_whose_variants_keep_the_column_set(tmp_path: Any) -> None:
+    async def run() -> None:
+        result = await compose(
+            _INPUT,
+            _ctx(
+                tmp_path,
+                ComposePolicy(l1Filters=True),
+                semantic=_ShapedSemantic(_constant_shape(_REGION_SHAPE)),
+            ),
+        )
+        assert result.trace.filters is not None
+        assert result.trace.filters.injected == ["groupBy"]
+
+    asyncio.run(run())
+
+
+def test_shape_guard_treats_column_order_as_no_change(tmp_path: Any) -> None:
+    async def run() -> None:
+        reordered = DataShape.model_validate(
+            {"columns": [c.model_dump() for c in reversed(_REGION_SHAPE.columns)]}
+        )
+
+        async def shape(handle: QueryHandle) -> DataShape | None:
+            return _REGION_SHAPE if "groupBy=region" in handle.uri else reordered
+
+        result = await compose(
+            _INPUT,
+            _ctx(tmp_path, ComposePolicy(l1Filters=True), semantic=_ShapedSemantic(shape)),
+        )
+        assert result.trace.filters is not None
+        assert result.trace.filters.injected == ["groupBy"]
+
+    asyncio.run(run())
+
+
+def test_shape_guard_drops_a_descriptor_when_a_variants_shape_cannot_be_described(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        async def shape(handle: QueryHandle) -> DataShape | None:
+            if "groupBy=channel" in handle.uri:
+                raise ValueError("unknown query path")
+            return _REGION_SHAPE
+
+        result = await compose(
+            _INPUT,
+            _ctx(tmp_path, ComposePolicy(l1Filters=True), semantic=_ShapedSemantic(shape)),
+        )
+        assert result.trace.filters is None
+
+    asyncio.run(run())
+
+
+def test_shape_guard_leaves_the_descriptor_alone_when_there_is_nothing_to_compare_against(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        # No shapes at all (the port answers None): today's behaviour.
+        without = await compose(
+            _INPUT,
+            _ctx(tmp_path / "a", ComposePolicy(l1Filters=True), semantic=_ShapedSemantic(None)),
+        )
+        assert without.trace.filters is not None
+        assert without.trace.filters.injected == ["groupBy"]
+
+        # The initial handle's own shape fails: the guard has no baseline.
+        async def shape(handle: QueryHandle) -> DataShape | None:
+            if "groupBy=region" in handle.uri:
+                raise ValueError("no shape")
+            return _PRODUCT_SHAPE
+
+        no_base = await compose(
+            _INPUT,
+            _ctx(tmp_path / "b", ComposePolicy(l1Filters=True), semantic=_ShapedSemantic(shape)),
+        )
+        assert no_base.trace.filters is not None
+        assert no_base.trace.filters.injected == ["groupBy"]
+
+    asyncio.run(run())
+
+
+def test_shape_guard_a_dropped_descriptor_changes_the_cache_key(tmp_path: Any) -> None:
+    async def run() -> None:
+        kept = await compose(
+            _INPUT,
+            _ctx(
+                tmp_path / "a",
+                ComposePolicy(l1Filters=True),
+                semantic=_ShapedSemantic(_constant_shape(_REGION_SHAPE)),
+            ),
+        )
+        dropped = await compose(
+            _INPUT,
+            _ctx(
+                tmp_path / "b",
+                ComposePolicy(l1Filters=True),
+                semantic=_ShapedSemantic(_shape_by_group_by()),
+            ),
+        )
+        assert dropped.trace.cacheKey != kept.trace.cacheKey
 
     asyncio.run(run())
 

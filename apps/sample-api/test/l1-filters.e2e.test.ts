@@ -1,15 +1,19 @@
 import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
-import type { UISpec } from "@kohaku-ui/spec-core";
+import type { TabularData, UISpec } from "@kohaku-ui/spec-core";
 import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 
 // e2e for L1 filter injection (ComposePolicy.l1Filters, enabled in the sample): a screen the (scripted) model
-// generated for sales.trend gains control.select + data.bind for the Intent's metric / granularity facets, and the
-// capability issued for it re-resolves every variant WITHOUT another composition (the LLM is called exactly once).
+// generated for sales.trend (region=japan) gains control.select + data.bind for the Intent's region facet, and
+// the capability issued for it re-resolves every variant WITHOUT another composition (the LLM is called exactly
+// once). metric / granularity / groupBy are declared `filterable: false` in the sample catalog -- they rename the
+// result's columns, which the chart's x / y props would not follow -- so they are never injected filters.
 
-const TREND_REF = "query://sales/trend?granularity=month&metric=revenue";
+const TREND_REF = "query://sales/trend?granularity=month&metric=revenue&region=japan";
+const REGIONS = ["japan", "north_america", "europe", "apac"];
+const TREND_INTENT = { canonical: "sales.trend", params: { region: "japan" } };
 
 function trendDraft(): unknown {
   return {
@@ -61,45 +65,67 @@ async function makeApp() {
   return { app: built.app, llm };
 }
 
-async function resolveStatus(app: Hono, capability: string, ref: string): Promise<number> {
+async function resolveData(
+  app: Hono,
+  capability: string,
+  ref: string,
+): Promise<{ status: number; data?: TabularData }> {
   const res = await app.request(`/api/kohaku/binding/resolve?ref=${encodeURIComponent(ref)}`, {
     headers: { authorization: `Bearer ${capability}` },
   });
-  return res.status;
+  return res.status === 200
+    ? { status: 200, data: (await res.json()) as TabularData }
+    : { status: res.status };
+}
+
+async function resolveStatus(app: Hono, capability: string, ref: string): Promise<number> {
+  return (await resolveData(app, capability, ref)).status;
 }
 
 describe("L1 filter injection in the sample API", () => {
-  it("/compose: injects the facet filters and the capability resolves every variant with no further LLM call", async () => {
+  it("/compose: injects the shape-stable facet filters and the capability resolves every variant with no further LLM call", async () => {
     const { app, llm } = await makeApp();
     const res = await app.request("/api/kohaku/compose", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ intent: { canonical: "sales.trend", params: {} } }),
+      body: JSON.stringify({ intent: TREND_INTENT }),
     });
     expect(res.status).toBe(200);
     const { spec, capability } = (await res.json()) as { spec: UISpec; capability: string };
     expect(spec.provenance.tier).toBe("L1");
     expect(llm.calls).toHaveLength(1);
 
-    // metric and granularity are in the ref and declared as vocabulary facets; region / productId are not in the ref.
-    expect(spec.state).toEqual({ granularity: "month", metric: "revenue" });
+    // Only region is injected: metric / granularity are filterable: false (they rename the result's columns).
+    expect(spec.state).toEqual({ region: "japan" });
     const controls = spec.components.filter((c) => c.type === "control.select");
-    expect(controls.map((c) => c.id).sort()).toEqual(["filter-granularity", "filter-metric"]);
+    expect(controls.map((c) => c.id)).toEqual(["filter-region"]);
     const chart = spec.components.find((c) => c.type === "presentChart")!;
     expect(chart.data!.$ref).toBe(TREND_REF);
-    expect(Object.keys(chart.data!.bind!).sort()).toEqual(["granularity", "metric"]);
+    expect(Object.keys(chart.data!.bind!)).toEqual(["region"]);
 
-    // Changing a filter = resolving another variant of the same screen: 200 for every authorized value...
-    for (const metric of ["revenue", "units"]) {
-      for (const granularity of ["month", "quarter"]) {
-        const ref = `query://sales/trend?granularity=${granularity}&metric=${metric}`;
-        expect(await resolveStatus(app, capability, ref)).toBe(200);
+    // Changing the filter = resolving another variant of the same screen: 200 for every authorized value, and the
+    // chart's x / y props still name columns of the returned rows (a switched filter never blanks the chart).
+    const x = String(chart.props["x"]);
+    const y = String(chart.props["y"]);
+    for (const region of REGIONS) {
+      const ref = `query://sales/trend?granularity=month&metric=revenue&region=${region}`;
+      const { status, data } = await resolveData(app, capability, ref);
+      expect(status).toBe(200);
+      expect(data!.rows.length).toBeGreaterThan(0);
+      for (const row of data!.rows) {
+        expect(row[x]).not.toBeUndefined();
+        expect(row[y]).not.toBeUndefined();
       }
     }
-    // ...403 for a value outside the declared domain (no forgery), and still exactly one generation.
-    expect(await resolveStatus(app, capability, "query://sales/trend?granularity=month&metric=bogus")).toBe(
-      403,
-    );
+    // ...403 for a value outside the declared domain (no forgery), 403 for the shape-changing variants that are
+    // NOT filters any more (the capability signs no scope for them), and still exactly one generation.
+    for (const forged of [
+      "query://sales/trend?granularity=month&metric=revenue&region=bogus",
+      "query://sales/trend?granularity=month&metric=units&region=japan",
+      "query://sales/trend?granularity=quarter&metric=revenue&region=japan",
+    ]) {
+      expect(await resolveStatus(app, capability, forged)).toBe(403);
+    }
     expect(llm.calls).toHaveLength(1);
   });
 
@@ -108,7 +134,7 @@ describe("L1 filter injection in the sample API", () => {
     const res = await app.request("/api/kohaku/compose/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ intent: { canonical: "sales.trend", params: {} } }),
+      body: JSON.stringify({ intent: TREND_INTENT }),
     });
     expect(res.status).toBe(200);
     const events: { event: string; data: Record<string, unknown> }[] = [];
@@ -130,7 +156,7 @@ describe("L1 filter injection in the sample API", () => {
     const finalCap = events.filter((e) => e.event === "patch").at(-1)!.data["capability"] as string;
     expect(typeof finalCap).toBe("string");
 
-    const variant = "query://sales/trend?granularity=quarter&metric=units";
+    const variant = "query://sales/trend?granularity=month&metric=revenue&region=europe";
     expect(await resolveStatus(app, skeletonCap, variant)).toBe(403);
     expect(await resolveStatus(app, finalCap, variant)).toBe(200);
     expect(llm.calls).toHaveLength(1);
@@ -143,7 +169,7 @@ describe("L1 filter injection in the sample API", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          intent: { canonical: "sales.trend", params: {} },
+          intent: TREND_INTENT,
           session: { surface: "web", locale },
         }),
       });
@@ -155,8 +181,8 @@ describe("L1 filter injection in the sample API", () => {
         spec.components.filter((c) => c.type === "control.select").map((c) => [c.id, c.props["label"]]),
       );
     const ja = await compose("ja");
-    expect(labels(ja.spec)).toEqual({ "filter-granularity": "粒度", "filter-metric": "指標" });
+    expect(labels(ja.spec)).toEqual({ "filter-region": "地域" });
     const en = await compose("en");
-    expect(labels(en.spec)).toEqual({ "filter-granularity": "Granularity", "filter-metric": "Metric" });
+    expect(labels(en.spec)).toEqual({ "filter-region": "Region" });
   });
 });

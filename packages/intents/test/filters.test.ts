@@ -158,6 +158,29 @@ describe("IntentDef.filters", () => {
     expect(def.filters?.().map((f) => [f.param, f.paths])).toEqual([["groupBy", ["a", "b"]]]);
   });
 
+  it("skips a facet declared filterable: false (it still appears in toFacetView)", () => {
+    const facets = [
+      { param: "groupBy", label: "Group by", options: groupBy, filterable: false },
+      { param: "region", label: "Region", options: region, emptyLabel: "All regions" },
+    ];
+    const builder = summary({ facets });
+    expect(
+      builder
+        .toIntentDef()
+        .filters?.()
+        .map((f) => f.param),
+    ).toEqual(["region"]);
+    expect(builder.toFacetView().facets.map((f) => f.key)).toEqual(["groupBy", "region"]);
+    // filterable defaults to true, and an explicit true behaves the same.
+    const explicit = summary({ facets: facets.map((f) => ({ ...f, filterable: true })) });
+    expect(
+      explicit
+        .toIntentDef()
+        .filters?.()
+        .map((f) => f.param),
+    ).toEqual(["groupBy", "region"]);
+  });
+
   it("is absent when queries is a callback (no paramMap to read the query param from)", () => {
     const def = defineIntent({
       canonical: "sales.callback",

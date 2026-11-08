@@ -1,8 +1,10 @@
 """e2e for L1 filter injection in the Python sample (port of TS apps/sample-api/test/l1-filters.e2e.test.ts).
 
-ComposePolicy.l1Filters is on in the sample: a screen the (scripted) model generated for sales.trend gains
-control.select + data.bind for the Intent's metric / granularity facets, and the capability issued for it
-re-resolves every variant WITHOUT another composition (the LLM is called exactly once).
+ComposePolicy.l1Filters is on in the sample: a screen the (scripted) model generated for sales.trend
+(region=japan) gains control.select + data.bind for the Intent's region facet, and the capability issued for it
+re-resolves every variant WITHOUT another composition (the LLM is called exactly once). metric / granularity /
+groupBy are declared `filterable=False` in the sample catalog -- they rename the result's columns, which the
+chart's x / y props would not follow -- so they are never injected filters.
 """
 
 from __future__ import annotations
@@ -18,7 +20,9 @@ from kohaku.llm import FakeLlm
 from kohaku.storage import MemoryStoragePort
 from sales_api.app import create_app
 
-TREND_REF = "query://sales/trend?granularity=month&metric=revenue"
+TREND_REF = "query://sales/trend?granularity=month&metric=revenue&region=japan"
+REGIONS = ("japan", "north_america", "europe", "apac")
+TREND_INTENT = {"canonical": "sales.trend", "params": {"region": "japan"}}
 
 
 def _trend_draft() -> dict[str, Any]:
@@ -51,52 +55,62 @@ def _make() -> tuple[TestClient, FakeLlm]:
     return TestClient(app.app), llm
 
 
-def _resolve_status(client: TestClient, capability: str, ref: str) -> int:
+def _resolve(client: TestClient, capability: str, ref: str) -> tuple[int, Any]:
     res = client.get(
         "/api/kohaku/binding/resolve",
         params={"ref": ref},
         headers={"authorization": f"Bearer {capability}"},
     )
-    return res.status_code
+    return res.status_code, (res.json() if res.status_code == 200 else None)
 
 
-def test_compose_injects_the_facet_filters_and_the_capability_resolves_every_variant() -> None:
+def _resolve_status(client: TestClient, capability: str, ref: str) -> int:
+    return _resolve(client, capability, ref)[0]
+
+
+def test_compose_injects_the_shape_stable_facet_filters_and_the_capability_resolves_every_variant() -> (
+    None
+):
     client, llm = _make()
-    res = client.post(
-        "/api/kohaku/compose", json={"intent": {"canonical": "sales.trend", "params": {}}}
-    )
+    res = client.post("/api/kohaku/compose", json={"intent": TREND_INTENT})
     assert res.status_code == 200
     body = res.json()
     spec, capability = body["spec"], body["capability"]
     assert spec["provenance"]["tier"] == "L1"
     assert len(llm.calls) == 1
 
-    # metric and granularity are in the ref and declared as vocabulary facets; region / productId are not in the ref.
-    assert spec["state"] == {"granularity": "month", "metric": "revenue"}
+    # Only region is injected: metric / granularity are filterable=False (they rename the result's columns).
+    assert spec["state"] == {"region": "japan"}
     controls = [c for c in spec["components"] if c["type"] == "control.select"]
-    assert sorted(c["id"] for c in controls) == ["filter-granularity", "filter-metric"]
+    assert [c["id"] for c in controls] == ["filter-region"]
     chart = next(c for c in spec["components"] if c["type"] == "presentChart")
     assert chart["data"]["$ref"] == TREND_REF
-    assert sorted(chart["data"]["bind"].keys()) == ["granularity", "metric"]
+    assert list(chart["data"]["bind"].keys()) == ["region"]
 
-    # Changing a filter = resolving another variant of the same screen: 200 for every authorized value...
-    for metric in ("revenue", "units"):
-        for granularity in ("month", "quarter"):
-            ref = f"query://sales/trend?granularity={granularity}&metric={metric}"
-            assert _resolve_status(client, capability, ref) == 200
-    # ...403 for a value outside the declared domain (no forgery), and still exactly one generation.
-    assert (
-        _resolve_status(client, capability, "query://sales/trend?granularity=month&metric=bogus")
-        == 403
-    )
+    # Changing the filter = resolving another variant of the same screen: 200 for every authorized value, and
+    # the chart's x / y props still name columns of the returned rows (a switched filter never blanks the chart).
+    x, y = chart["props"]["x"], chart["props"]["y"]
+    for region in REGIONS:
+        ref = f"query://sales/trend?granularity=month&metric=revenue&region={region}"
+        status, data = _resolve(client, capability, ref)
+        assert status == 200
+        assert len(data["rows"]) > 0
+        for row in data["rows"]:
+            assert x in row and y in row
+    # ...403 for a value outside the declared domain (no forgery), 403 for the shape-changing variants that are
+    # NOT filters any more (the capability signs no scope for them), and still exactly one generation.
+    for forged in (
+        "query://sales/trend?granularity=month&metric=revenue&region=bogus",
+        "query://sales/trend?granularity=month&metric=units&region=japan",
+        "query://sales/trend?granularity=quarter&metric=revenue&region=japan",
+    ):
+        assert _resolve_status(client, capability, forged) == 403
     assert len(llm.calls) == 1
 
 
 def test_compose_stream_final_patch_capability_covers_the_filter_variants() -> None:
     client, llm = _make()
-    res = client.post(
-        "/api/kohaku/compose/stream", json={"intent": {"canonical": "sales.trend", "params": {}}}
-    )
+    res = client.post("/api/kohaku/compose/stream", json={"intent": TREND_INTENT})
     assert res.status_code == 200
     events: list[tuple[str, dict[str, Any]]] = []
     for block in res.text.split("\n\n"):
@@ -109,7 +123,7 @@ def test_compose_stream_final_patch_capability_covers_the_filter_variants() -> N
     final_cap = [d for e, d in events if e == "patch"][-1]["capability"]
     assert isinstance(final_cap, str)
 
-    variant = "query://sales/trend?granularity=quarter&metric=units"
+    variant = "query://sales/trend?granularity=month&metric=revenue&region=europe"
     assert _resolve_status(client, skeleton_cap, variant) == 403
     assert _resolve_status(client, final_cap, variant) == 200
     assert len(llm.calls) == 1
@@ -122,7 +136,7 @@ def test_a_japanese_session_gets_japanese_filter_labels_and_is_cached_separately
         res = client.post(
             "/api/kohaku/compose",
             json={
-                "intent": {"canonical": "sales.trend", "params": {}},
+                "intent": TREND_INTENT,
                 "session": {"surface": "web", "locale": locale},
             },
         )
@@ -133,5 +147,5 @@ def test_a_japanese_session_gets_japanese_filter_labels_and_is_cached_separately
             if c["type"] == "control.select"
         }
 
-    assert labels("ja") == {"filter-granularity": "粒度", "filter-metric": "指標"}
-    assert labels("en") == {"filter-granularity": "Granularity", "filter-metric": "Metric"}
+    assert labels("ja") == {"filter-region": "地域"}
+    assert labels("en") == {"filter-region": "Region"}

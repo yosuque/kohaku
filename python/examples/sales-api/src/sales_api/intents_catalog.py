@@ -218,8 +218,14 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
                 FacetSpec(
                     param="quarter", label="Quarter", labels=_JA_QUARTER, options=_QUARTER_OPTIONS
                 ),
+                # groupBy renames the result's dimension column (region -> product), so it is a GUI facet
+                # only: an injected L1 filter would leave the chart / table props naming the old column.
                 FacetSpec(
-                    param="groupBy", label="Group by", labels={"ja": "集計軸"}, options=group_by
+                    param="groupBy",
+                    label="Group by",
+                    labels={"ja": "集計軸"},
+                    options=group_by,
+                    filterable=False,
                 ),
                 FacetSpec(
                     param="region",
@@ -286,12 +292,21 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
                     emptyLabel="All regions",
                     emptyLabels=_JA_ALL_REGIONS,
                 ),
-                FacetSpec(param="metric", label="Metric", labels={"ja": "指標"}, options=metric),
+                # metric (revenue -> units) and granularity (month -> quarter) rename the result's measure /
+                # time columns, so they are GUI facets only -- never injected L1 filters.
+                FacetSpec(
+                    param="metric",
+                    label="Metric",
+                    labels={"ja": "指標"},
+                    options=metric,
+                    filterable=False,
+                ),
                 FacetSpec(
                     param="granularity",
                     label="Granularity",
                     labels={"ja": "粒度"},
                     options=granularity,
+                    filterable=False,
                 ),
             ],
             queries=[

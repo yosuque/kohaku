@@ -98,6 +98,14 @@ class FacetSpec:
     """The allowEmpty label (all regions, full year). Present ⇔ clearable."""
     emptyLabels: dict[str, str] | None = None
     """Locale overlays for emptyLabel. Meaningful only together with emptyLabel."""
+    filterable: bool = True
+    """Whether this facet may also become an injected L1 filter (`IntentDef.filters`, `ComposePolicy.l1Filters`).
+    Declare False for a facet whose value changes the SHAPE of the result (its column names: a `metric` that
+    renames the measure column, a `granularity` that renames the time column, a `groupBy` that renames the
+    dimension column): an injected filter only swaps the bound query parameter, so the generated component's
+    `x` / `y` / `columns` props would keep naming columns the new variant no longer returns. It still appears
+    in `to_facet_view()` (the GUI facet, which re-composes the Intent) -- the flag only keeps it out of the
+    in-place filters."""
 
 
 @dataclass(frozen=True)
@@ -194,6 +202,7 @@ def _build_filters(spec: IntentSpec) -> FiltersFn | None:
     A filter is excluded entirely when its `queryParam` would not have one meaning across the Intent's refs
     (FilterDescriptor's contract): it is also a `fixedParams` key of any template (the ref's value is fixed,
     not the param's), or another Intent param maps to the same query parameter on one of the filter's paths.
+    A facet declared `filterable=False` (one that changes the result's column names) is never a filter.
     None for a callback `queries`.
     """
     queries = spec.queries
@@ -201,7 +210,10 @@ def _build_filters(spec: IntentSpec) -> FiltersFn | None:
         return None
     templates = queries
     entries: list[tuple[FacetViewEntry, str, list[str]]] = []
+    not_filterable = {f.param for f in (spec.facets or []) if not f.filterable}
     for entry in _build_facet_view(spec).facets:
+        if entry.key in not_filterable:
+            continue
         if entry.control != "select" or entry.valueType != "string" or len(entry.options) == 0:
             continue
         mapped: list[str] = []
