@@ -25,7 +25,7 @@ from kohaku.storage import FileStoragePort, MemoryStoragePort
 from kohaku.storage.postgres import create_postgres_storage_port
 from kohaku.storage.redis import create_redis_storage_port
 
-from ._contract import CASES, ContractCase
+from ._contract import CASES, DECLARES_CAS_CASE, ContractCase
 
 type PortOpener = Callable[[], AbstractAsyncContextManager[Any]]
 
@@ -97,18 +97,27 @@ def open_port(request: pytest.FixtureRequest, tmp_path: Path, adapter: str) -> P
 
 
 SHARED_BACKEND_ADAPTERS = ("redis", "postgres")
-"""Adapters that serve several host instances and therefore MUST declare compare-and-set (the TS suites opt in with
-`requireCompareAndSet` for exactly these)."""
+"""Adapters that serve several host instances and therefore MUST declare compare-and-set."""
+
+SINGLE_PROCESS_ADAPTERS = ("memory", "file")
+
+DECLARES_COMPARE_AND_SET = {"memory": True, "file": False, "redis": True, "postgres": True}
+"""Which adapters declare `supports_compare_and_set` (TS: memory declares it and is `singleProcess`; the file port
+honors `expected_revision` in-process but deliberately does not declare it -- `declaresCompareAndSet: false`)."""
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.name for c in CASES])
 def test_storage_contract(open_port: PortOpener, adapter: str, case: ContractCase) -> None:
     async def go() -> None:
         async with open_port() as port:
-            if case.requires_compare_and_set and not supports_compare_and_set(port):
-                if adapter in SHARED_BACKEND_ADAPTERS:
-                    pytest.fail(f"{adapter} must declare supports_compare_and_set")
-                pytest.skip(f"{adapter} does not declare compare-and-set (single process)")
+            if case.name == DECLARES_CAS_CASE:
+                # The one adapter-dependent expectation; every other case (the semantic compare-and-set ones
+                # included) runs on every adapter, declaring or not.
+                if DECLARES_COMPARE_AND_SET[adapter]:
+                    await case.run(port)
+                else:
+                    assert not supports_compare_and_set(port)
+                return
             await case.run(port)
 
     asyncio.run(go())
@@ -125,6 +134,7 @@ def test_adapters_declare_their_concurrency_story(open_port: PortOpener, adapter
                 assert supports_compare_and_set(port)
                 assert not is_single_process(port)
             else:
+                assert adapter in SINGLE_PROCESS_ADAPTERS
                 assert is_single_process(port)
 
     asyncio.run(go())

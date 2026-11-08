@@ -52,9 +52,13 @@ function promotion(revision: string, status: string, data: Record<string, unknow
   return { artifactId: "a1", status, updatedAt: EVENT_TS, data, tenant: TENANT, revision } as PromotionState;
 }
 
-function fixation(revision: string, catalogFingerprint: string): FixationRecord {
+function fixation(
+  revision: string,
+  catalogFingerprint: string,
+  intentHash = "sha256:interop",
+): FixationRecord {
   return {
-    intentHash: "sha256:interop",
+    intentHash,
     canonical: "sales.trend",
     structureHash: "sha256:s",
     pinnedSpec: SPEC,
@@ -64,6 +68,16 @@ function fixation(revision: string, catalogFingerprint: string): FixationRecord 
     tenant: TENANT,
     revision,
   };
+}
+
+function batchState(artifactId: string, status: string): PromotionState {
+  return { artifactId, status, updatedAt: EVENT_TS, data: {}, tenant: TENANT } as PromotionState;
+}
+
+/** The optional batch write is mandatory for the adapters under test (the contract opts into it). */
+function putBatch(storage: StoragePort, states: PromotionState[]): Promise<void> {
+  if (storage.putPromotionStates == null) throw new Error("putPromotionStates is required of this adapter");
+  return storage.putPromotionStates(states);
 }
 
 const ids = (events: readonly { id: string }[]): string[] => events.map((e) => e.id);
@@ -103,6 +117,9 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
           },
         );
         await ts.storage.putFixation(fixation("ts-1", "fp-ts"), { expectedRevision: null });
+        await ts.storage.putFixation(fixation("x-1", "fp-ifp", "sha256:ifp"), { expectedRevision: null });
+        await ts.storage.putFixation(fixation("x-1", "fp-del", "sha256:del"), { expectedRevision: null });
+        await putBatch(ts.storage, [batchState("b1", "ts-batch"), batchState("b2", "ts-batch")]);
         await ts.storage.putSpecCache("ts-spec", SPEC);
         await ts.storage.appendLineage(tsEvent);
         await ts.revocations.revoke("ts-jti", Math.floor(Date.now() / 1000) + 3600);
@@ -110,6 +127,7 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         const report = (await runPeer(url, namespace, "adopt")) as {
           seen: Record<string, unknown>;
           staleConflict: boolean;
+          deleteStaleConflict: boolean;
           pageIds: string[];
         };
 
@@ -119,13 +137,18 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         );
         expect(report.seen["fixation"]).toEqual(fixation("ts-1", "fp-ts"));
         expect(report.seen["spec"]).toEqual(SPEC);
-        expect(report.seen["tenantPromotions"]).toEqual(["a1"]);
-        expect(report.seen["tenantFixations"]).toEqual(["sha256:interop"]);
+        expect(report.seen["tenantPromotions"]).toEqual(["a1", "b1", "b2"]);
+        expect(report.seen["tenantFixations"]).toEqual(["sha256:interop", "sha256:ifp", "sha256:del"]);
         expect(report.seen["lineageIds"]).toEqual(["ts-event"]);
         expect(report.seen["lineageByCorrelation"]).toEqual(["ts-event"]);
         expect(report.seen["lineageByTenant"]).toEqual(["ts-event"]);
         expect(report.seen["tsRevoked"]).toBe(true);
         expect(report.staleConflict).toBe(true);
+        // The batch write, the fixations for if_present / conditional delete: all read by Python as TS wrote them.
+        expect(report.seen["batchStatuses"]).toEqual(["ts-batch", "ts-batch"]);
+        expect(report.seen["ifpRevision"]).toBe("x-1");
+        expect(report.seen["delRevision"]).toBe("x-1");
+        expect(report.deleteStaleConflict).toBe(true);
         expect(report.pageIds).toEqual(["ts-event", "py-event"]);
 
         // TS reads what Python wrote and compare-and-sets from Python's revision.
@@ -139,6 +162,15 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         expect(fixed?.pinnedSpec).toEqual(SPEC);
         expect(fixed?.approver).toEqual({ id: "admin", name: "Ada", roles: ["admin"] });
         expect(await ts.storage.getSpecCache("py-spec")).toEqual(SPEC);
+        // What Python did with if_present, the conditional delete and the batch write is visible from TS.
+        expect(await ts.storage.getFixation("sha256:ifp", TENANT)).toMatchObject({
+          revision: "py-ifp",
+          catalogFingerprint: "fp-py-ifp",
+        });
+        expect(await ts.storage.getFixation("sha256:absent", TENANT)).toBeNull();
+        expect(await ts.storage.getFixation("sha256:del", TENANT)).toBeNull();
+        expect((await ts.storage.getPromotionState("b1", TENANT))?.status).toBe("py-batch");
+        expect((await ts.storage.getPromotionState("b2", TENANT))?.status).toBe("py-batch");
         expect(ids(await ts.storage.listLineage())).toEqual(["ts-event", "py-event"]);
         expect(ids(await ts.storage.listLineage({ correlationId: "py-corr" }))).toEqual(["py-event"]);
         expect(await ts.revocations.isRevoked("py-jti")).toBe(true);
@@ -174,6 +206,20 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         await expect(
           ts.storage.putFixation(fixation("ts-9", "fp-stale"), { expectedRevision: "py-0" }),
         ).rejects.toMatchObject({ code: "STORAGE_CONFLICT" });
+        // if_present on a record Python wrote (update) and on one that does not exist (no-op), the conditional
+        // delete (stale conflicts, the right revision deletes) and the batch write.
+        expect((await ts.storage.getFixation("sha256:ifp", TENANT))?.revision).toBe("x-1");
+        await ts.storage.putFixation(fixation("ts-ifp", "fp-ts-ifp", "sha256:ifp"), { ifPresent: true });
+        await ts.storage.putFixation(fixation("ts-absent", "fp-absent", "sha256:absent"), {
+          ifPresent: true,
+        });
+        expect(await ts.storage.getFixation("sha256:absent", TENANT)).toBeNull();
+        await expect(
+          ts.storage.deleteFixation?.("sha256:del", TENANT, { expectedRevision: "stale" }),
+        ).rejects.toMatchObject({ code: "STORAGE_CONFLICT" });
+        await ts.storage.deleteFixation?.("sha256:del", TENANT, { expectedRevision: "x-1" });
+        expect((await ts.storage.getPromotionState("b1", TENANT))?.status).toBe("py-batch");
+        await putBatch(ts.storage, [batchState("b1", "ts-batch"), batchState("b2", "ts-batch")]);
         await ts.storage.appendLineage(tsEvent);
         await ts.revocations.revoke("ts-jti", Math.floor(Date.now() / 1000) + 3600);
       } finally {

@@ -109,10 +109,15 @@ def create_storage_from_env(env: Mapping[str, str], *, data_dir: str | Path) -> 
     url = _required(env, "KOHAKU_POSTGRES_URL", kind)
     schema = env.get("KOHAKU_POSTGRES_SCHEMA") or "public"
     handle = create_postgres_pool(connection_string=url, schema=schema)
-    pg_storage = create_postgres_storage_port(pool=handle.pool, schema=schema)
-    pg_revocations = create_postgres_revocation_store(pool=handle.pool, schema=schema)
+    # The owning handle migrates once; the two consumers share its pool with `migrate=False` (they still verify,
+    # read-only, that the schema has what they write), like TS from-env.ts' shared-pool wiring.
+    pg_storage = create_postgres_storage_port(pool=handle.pool, schema=schema, migrate=False)
+    pg_revocations = create_postgres_revocation_store(
+        pool=handle.pool, schema=schema, migrate=False
+    )
 
     async def pg_ready() -> None:
+        await handle.ready()
         await pg_storage.ready()
         await pg_revocations.ready()
 

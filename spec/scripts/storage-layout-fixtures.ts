@@ -50,6 +50,7 @@ const SCHEMAS = [
   "tenant_a",
   'we"ird',
   "o'brien",
+  "100%_s%s",
   "Mixed-Case.\u{1f600}",
   "über",
   `s${"x".repeat(80)}`,

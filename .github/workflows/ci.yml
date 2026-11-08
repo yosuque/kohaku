@@ -357,6 +357,10 @@ jobs:
       - run: pnpm vitest run --project storage-redis --project storage-postgres --project authz-jwt --project sample-api
       - run: uv run pytest kohaku/tests/storage -q
         working-directory: python
+      # The Python storage suite again on the newest supported interpreter (the repo's `python` job covers 3.12 and
+      # 3.13, but without backends): --isolated keeps python/.venv (3.12) untouched.
+      - run: uv run --isolated --frozen --python 3.13 pytest kohaku/tests/storage -q
+        working-directory: python
   # The `ci` job above typechecks and tests against `src/*.ts` directly (packages export source; publishConfig
   # only applies once a package is packed). That means nothing in `ci` ever notices a missing publishConfig
   # entry, a `.d.ts` that stops resolving once packed, or a guest closure (packages/sandbox) whose stringified

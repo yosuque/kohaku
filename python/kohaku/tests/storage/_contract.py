@@ -33,6 +33,7 @@ from kohaku.spec import (
     StorageConflictError,
     UISpec,
     encode_seq_cursor,
+    supports_compare_and_set,
 )
 
 
@@ -40,13 +41,6 @@ from kohaku.spec import (
 class ContractCase:
     name: str
     run: Callable[[Any], Awaitable[None]]
-
-    @property
-    def requires_compare_and_set(self) -> bool:
-        """The compare-and-set group. A single-process adapter (memory / file) may decline the extension, and then
-        these cases are skipped for it; the shared-backend adapters (redis / postgres) must declare it, and the runner
-        fails instead of skipping for them (see test_storage_contract.py)."""
-        return self.name.startswith("compare-and-set:")
 
 
 CASES: list[ContractCase] = []
@@ -452,9 +446,15 @@ async def _fix(port: Any, intent_hash: str, tenant: str | None = None) -> Fixati
     return cast(FixationRecord, record)
 
 
-@_case("compare-and-set: declares supports_compare_and_set")
+DECLARES_CAS_CASE = "compare-and-set: declares supports_compare_and_set (or deliberately does not)"
+"""The one case whose expectation depends on the adapter: the runner (test_storage_contract.py) inverts it for a
+single-process adapter that honors `expected_revision` but deliberately does not declare the extension (the TS
+suite's `declaresCompareAndSet: false`). Every other compare-and-set case runs on every adapter, declaring or not."""
+
+
+@_case(DECLARES_CAS_CASE)
 async def _cas_declares(port: Any) -> None:
-    assert port.supports_compare_and_set is True
+    assert supports_compare_and_set(port)
 
 
 @_case(

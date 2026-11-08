@@ -28,6 +28,7 @@ except ImportError as error:  # pragma: no cover - exercised only without the ex
 from .schema import (
     DEFAULT_SCHEMA,
     POSTGRES_SCHEMA_VERSION,
+    escape_placeholders,
     lineage_correlation_ddl,
     postgres_base_schema_sql,
     qualified_table,
@@ -166,7 +167,9 @@ class PostgresPoolHandle:
         """Runs one statement on a pooled connection and returns its rows (empty for a statement that returns
         none) and row count. The pool's connections are autocommit, so a statement is its own transaction."""
         async with self.pool.connection() as conn:
-            cursor = await conn.execute(sql_text(sql), params)
+            # Always pass a parameter list (possibly empty): psycopg then reads `%%` as an escaped percent in every
+            # statement, which is what lets the table identifiers be embedded `%`-escaped (schema.escape_placeholders).
+            cursor = await conn.execute(sql_text(sql), params if params is not None else [])
             rows = await cursor.fetchall() if cursor.description is not None else []
             return QueryResult(rows=rows, rowcount=cursor.rowcount)
 
@@ -416,7 +419,8 @@ async def _ensure_schema_version(conn: AsyncConnection[tuple[Any, ...]], schema:
         # once, while stamping, rather than let that surface later as an opaque runtime error.
         await _assert_lineage_id_is_unique(conn, schema)
         await conn.execute(
-            sql_text(f"INSERT INTO {table} (id, version) VALUES (1, %s)"), [POSTGRES_SCHEMA_VERSION]
+            sql_text(f"INSERT INTO {escape_placeholders(table)} (id, version) VALUES (1, %s)"),
+            [POSTGRES_SCHEMA_VERSION],
         )
         return
     found = row[0]

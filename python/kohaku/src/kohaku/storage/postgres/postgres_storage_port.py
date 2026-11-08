@@ -53,7 +53,12 @@ from .connection import (
     assert_lineage_schema_current,
     create_postgres_pool,
 )
-from .schema import DEFAULT_SCHEMA, correlation_column_value, qualified_table
+from .schema import (
+    DEFAULT_SCHEMA,
+    correlation_column_value,
+    escape_placeholders,
+    qualified_table,
+)
 from .tenant_keyed_table import TenantKeyedTable
 
 try:
@@ -122,11 +127,16 @@ class PostgresStoragePort:
         # apply the DDL and the next call succeeds without a restart.
         self._schema_verified = db.migrate
         schema = db.schema
+        # Every statement here runs with parameters, so a `%` in the schema name must be escaped (see
+        # escape_placeholders).
         self._tables = {
-            "spec": qualified_table(schema, "kohaku_spec_cache"),
-            "lineage": qualified_table(schema, "kohaku_lineage"),
-            "promotion": qualified_table(schema, "kohaku_promotion_state"),
-            "fixation": qualified_table(schema, "kohaku_fixation"),
+            name: escape_placeholders(qualified_table(schema, table))
+            for name, table in (
+                ("spec", "kohaku_spec_cache"),
+                ("lineage", "kohaku_lineage"),
+                ("promotion", "kohaku_promotion_state"),
+                ("fixation", "kohaku_fixation"),
+            )
         }
         self._promotion_states: TenantKeyedTable[PromotionState] = TenantKeyedTable(
             db,

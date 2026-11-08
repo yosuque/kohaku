@@ -19,6 +19,14 @@ export type PythonPeer = { mode: "run"; python: string; script: string } | { mod
 /** The repository root: this file is `packages/port-contracts/src/python-peer.ts`. */
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
+/** Hides the backend URL (and any credentials in it) from an error message: a CI log must not carry them. */
+export function redact(text: string, url: string): string {
+  return text
+    .split(url)
+    .join("<backend url>")
+    .replace(/\/\/[^/\s@]*@/g, "//<credentials>@");
+}
+
 export function resolvePythonPeer(
   env: Record<string, string | undefined> = process.env,
   repoRoot: string = REPO_ROOT,
@@ -52,13 +60,18 @@ export function runPythonPeer(
       { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error != null) {
-          reject(new Error(`python peer \`${command}\` failed: ${error.message}\n${stderr}`));
+          // execFile's message repeats the whole command line, which carries the backend URL.
+          reject(new Error(redact(`python peer \`${command}\` failed: ${error.message}\n${stderr}`, url)));
           return;
         }
         try {
           resolve(JSON.parse(stdout));
         } catch {
-          reject(new Error(`python peer \`${command}\` printed no JSON document:\n${stdout}\n${stderr}`));
+          reject(
+            new Error(
+              redact(`python peer \`${command}\` printed no JSON document:\n${stdout}\n${stderr}`, url),
+            ),
+          );
         }
       },
     );

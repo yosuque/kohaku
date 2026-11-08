@@ -58,9 +58,11 @@ def _promotion(revision: str, status: str) -> PromotionState:
     )
 
 
-def _fixation(revision: str, fingerprint: str) -> FixationRecord:
+def _fixation(
+    revision: str, fingerprint: str, intent_hash: str = "sha256:interop"
+) -> FixationRecord:
     return FixationRecord(
-        intentHash="sha256:interop",
+        intentHash=intent_hash,
         canonical="sales.trend",
         structureHash="sha256:s",
         pinnedSpec=example_spec(),
@@ -69,6 +71,12 @@ def _fixation(revision: str, fingerprint: str) -> FixationRecord:
         catalogFingerprint=fingerprint,
         tenant=TENANT,
         revision=revision,
+    )
+
+
+def _batch_state(artifact_id: str, status: str) -> PromotionState:
+    return PromotionState(
+        artifactId=artifact_id, status=status, updatedAt=EVENT_TS, data={}, tenant=TENANT
     )
 
 
@@ -138,6 +146,11 @@ async def adopt(backend: Backend) -> dict[str, Any]:
         ],
         "lineageByTenant": [e.id for e in await storage.list_lineage(LineageFilter(tenant=TENANT))],
         "tsRevoked": await backend.revocations.is_revoked("ts-jti"),
+        "batchStatuses": [
+            (await storage.get_promotion_state(a, TENANT)).status for a in ("b1", "b2")
+        ],
+        "ifpRevision": (await storage.get_fixation("sha256:ifp", TENANT)).revision,
+        "delRevision": (await storage.get_fixation("sha256:del", TENANT)).revision,
     }
 
     # Compare-and-set both records forward from the revision the TS host stamped.
@@ -151,6 +164,22 @@ async def adopt(backend: Backend) -> dict[str, Any]:
     except StorageConflictError:
         stale_conflict = True
 
+    # if_present (Redis SET XX / Postgres update-existing), the conditional delete and the batch write, on records
+    # the TS host wrote.
+    await storage.put_fixation(_fixation("py-ifp", "fp-py-ifp", "sha256:ifp"), if_present=True)
+    await storage.put_fixation(
+        _fixation("py-absent", "fp-absent", "sha256:absent"), if_present=True
+    )
+    delete_stale_conflict = False
+    try:
+        await storage.delete_fixation("sha256:del", TENANT, expected_revision="stale")
+    except StorageConflictError:
+        delete_stale_conflict = True
+    await storage.delete_fixation("sha256:del", TENANT, expected_revision="x-1")
+    await storage.put_promotion_states(
+        [_batch_state("b1", "py-batch"), _batch_state("b2", "py-batch")]
+    )
+
     # Records of our own, for the TS host to read.
     await storage.append_lineage(_event("py-event", "py-corr"))
     await storage.put_spec_cache("py-spec", example_spec())
@@ -159,6 +188,7 @@ async def adopt(backend: Backend) -> dict[str, Any]:
     return {
         "seen": seen,
         "staleConflict": stale_conflict,
+        "deleteStaleConflict": delete_stale_conflict,
         "pageIds": [e.id for e in page.events],
     }
 
@@ -167,6 +197,11 @@ async def seed(backend: Backend) -> dict[str, Any]:
     storage = backend.storage
     await storage.put_promotion_state(_promotion("py-0", "candidate"), expected_revision=None)
     await storage.put_fixation(_fixation("py-0", "fp-py-0"), expected_revision=None)
+    await storage.put_fixation(_fixation("x-1", "fp-ifp", "sha256:ifp"), expected_revision=None)
+    await storage.put_fixation(_fixation("x-1", "fp-del", "sha256:del"), expected_revision=None)
+    await storage.put_promotion_states(
+        [_batch_state("b1", "py-batch"), _batch_state("b2", "py-batch")]
+    )
     await storage.put_spec_cache("py-spec", example_spec())
     await storage.append_lineage(_event("py-event", "py-corr"))
     await backend.revocations.revoke("py-jti", int(time.time()) + 3600)
@@ -183,6 +218,17 @@ async def verify(backend: Backend) -> dict[str, Any]:
         _fail(f"the TS host's fixation update is not visible: {fixation}")
     if fixation.pinnedSpec != example_spec():
         _fail("the pinned Spec did not survive a round trip through the TS host")
+    ifp = await storage.get_fixation("sha256:ifp", TENANT)
+    if ifp is None or ifp.revision != "ts-ifp" or ifp.catalogFingerprint != "fp-ts-ifp":
+        _fail(f"the TS host's if_present update is not visible: {ifp}")
+    if await storage.get_fixation("sha256:absent", TENANT) is not None:
+        _fail("an if_present write created a fixation that did not exist")
+    if await storage.get_fixation("sha256:del", TENANT) is not None:
+        _fail("the TS host's conditional delete is not visible")
+    for artifact_id in ("b1", "b2"):
+        batch = await storage.get_promotion_state(artifact_id, TENANT)
+        if batch is None or batch.status != "ts-batch":
+            _fail(f"the TS host's batch write is not visible for {artifact_id}: {batch}")
     ids = [e.id for e in await storage.list_lineage()]
     if ids != ["py-event", "ts-event"]:
         _fail(f"unexpected lineage order {ids}")

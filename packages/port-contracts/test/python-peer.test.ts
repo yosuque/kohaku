@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePythonPeer } from "../src/python-peer.js";
+import { redact, resolvePythonPeer } from "../src/python-peer.js";
 
 describe("resolvePythonPeer", () => {
   const root = "/repo";
@@ -30,5 +30,17 @@ describe("resolvePythonPeer", () => {
     expect(() => resolvePythonPeer({ KOHAKU_ADAPTER_TESTS: "require" }, root, () => false)).toThrow(
       /KOHAKU_ADAPTER_TESTS=require/,
     );
+  });
+});
+
+describe("redact", () => {
+  it("hides the backend URL and any credentials left in the text", () => {
+    const url = "postgres://user:secret@db.internal:5432/kohaku";
+    const text = `Command failed: python peer.py postgres ${url} ns adopt\nconnection to postgresql://other:pw@h:1/x failed`;
+    const out = redact(text, url);
+    expect(out).not.toContain("secret");
+    expect(out).not.toContain("db.internal");
+    expect(out).not.toContain("other:pw");
+    expect(out).toContain("<backend url>");
   });
 });

@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from .connection import PostgresPoolHandle, create_postgres_pool
-from .schema import DEFAULT_SCHEMA, qualified_table
+from .schema import DEFAULT_SCHEMA, escape_placeholders, qualified_table
 
 try:
     from psycopg import AsyncConnection
@@ -31,7 +31,10 @@ class PostgresRevocationStore:
 
     def __init__(self, db: PostgresPoolHandle) -> None:
         self._db = db
-        self._table = qualified_table(db.schema, "kohaku_capability_revocation")
+        # Every statement here runs with parameters, so a `%` in the schema name must be escaped (see escape_placeholders).
+        self._table = escape_placeholders(
+            qualified_table(db.schema, "kohaku_capability_revocation")
+        )
 
     async def ready(self) -> None:
         """Resolves once the pool is open and the schema is in place."""

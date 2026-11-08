@@ -9,6 +9,7 @@ is what lets a TS host and a Python host share one Redis / Postgres backend.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from kohaku.spec import (
@@ -21,10 +22,38 @@ from kohaku.spec import (
 )
 
 
+def _json_safe(value: Any) -> Any:
+    """`JSON.stringify` writes ``null`` for NaN and +/-Infinity; Python's `json.dumps` would write the invalid-JSON
+    tokens ``NaN`` / ``Infinity``, which the TS host (and Postgres' jsonb cast) could not read back. Rebuilds the
+    containers only when a non-finite float is actually inside, so the common case allocates nothing."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        if any(_needs_fix(v) for v in value.values()):
+            return {k: _json_safe(v) for k, v in value.items()}
+        return value
+    if isinstance(value, (list, tuple)):
+        if any(_needs_fix(v) for v in value):
+            return [_json_safe(v) for v in value]
+        return value
+    return value
+
+
+def _needs_fix(value: Any) -> bool:
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(_needs_fix(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_needs_fix(v) for v in value)
+    return False
+
+
 def dumps_compact(value: Any) -> str:
-    """JSON text as `JSON.stringify` writes it: no whitespace between tokens and non-ASCII characters left
-    unescaped. A Redis value / Postgres text column written here is byte-shaped like the one a TS host writes."""
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    """JSON text as `JSON.stringify` writes it: no whitespace between tokens, non-ASCII characters left unescaped,
+    and ``null`` for a non-finite number. A Redis value / Postgres text column written here is byte-shaped like
+    the one a TS host writes."""
+    return json.dumps(_json_safe(value), separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
 def lineage_to_wire(event: LineageEventRecord) -> dict[str, Any]:

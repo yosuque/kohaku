@@ -7,7 +7,6 @@ the scan chunk boundary, or race two port instances.
 from __future__ import annotations
 
 import asyncio
-import json
 import secrets
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -755,8 +754,8 @@ class TestPromotionStateAndFixation:
         assert callable(port.page_lineage)
         assert port.supports_compare_and_set is True
 
-    def test_skips_a_malformed_stored_record_instead_of_failing_the_listing(
-        self, redis_url: str, capsys: pytest.CaptureFixture[str]
+    def test_a_corrupt_stored_record_raises_in_every_read_path_like_the_ts_adapter(
+        self, redis_url: str
     ) -> None:
         async def go() -> None:
             prefix = _prefix()
@@ -766,16 +765,26 @@ class TestPromotionStateAndFixation:
             try:
                 await port.put_fixation(_fixation("good"))
                 bad_key = keys.fixation(None, "bad")
-                await raw.set(bad_key, json.dumps({"intentHash": "bad"}))  # no pinnedSpec
+                await raw.set(bad_key, "{not json")
                 await raw.zadd(keys.fixation_index(None), {bad_key: 999})
-                assert [f.intentHash for f in await port.list_fixations()] == ["good"]
-                assert await port.get_fixation("bad") is None
+                with pytest.raises(ValueError):
+                    await port.get_fixation("bad")
+                with pytest.raises(ValueError):
+                    await port.list_fixations()
+                bad_state = keys.promotion(None, "bad")
+                await raw.set(bad_state, "nope")
+                with pytest.raises(ValueError):
+                    await port.get_promotion_state("bad")
+                # A lineage body that is not JSON raises from the hydrate path as well.
+                await raw.hset(keys.lineage.events, "bad", "{")
+                await raw.zadd(keys.lineage.by_seq, {"bad": 9999})
+                with pytest.raises(ValueError):
+                    await port.list_lineage()
             finally:
                 await raw.aclose()
                 await port.close()
 
         _run(go())
-        assert "malformed fixation" in capsys.readouterr().err
 
 
 class TestCompareAndSetAcrossInstances:
@@ -882,25 +891,40 @@ class TestCompareAndSetAcrossInstances:
 
 
 class TestCompareAndSetConnectionLoss:
-    def test_a_watch_error_from_any_step_of_the_transaction_is_a_conflict(
+    """redis-py raises `WatchError` both for a null EXEC (a genuine conflict) and for a ConnectionError / TimeoutError
+    that hit the watching connection. Only the first is a `StorageConflictError`: the second may have struck after EXEC
+    reached the server, so reporting it as "conflict, nothing modified" could be a lie -- the underlying communication
+    error is re-raised."""
+
+    def test_a_timeout_on_a_step_before_exec_is_reraised_not_reported_as_a_conflict(
         self, redis_url: str
     ) -> None:
-        """redis-py raises WatchError from an immediate command (GET / INCR after WATCH) when the pinned
-        connection dropped, and never retries or re-sends on a watching pipeline; the watch the server held is gone,
-        so the read this write was based on may be stale: a conflict, not an error, and nothing is written."""
         from unittest.mock import patch
 
         from redis.asyncio.client import Pipeline
+        from redis.exceptions import TimeoutError as RedisTimeoutError
         from redis.exceptions import WatchError
+
+        def watch_error_caused_by(cause: Exception) -> WatchError:
+            try:
+                try:
+                    raise cause
+                except Exception:
+                    # redis-py raises the WatchError while handling the communication error.
+                    raise WatchError(
+                        "A TimeoutError occurred while watching one or more keys"
+                    ) from None
+            except WatchError as error:
+                return error
 
         async def go() -> None:
             port = create_redis_storage_port(url=redis_url, key_prefix=_prefix())
             try:
                 with (
                     patch.object(
-                        Pipeline, "get", side_effect=WatchError("A ConnectionError occurred")
+                        Pipeline, "get", side_effect=watch_error_caused_by(RedisTimeoutError("t"))
                     ),
-                    pytest.raises(StorageConflictError),
+                    pytest.raises(RedisTimeoutError),
                 ):
                     await port.put_promotion_state(
                         _state("a1", revision="r1"), expected_revision=None
@@ -908,6 +932,60 @@ class TestCompareAndSetConnectionLoss:
                 assert await port.get_promotion_state("a1") is None
             finally:
                 await port.close()
+
+        _run(go())
+
+    def test_a_timeout_after_exec_reached_the_server_is_reraised_and_the_write_is_visible(
+        self, redis_url: str
+    ) -> None:
+        """The worst case: EXEC was sent and applied, the reply timed out. The write IS applied, so "conflict,
+        nothing modified" would be false; the host must see the infrastructure error instead."""
+        from redis.asyncio.client import Pipeline
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+        from redis.exceptions import WatchError
+
+        async def go() -> None:
+            port = create_redis_storage_port(url=redis_url, key_prefix=_prefix())
+            original_execute = Pipeline.execute
+
+            async def execute_then_time_out(self: Any, *args: Any, **kwargs: Any) -> Any:
+                await original_execute(self, *args, **kwargs)  # applied on the server
+                try:
+                    raise RedisTimeoutError("reply lost")
+                except RedisTimeoutError:
+                    raise WatchError(
+                        "A TimeoutError occurred while watching one or more keys"
+                    ) from None
+
+            try:
+                with (
+                    pytest.MonkeyPatch.context() as patch,
+                    pytest.raises(RedisTimeoutError),
+                ):
+                    patch.setattr(Pipeline, "execute", execute_then_time_out)
+                    await port.put_promotion_state(
+                        _state("a1", revision="r1"), expected_revision=None
+                    )
+                stored = await port.get_promotion_state("a1")
+                assert stored is not None and stored.revision == "r1"
+            finally:
+                await port.close()
+
+        _run(go())
+
+    def test_a_null_exec_is_the_conflict(self, redis_url: str) -> None:
+        async def go() -> None:
+            prefix = _prefix()
+            a = create_redis_storage_port(url=redis_url, key_prefix=prefix)
+            try:
+                await a.put_promotion_state(_state("a1", revision="r1"))
+                with pytest.raises(StorageConflictError):
+                    await a.put_promotion_state(
+                        _state("a1", revision="r2"), expected_revision="stale"
+                    )
+                await a.put_promotion_state(_state("a1", revision="r2"), expected_revision="r1")
+            finally:
+                await a.close()
 
         _run(go())
 
@@ -934,9 +1012,11 @@ class TestCompareAndSetReconnect:
     ) -> None:
         """The reconnect-between-WATCH-and-EXEC hazard of the TS adapter (its reconnect epoch): a connection the
         server drops after the WATCH has lost the watch, so a retry of the transaction on a fresh connection would
-        write against a read nothing guards. redis-py disconnects and raises WatchError for a watching pipeline
-        instead of retrying; this kills the real pinned connection after the GET and expects a conflict, no write."""
+        write against a read nothing guards. redis-py disconnects and raises on a watching pipeline instead of
+        retrying; this kills the real pinned connection after the GET. Nothing was sent, nothing is written, and
+        the underlying connection error (not a bogus conflict) reaches the caller."""
         from redis.asyncio.client import Pipeline
+        from redis.exceptions import ConnectionError as RedisConnectionError
 
         async def go() -> None:
             prefix = _prefix()
@@ -954,7 +1034,7 @@ class TestCompareAndSetReconnect:
                 await port.ready()
                 with (
                     pytest.MonkeyPatch.context() as patch,
-                    pytest.raises(StorageConflictError),
+                    pytest.raises(RedisConnectionError),
                 ):
                     patch.setattr(Pipeline, "get", get_then_kill)
                     await port.put_promotion_state(

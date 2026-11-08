@@ -8,7 +8,6 @@ where it always did (so a batch write can still return on an empty input before 
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -50,16 +49,10 @@ class TenantKeyedTable[T]:
         except pg_errors.SerializationFailure as error:
             raise StorageConflictError(self._kind, record_id) from error
 
-    def _decode(self, raw: str) -> T | None:
-        """Parses a stored payload, treating one that does not parse (a corrupted or hand-edited row) as absent with
-        a stderr note -- the file port's per-entry tolerance, so one bad row cannot take a whole listing down."""
-        try:
-            return self._from_wire(json.loads(raw))
-        except Exception as error:
-            print(
-                f"[storage-postgres] skipped a malformed {self._kind} row: {error}", file=sys.stderr
-            )
-            return None
+    def _decode(self, raw: str) -> T:
+        """Parses a stored payload. A row that does not parse (corrupted or hand-edited) raises, like the TS
+        adapter's `JSON.parse`, in every read path: silently skipping would hide data loss from a listing."""
+        return self._from_wire(json.loads(raw))
 
     async def get(self, tenant: str | None, record_id: str) -> T | None:
         """The record for ``(tenant, id)``, or None. An unspecified or ``''`` tenant is the tenant-neutral key."""
@@ -173,8 +166,7 @@ class TenantKeyedTable[T]:
                 f"SELECT {self._payload_column} FROM {self._table} WHERE tenant = %s ORDER BY seq",
                 [normalized],
             )
-        decoded = (self._decode(row[0]) for row in result.rows)
-        return [record for record in decoded if record is not None]
+        return [self._decode(row[0]) for row in result.rows]
 
     async def delete(
         self, tenant: str | None, record_id: str, expected_revision: str | None = None

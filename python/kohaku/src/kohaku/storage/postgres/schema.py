@@ -48,6 +48,13 @@ def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def escape_placeholders(sql: str) -> str:
+    """Escapes ``%`` so an identifier can be embedded in a statement that is executed *with* parameters: psycopg
+    reads every ``%`` of such a statement as a placeholder, so a schema name containing one (``100%``) would break
+    every query. DDL executed without parameters is sent as-is and must not be escaped."""
+    return sql.replace("%", "%%")
+
+
 def qualified_table(schema: str, table: str) -> str:
     """``"schema"."table"`` with embedded double quotes doubled (SQL identifier quoting)."""
     return f"{quote_identifier(schema)}.{quote_identifier(table)}"

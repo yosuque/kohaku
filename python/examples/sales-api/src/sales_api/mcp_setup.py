@@ -116,6 +116,27 @@ async def create_kohaku_mcp_setup(
     data_dir: Path | None = None,
     snapshot_base_url: str | None = None,
 ) -> KohakuMcpSetup:
+    """Runs the common setup once and returns a per-session Server factory (see `_build_kohaku_mcp_setup`). If
+    anything fails after the storage backend was created (an unreachable backend, a schema that cannot be migrated,
+    app creation), the backend connection is released before the error propagates."""
+    cleanups: list[Callable[[], Awaitable[None]]] = []
+    try:
+        return await _build_kohaku_mcp_setup(
+            llm=llm, data_dir=data_dir, snapshot_base_url=snapshot_base_url, cleanups=cleanups
+        )
+    except BaseException:
+        for cleanup in cleanups:
+            await cleanup()
+        raise
+
+
+async def _build_kohaku_mcp_setup(
+    *,
+    llm: LlmPort | None,
+    data_dir: Path | None,
+    snapshot_base_url: str | None,
+    cleanups: list[Callable[[], Awaitable[None]]],
+) -> KohakuMcpSetup:
     """Runs the common setup once and returns a per-session Server factory.
 
     create_app is async because it performs startup reconcile (snapshot authority -> projection).
@@ -141,6 +162,7 @@ async def create_kohaku_mcp_setup(
     )
     # StoragePort + revocation store by KOHAKU_STORAGE (file by default), exactly as the REST entry does.
     backend = create_storage_from_env(os.environ, data_dir=resolved_data_dir)
+    cleanups.append(backend.close)
     storage = backend.storage
     # KOHAKU_AUTHZ selects the AuthzPort (hmac / jwt), exactly as the REST entry does. The MCP profile never resolves
     # a tenant, so its capabilities are tenant-less and `require_capability_tenant` stays off (the default).

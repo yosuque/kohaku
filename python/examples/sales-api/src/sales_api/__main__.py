@@ -125,9 +125,9 @@ async def _serve(uvicorn: Any) -> None:
         from .request_identity_jwt import create_jwt_request_identity
 
         identity = create_jwt_request_identity(authz_env.identity)
-    # Fail fast on an unreachable backend or a schema that cannot be migrated, before listening.
-    await backend.ready()
     try:
+        # Fail fast on an unreachable backend or a schema that cannot be migrated, before listening.
+        await backend.ready()
         # Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish",
         # sales_api/app.py's SalesDomainPort) needs an ApprovalPort to ever be allowed. Reuses the same
         # KOHAKU_CAPABILITY_SECRET as the AuthzPort -- the approval MAC key is derived from it under its own

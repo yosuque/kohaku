@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import time
 from collections.abc import Awaitable
 from typing import Any, cast
 
@@ -20,6 +21,7 @@ from kohaku.spec import (
     LineageActor,
     LineageEventRecord,
     LineageFilter,
+    LineagePageRequest,
     Principal,
     PromotionState,
     UISpec,
@@ -801,5 +803,83 @@ class TestSchemaVersioning:
                     assert await ports[2].get_spec_cache("k") == spec
                 finally:
                     await asyncio.gather(*(p.close() for p in ports))
+
+        _run(go())
+
+
+class TestSchemaNameWithPercent:
+    """A `%` in the schema name (KOHAKU_POSTGRES_SCHEMA is operator input) is a psycopg placeholder in every
+    parametrized statement unless the embedded identifier is escaped."""
+
+    def test_every_statement_family_works_in_a_schema_containing_a_percent_sign(
+        self, postgres_url: str
+    ) -> None:
+        async def go() -> None:
+            schema = f"p%s_{secrets.token_hex(4)}%d"
+            port = create_postgres_storage_port(connection_string=postgres_url, schema=schema)
+            from kohaku.storage.postgres import create_postgres_revocation_store
+
+            store = create_postgres_revocation_store(connection_string=postgres_url, schema=schema)
+            try:
+                await port.put_spec_cache("k", _spec("k"), ttl_seconds=60)
+                assert await port.get_spec_cache("k") == _spec("k")
+                assert await port.sweep_expired_spec_cache() == 0
+                await port.append_lineage(_ev("01", payload={"correlationId": "c"}))
+                assert [
+                    e.id for e in await port.list_lineage(LineageFilter(correlationId="c"))
+                ] == ["01"]
+                assert (await port.page_lineage(LineagePageRequest())).events[0].id == "01"
+                await port.put_promotion_state(_state("a1", revision="r1"), expected_revision=None)
+                await port.put_promotion_states([_state("b1"), _state("b2")])
+                assert len(await port.list_promotion_states()) == 3
+                await port.put_fixation(_fixation("h", revision="r1"), expected_revision=None)
+                await port.put_fixation(
+                    _fixation("h", revision="r2"), if_present=True, expected_revision="r1"
+                )
+                await port.delete_fixation("h", None, expected_revision="r2")
+                assert await port.get_fixation("h") is None
+                await store.revoke("j", int(time.time()) + 60)
+                assert await store.is_revoked("j") is True
+                assert await store.sweep_expired_revocations() == 0
+            finally:
+                await store.close()
+                await port.close()
+
+        _run(go())
+
+
+class TestCorruptRows:
+    def test_a_row_that_does_not_parse_raises_in_get_and_list_like_the_ts_adapter(
+        self, postgres_url: str
+    ) -> None:
+        async def go() -> None:
+            schema = _schema()
+            port = create_postgres_storage_port(connection_string=postgres_url, schema=schema)
+            raw = await _raw(postgres_url)
+            try:
+                await port.ready()
+                await raw.execute(
+                    cast(
+                        Any,
+                        f"INSERT INTO {qualified_table(schema, 'kohaku_promotion_state')} (tenant, artifact_id, state) "
+                        "VALUES ('', 'bad', '{not json')",
+                    )
+                )
+                with pytest.raises(ValueError):
+                    await port.get_promotion_state("bad")
+                with pytest.raises(ValueError):
+                    await port.list_promotion_states()
+                await raw.execute(
+                    cast(
+                        Any,
+                        f"INSERT INTO {qualified_table(schema, 'kohaku_lineage')} (id, ts, type, record) "
+                        "VALUES ('x', '2026', 'view.composed', 'oops')",
+                    )
+                )
+                with pytest.raises(ValueError):
+                    await port.list_lineage()
+            finally:
+                await raw.close()
+                await port.close()
 
         _run(go())

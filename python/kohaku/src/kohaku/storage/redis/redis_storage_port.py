@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import math
-import sys
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -65,6 +64,9 @@ except ImportError as error:  # pragma: no cover - exercised only without the ex
     raise ImportError(
         "kohaku.storage.redis needs the redis-py client: install it with `pip install 'kohaku-ui[redis]'`"
     ) from error
+
+_WATCHED_KEY_CHANGED = "Watched variable changed."
+"""The message redis-py gives the `WatchError` of a null EXEC reply (the only genuine optimistic-lock conflict)."""
 
 type _Build = Callable[[str | None, Any, int], Literal["skip"] | None]
 """Queues one compare-and-set transaction's writes on the MULTI: sees the current raw body (None = absent) and the
@@ -198,7 +200,7 @@ class RedisStoragePort:
     ) -> PromotionState | None:
         await self.ready()
         raw: str | None = await self._redis.get(self._keys.promotion(tenant, artifact_id))
-        return None if raw is None else _decode(raw, promotion_from_wire, "promotion state")
+        return None if raw is None else _decode(raw, promotion_from_wire)
 
     async def put_promotion_state(
         self, state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
@@ -243,9 +245,7 @@ class RedisStoragePort:
 
     async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]:
         await self.ready()
-        return await self._list_indexed(
-            self._keys.promotion_index(tenant), promotion_from_wire, "promotion state"
-        )
+        return await self._list_indexed(self._keys.promotion_index(tenant), promotion_from_wire)
 
     # -- Fixation ---------------------------------------------------------------------------------------------
 
@@ -254,7 +254,7 @@ class RedisStoragePort:
     ) -> FixationRecord | None:
         await self.ready()
         raw: str | None = await self._redis.get(self._keys.fixation(tenant, intent_hash))
-        return None if raw is None else _decode(raw, fixation_from_wire, "fixation")
+        return None if raw is None else _decode(raw, fixation_from_wire)
 
     async def put_fixation(
         self,
@@ -293,9 +293,7 @@ class RedisStoragePort:
 
     async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]:
         await self.ready()
-        return await self._list_indexed(
-            self._keys.fixation_index(tenant), fixation_from_wire, "fixation"
-        )
+        return await self._list_indexed(self._keys.fixation_index(tenant), fixation_from_wire)
 
     async def delete_fixation(
         self,
@@ -344,7 +342,7 @@ class RedisStoragePort:
             await pipe.execute()
 
     async def _list_indexed[T](
-        self, index_key: str, from_wire: Callable[[dict[str, Any]], T], label: str
+        self, index_key: str, from_wire: Callable[[dict[str, Any]], T]
     ) -> list[T]:
         """Reads every record an index points at, in index (first-insertion) order."""
         member_keys: list[str] = await self._redis.zrange(index_key, 0, -1)
@@ -355,9 +353,7 @@ class RedisStoragePort:
         for raw in raws:
             if raw is None:
                 continue
-            decoded = _decode(raw, from_wire, label)
-            if decoded is not None:
-                out.append(decoded)
+            out.append(_decode(raw, from_wire))
         return out
 
     async def _write_cas(
@@ -370,9 +366,13 @@ class RedisStoragePort:
     ) -> None:
         """One optimistic transaction on `key`: WATCH key, GET key, run `build` against the current body (it queues
         the writes on the MULTI and raises `StorageConflictError` to abort, or returns "skip" to write nothing),
-        then EXEC. redis-py raises `WatchError` for the null EXEC reply of TS -- the watched key changed between the
-        WATCH and the EXEC -- which is a conflict. `seq_key`, when given, reserves one sequence number for `build`
+        then EXEC. redis-py raises `WatchError("Watched variable changed.")` for the null EXEC reply of TS -- the watched
+        key changed between the WATCH and the EXEC -- and only that is a conflict. `seq_key`, when given, reserves one sequence number for `build`
         (the index insertion order); it is wasted on a conflict, like every other sequence reservation here.
+
+        redis-py has no equivalent of the TS adapter's reconnect epoch because it needs none: the TS dedicated
+        connection auto-reconnects, so it has to notice a reconnect between WATCH and EXEC itself, while redis-py
+        raises on the dead watching connection instead of continuing on a new one.
 
         WATCH state belongs to a connection, and an EXEC from any other MULTI on the same connection would clear
         it. The TS adapter therefore opens a dedicated connection and serializes the transactions on it with a
@@ -391,23 +391,24 @@ class RedisStoragePort:
                     return
                 await pipe.execute()
         except WatchError as error:
-            # Raised by EXEC for a changed watched key, and by redis-py itself when the pinned connection dropped
-            # between WATCH and EXEC (it never retries or re-sends on a watching pipeline, and the server forgot
-            # the watch on reconnect): either way the read this write was based on may be stale, so it is a conflict
-            # -- the Python counterpart of the TS adapter's reconnect-epoch check. After a successful EXEC redis-py
-            # clears its watching flag, so no UNWATCH is sent.
-            raise StorageConflictError(kind, record_id) from error
+            if str(error) == _WATCHED_KEY_CHANGED:
+                # The null EXEC reply: the watched key changed between the WATCH and the EXEC, nothing was applied.
+                raise StorageConflictError(kind, record_id) from error
+            # redis-py also raises WatchError when a ConnectionError / TimeoutError hit the pinned connection while
+            # it was watching (it disconnects and never retries or re-sends on a watching pipeline, so a transaction
+            # can not silently run on a fresh connection). That is an infrastructure failure, not a conflict, and it
+            # may have struck after EXEC reached the server -- the write can already be applied -- so it must not be
+            # reported as "conflict, nothing was modified": re-raise the underlying communication error.
+            cause = error.__context__
+            if isinstance(cause, Exception):
+                raise cause from error
+            raise
 
 
-def _decode[T](raw: str, from_wire: Callable[[dict[str, Any]], T], label: str) -> T | None:
-    """Parses a stored record, treating one that does not parse (a corrupted or hand-edited entry) as absent with
-    a stderr note -- the file port's per-entry tolerance, so one bad record cannot take a whole listing or a
-    request down. (stdout would pollute a stdio MCP host's JSON-RPC channel.)"""
-    try:
-        return from_wire(json.loads(raw))
-    except Exception as error:
-        print(f"[storage-redis] skipped a malformed {label} record: {error}", file=sys.stderr)
-        return None
+def _decode[T](raw: str, from_wire: Callable[[dict[str, Any]], T]) -> T:
+    """Parses a stored record. A record that does not parse (corrupted or hand-edited) raises, like the TS adapter's
+    `JSON.parse`, in every read path: silently skipping would hide data loss from a listing."""
+    return from_wire(json.loads(raw))
 
 
 def create_redis_storage_port(
