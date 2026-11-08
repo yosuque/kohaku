@@ -112,6 +112,7 @@ class FakeDomain:
 
     def __init__(self) -> None:
         self.invocations: list[tuple[str, JsonObject]] = []
+        self.contexts: list[InvocationContext] = []
 
     async def list_operations(self) -> list[OperationDescriptor]:
         return [
@@ -121,6 +122,7 @@ class FakeDomain:
 
     async def invoke(self, op: str, args: JsonObject, ctx: InvocationContext) -> object:
         self.invocations.append((op, args))
+        self.contexts.append(ctx)
         if op == "summary":
             return TabularData.model_validate(
                 {
@@ -139,28 +141,36 @@ class FakeDomain:
 
 
 class FakeAuthz:
-    """In-memory capability. Scopes are matched by exact kind + ref."""
+    """In-memory capability. Scopes are matched by exact kind + ref. A tenant passed at issuance is bound to
+    the token and reported by verify (SPEC CAP-TEN-001), like the real HMAC port does."""
 
     def __init__(self) -> None:
-        self._tokens: dict[str, tuple[Principal, list[Scope]]] = {}
+        self._tokens: dict[str, tuple[Principal, list[Scope], str | None]] = {}
         self._n = 0
+        self.issue_kwargs: list[dict[str, object]] = []
 
     async def issue_capability(
-        self, principal: Principal, scopes: list[Scope], *, ttl_seconds: int | None = None
+        self,
+        principal: Principal,
+        scopes: list[Scope],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
     ) -> str:
         self._n += 1
         token = f"cap-{self._n}"
-        self._tokens[token] = (principal, list(scopes))
+        self._tokens[token] = (principal, list(scopes), tenant)
+        self.issue_kwargs.append({"tenant": tenant})
         return token
 
     async def verify(self, token: str, req: VerifyRequest) -> VerifyResult:
         entry = self._tokens.get(token)
         if entry is None:
             return VerifyResult(ok=False, reason="unknown capability")
-        principal, scopes = entry
+        principal, scopes, tenant = entry
         for s in scopes:
             if s.kind == req.kind and s.ref == req.ref:
-                return VerifyResult(ok=True, principal=principal)
+                return VerifyResult(ok=True, principal=principal, tenant=tenant)
         return VerifyResult(ok=False, reason="scope not granted")
 
 
@@ -175,10 +185,12 @@ class Harness:
     ref: str = REF
     intent_body: dict[str, Any] = field(default_factory=lambda: dict(INTENT_BODY))
 
-    def issue(self, scopes: list[Scope]) -> str:
+    def issue(self, scopes: list[Scope], *, tenant: str | None = None, sub: str = "tester") -> str:
         """Issue a capability directly for tests (used to check write paths like binding/action)."""
         return asyncio.run(
-            self.authz.issue_capability(Principal(id="tester", roles=["user"]), scopes)
+            self.authz.issue_capability(
+                Principal(id=sub, roles=["user"]), scopes, tenant=tenant or None
+            )
         )
 
 

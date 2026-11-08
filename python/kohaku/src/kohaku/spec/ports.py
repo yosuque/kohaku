@@ -99,6 +99,10 @@ class OperationDescriptor:
 class InvocationContext:
     principal: Principal
     capability: str | None = None
+    tenant: str | None = None
+    """The tenant the invocation runs under. On the REST data plane this is the tenant bound into the
+    verified capability (SPEC CAP-TEN-001), falling back to the host's own tenant resolution for a tenant-less
+    (pre-upgrade) capability. None when no tenant applies."""
 
 
 class DomainPort(Protocol):
@@ -196,12 +200,24 @@ class VerifyResult:
     ok: bool
     principal: Principal | None = None
     reason: str | None = None
+    tenant: str | None = None
+    """The tenant the capability was issued for (SPEC CAP-TEN-001), when the token binds one. None for a token
+    issued without a tenant. A data-plane host treats this signed value as authoritative over any tenant the
+    request itself claims."""
 
 
 class AuthzPort(Protocol):
     async def issue_capability(
-        self, principal: Principal, scopes: list[Scope], *, ttl_seconds: int | None = None
-    ) -> str: ...
+        self,
+        principal: Principal,
+        scopes: list[Scope],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
+    ) -> str:
+        """Issues a capability token. `tenant`, when given, is bound into the signed token and echoed back as
+        `VerifyResult.tenant` by `verify` (SPEC CAP-TEN-001). A port that cannot carry a tenant MAY ignore it."""
+        ...
 
     async def verify(self, token: str, req: VerifyRequest) -> VerifyResult: ...
 

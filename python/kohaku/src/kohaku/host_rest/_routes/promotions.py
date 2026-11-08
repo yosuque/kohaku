@@ -286,13 +286,23 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return _error("NOT_FOUND", "no previewable artifact (html/sha256) is recorded", 404)
         capability: str | None = None
         if ref is not None:
-            capability = await deps.authz.issue_capability(
-                await _get_principal(deps, request),
-                [Scope(kind="read", ref=ref)],
-                ttl_seconds=deps.capability_ttl_seconds
+            # The preview capability binds the request's resolved tenant like a compose-issued one does (SPEC
+            # CAP-TEN-001), so a data plane that requires a tenant-bound capability accepts it.
+            ttl = (
+                deps.capability_ttl_seconds
                 if deps.capability_ttl_seconds is not None
-                else _DEFAULT_CAPABILITY_TTL,
+                else _DEFAULT_CAPABILITY_TTL
             )
+            preview_principal = await _get_principal(deps, request)
+            preview_scopes = [Scope(kind="read", ref=ref)]
+            if ctx.tenant is None:
+                capability = await deps.authz.issue_capability(
+                    preview_principal, preview_scopes, ttl_seconds=ttl
+                )
+            else:
+                capability = await deps.authz.issue_capability(
+                    preview_principal, preview_scopes, ttl_seconds=ttl, tenant=ctx.tenant
+                )
         preview: dict[str, Any] = {"html": html, "sha256": sha256}
         if ref is not None and capability is not None:
             preview["ref"] = ref

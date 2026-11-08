@@ -220,3 +220,29 @@ describe("createHmacAuthzPort tenant claim (SPEC CAP-TEN-001)", () => {
     expect((await authz.verify(`${edited}.${signature}`, req)).ok).toBe(false);
   });
 });
+
+describe("createHmacAuthzPort cross-language wire token (SPEC CAP-TEN-001)", () => {
+  // The identical literal is verified by the Python test python/examples/sales-api/sales_api_tests/
+  // test_authz_port.py ("TS-issued wire token"): payload {sub, scopes, exp, jti, tenant}, HMAC-SHA256 over the
+  // payload string, secret "interop-secret".
+  const WIRE_TOKEN =
+    "eyJzdWIiOiJpbnRlcm9wLXVzZXIiLCJzY29wZXMiOlt7ImtpbmQiOiJyZWFkIiwicmVmIjoicXVlcnk6Ly9zYWxlcy9zdW1tYXJ5P2Z5PTIwMjYifV0sImV4cCI6NDEwMjQ0NDgwMCwianRpIjoiaW50ZXJvcC1qdGkiLCJ0ZW5hbnQiOiJhY21lIn0.pT4L2fW_JAjOiuJ-e6S_kuhepszrDrl7fJZwHhY6hj4";
+
+  it("verifies the shared wire token and reads its tenant", async () => {
+    const authz = createHmacAuthzPort("interop-secret");
+    expect(await authz.verify(WIRE_TOKEN, { kind: "read", ref: "query://sales/summary?fy=2026" })).toEqual({
+      ok: true,
+      principal: { id: "interop-user" },
+      tenant: "acme",
+    });
+  });
+
+  it("issues the claims in the documented order (sub, scopes, exp, jti, tenant)", async () => {
+    const authz = createHmacAuthzPort("interop-secret");
+    const cap = await authz.issueCapability({ id: "u" }, [{ kind: "read", ref: "query://s/x" }], {
+      tenant: "acme",
+    });
+    const claims = JSON.parse(Buffer.from(cap.split(".")[0]!, "base64url").toString("utf8")) as object;
+    expect(Object.keys(claims)).toEqual(["sub", "scopes", "exp", "jti", "tenant"]);
+  });
+});

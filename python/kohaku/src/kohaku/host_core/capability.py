@@ -50,6 +50,7 @@ async def issue_capability_for_spec(
     *,
     allowed_actions: frozenset[str] | None = None,
     on_dropped_action: Callable[[str], None] | None = None,
+    tenant: str | None = None,
 ) -> str:
     """Issues a capability matching the Spec's declarations (components' read references + the write-through
     action path). The scope-collection rules (read = bind variant enumeration / write = declared actions /
@@ -59,8 +60,14 @@ async def issue_capability_for_spec(
     When allowed_actions is given, write scopes whose action is not a DomainPort operation
     (list_operations()) are dropped before issuance — hardening against an LLM-generated action.invoke action
     name flowing unvalidated into a bearer write scope. Read scopes are untouched by this filter.
+
+    `tenant` is the tenant to bind into the capability (SPEC CAP-TEN-001), when the host resolved one. The
+    `tenant=` keyword is passed to `authz.issue_capability` only when set, so a port that predates the option
+    sees exactly the call shape it always did.
     """
     scopes = _filter_allowed_scopes(
         collect_capability_scopes(spec), allowed_actions, on_dropped_action
     )
-    return await authz.issue_capability(principal, scopes, ttl_seconds=ttl_seconds)
+    if tenant is None:
+        return await authz.issue_capability(principal, scopes, ttl_seconds=ttl_seconds)
+    return await authz.issue_capability(principal, scopes, ttl_seconds=ttl_seconds, tenant=tenant)
