@@ -315,8 +315,26 @@ describe("policyFingerprint", () => {
         "effort",
         "tierLlm",
         "tierGate",
+        "l1Filters",
       ].sort(),
     );
+  });
+
+  it("l1Filters:true changes the fingerprint; false / unset are byte-identical to before (absent key)", async () => {
+    expect(await policyFingerprint({ l1Filters: false })).toBe("");
+    expect(await policyFingerprint({})).toBe("");
+    const on = await policyFingerprint({ l1Filters: true });
+    expect(on).toMatch(/^[0-9a-f]{16}$/);
+    // Folding it into a policy that already fingerprints something must not disturb that policy when off.
+    const base = await policyFingerprint({ outputLanguage: "Japanese" });
+    expect(await policyFingerprint({ outputLanguage: "Japanese", l1Filters: false })).toBe(base);
+    expect(await policyFingerprint({ outputLanguage: "Japanese", l1Filters: true })).not.toBe(base);
+  });
+
+  it("l1Filters:true is pinned to an exact fingerprint byte value (absolute pin, cross-language golden)", async () => {
+    // Python's `policy_fingerprint(ComposePolicy(l1_filters=True))` must produce the same bytes; the
+    // cross-language fixture (spec/test/fixtures/cross-language-canonical.json) pins both.
+    expect(await policyFingerprint({ l1Filters: true })).toBe("ba3199e750d0bb46");
   });
 
   it("two composes with the same fingerprinted policy shape land on the same cache key (cache hit)", async () => {

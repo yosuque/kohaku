@@ -76,6 +76,7 @@ export type {
   CatalogContribution,
   DeleteFixationOptions,
   DomainPort,
+  FilterDescriptor,
   FixationRecord,
   GuiAction,
   InvocationContext,

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 export type ComposeStreamWireEvent =
   | { kind: "spec"; spec: unknown; capability?: string; final: boolean }
-  | { kind: "patch"; patch: unknown }
+  | { kind: "patch"; patch: unknown; capability?: string }
   | { kind: "done"; specHash: string; tier: string; cache: string }
   | { kind: "error"; error: { code: string; message: string } };
 
@@ -93,7 +93,11 @@ function wireEvent(event: string, data: string): ComposeStreamWireEvent | null {
         final: json["final"] === true,
       };
     case "patch":
-      return { kind: "patch", patch: json["patch"] };
+      return {
+        kind: "patch",
+        patch: json["patch"],
+        ...(typeof json["capability"] === "string" ? { capability: json["capability"] } : {}),
+      };
     case "done":
       return {
         kind: "done",
@@ -212,7 +216,13 @@ export function useSpecStream(): UseSpecStreamResult {
               return;
             }
             const next = current;
-            setState((prev) => ({ ...prev, spec: next }));
+            // The last patch may carry a replacement capability that covers the finalized Spec's bind
+            // variants (host-side L1 filter injection); it supersedes the skeleton's refs-only capability.
+            setState((prev) => ({
+              ...prev,
+              spec: next,
+              ...(ev.capability != null ? { capability: ev.capability } : {}),
+            }));
           } else if (ev.kind === "done") {
             setState((prev) => ({ ...prev, phase: "done", specHash: ev.specHash }));
             return;

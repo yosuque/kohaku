@@ -77,6 +77,48 @@ class QueryHandle:
 
 
 @dataclass(frozen=True)
+class FilterOption:
+    """One selectable value of a `FilterDescriptor` (TS `{ value, label }`)."""
+
+    value: str
+    label: str
+
+
+@dataclass(frozen=True)
+class FilterDescriptor:
+    """One GUI filter an Intent exposes, derived deterministically from the Intent's facet declaration (never
+    from a model). `ComposePolicy.l1Filters` makes the composer inject a `control.select` + `data.bind` pair
+    per descriptor into an L1-generated Spec, so changing the filter re-resolves the data without a recompose.
+    """
+
+    param: str
+    """Intent param name; also used as the UISpec.state key."""
+    queryParam: str
+    """Query parameter the param maps to in the resolved query:// ref (an Intent param and its query param may
+    be named differently). Contract: `queryParam` must have ONE meaning across the Intent's refs -- on every
+    path in `paths` it is this param's value, and it is not also a fixed parameter or another Intent param's
+    query parameter. A filter that cannot honour that is not described at all (`IntentDef.filters` excludes it)."""
+    paths: list[str]
+    """The query paths (the `<path>` of `query://<source>/<path>?...`) whose refs this filter governs, i.e. the
+    Intent's query templates that map `param` to `queryParam`. The composer binds only data components whose
+    `$ref` path is listed here; a component reading another path is left untouched even if its ref happens to
+    carry the same query parameter name."""
+    label: str
+    options: list[FilterOption]
+    """The authorized value domain (becomes both the control's options and `data.bind.values`)."""
+
+    def to_wire(self) -> dict[str, Any]:
+        """The canonical-JSON form (field names and order as in TS), hashed into the Spec cache key."""
+        return {
+            "param": self.param,
+            "queryParam": self.queryParam,
+            "paths": list(self.paths),
+            "label": self.label,
+            "options": [{"value": o.value, "label": o.label} for o in self.options],
+        }
+
+
+@dataclass(frozen=True)
 class OperationDescriptor:
     """Exposure of a business API. Invariants remain behind this (in the domain module)."""
 
@@ -187,6 +229,27 @@ class SupportsValidateIntent(Protocol):
     """
 
     async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput: ...
+
+
+class SupportsDescribeFilters(Protocol):
+    """Optional `SemanticPort` extension (port of TS spec-core's `SemanticPort.describeFilters?`). Describes the
+    GUI filters of an Intent (see `FilterDescriptor`); consulted by the composer only when
+    `ComposePolicy.l1Filters` is on. Must be a pure function of (Intent definition, tenant, locale): `tenant`
+    selects a per-tenant Intent catalog (like `resolve_query`) and `locale` (the session's locale, when present)
+    selects the label language. The composer folds a hash of the returned descriptors into the Spec cache key,
+    so Specs whose descriptors differ (another locale, a tenant-specific option list, a changed vocabulary) are
+    cached separately and never served to each other. Returning `[]` means the Intent has no filters.
+
+    Deliberately **not** declared as a member of `SemanticPort` itself, for the same reason as
+    `SupportsValidateIntent` above (a `typing.Protocol` cannot express an optional method, and a required one
+    would force every existing `SemanticPort` stub to grow it): the composer probes for it with
+    `getattr(semantic, "describe_filters", None)`. A `SemanticPort` that omits it simply gets no injected
+    filters (backward compatible).
+    """
+
+    async def describe_filters(
+        self, intent: Intent, *, tenant: str | None = None, locale: str | None = None
+    ) -> list[FilterDescriptor]: ...
 
 
 @dataclass(frozen=True)

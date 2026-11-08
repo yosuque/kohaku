@@ -75,6 +75,14 @@ export interface ComposeTrace {
    */
   cancelled?: true;
   /**
+   * The outcome of `ComposePolicy.l1Filters` injection for a freshly generated L1 Spec: `injected` lists the
+   * filter params that were added (possibly empty), `skipped` says why the whole injection was abandoned
+   * (`variant-limit`: the bind variants would exceed spec-core's MAX_BIND_VARIANTS; `invalid`: the root cannot
+   * host controls or the result failed structural validation, so the Spec was delivered as generated).
+   * Unset when the policy is off, the tier was not L1, the Intent had no filters, or the Spec came from the cache.
+   */
+  filters?: { injected: string[]; skipped?: "variant-limit" | "invalid" };
+  /**
    * The caller-supplied correlation id (ComposeOptions.correlationId), carried through unchanged so a
    * degraded/fallback delivery can be tied back to the triggering request (host-rest's X-Request-Id /
    * error.requestId, or an MCP tool call's JSON-RPC request id). Unset when the caller passed none — a
@@ -103,7 +111,7 @@ export type TraceBase = Pick<
 
 /** The per-path trace fields on top of TraceBase (durationMs is derived from startedAt inside buildComposeTrace). */
 type TraceFields = Pick<ComposeTrace, "cache" | "tier" | "attempts"> &
-  Partial<Pick<ComposeTrace, "fallback" | "coalesced" | "model" | "usage" | "cancelled">>;
+  Partial<Pick<ComposeTrace, "fallback" | "coalesced" | "model" | "usage" | "cancelled" | "filters">>;
 
 /**
  * Assembles a ComposeTrace from the shared base + the per-path fields. The single place that stamps
@@ -128,6 +136,7 @@ export function buildComposeTrace(
     ...(fields.model != null ? { model: fields.model } : {}),
     ...(fields.usage != null ? { usage: fields.usage } : {}),
     ...(fields.cancelled === true ? { cancelled: true as const } : {}),
+    ...(fields.filters != null ? { filters: fields.filters } : {}),
     durationMs: Date.now() - scope.startedAt,
   };
 }

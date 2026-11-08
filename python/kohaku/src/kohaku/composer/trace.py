@@ -35,6 +35,18 @@ class ComposeAttempt:
     usage: TokenUsage | None = None
 
 
+@dataclass(frozen=True)
+class TraceFilters:
+    """The outcome of `ComposePolicy.l1Filters` injection for a freshly generated L1 Spec (port of TS
+    `ComposeTrace.filters`): `injected` lists the filter params that were added (possibly empty), `skipped`
+    says why the whole injection was abandoned (`variant-limit`: the bind variants would exceed
+    MAX_BIND_VARIANTS; `invalid`: the root cannot host controls or the result failed structural validation,
+    so the Spec was delivered as generated)."""
+
+    injected: list[str]
+    skipped: Literal["variant-limit", "invalid"] | None = None
+
+
 type TraceInput = SemanticInput | Literal["intent"]
 """Kind of input recorded on the trace. Structured Intent input drops its body and keeps only "intent"."""
 
@@ -76,6 +88,10 @@ class ComposeTrace:
     disconnect or timeout), not an actual generation failure. Hosts check this to skip recording
     view.composed/view.fallback for the compose (a cancel must not inflate the fallback-rate analytics
     the same way a real generation failure does). Never set on an "ok" tier result."""
+    filters: TraceFilters | None = None
+    """Set for a freshly generated L1 Spec when `ComposePolicy.l1Filters` is on and the Intent declared
+    filters. Unset when the policy is off, the tier was not L1, the Intent had no filters, or the Spec came
+    from the cache."""
     correlationId: str | None = None
     """The caller-supplied correlation id (ComposeOptions.correlation_id), carried through unchanged so a
     degraded/fallback delivery can be tied back to the triggering request (host_rest's X-Request-Id, or an

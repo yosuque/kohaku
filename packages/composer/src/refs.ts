@@ -2,6 +2,7 @@ import {
   type CanonicalIntent,
   combineDataVersions,
   type DataShape,
+  type FilterDescriptor,
   type QueryHandle,
 } from "@kohaku-ui/spec-core";
 import type { ComposeContext } from "./context.js";
@@ -15,6 +16,12 @@ export interface ResolvedRefs {
   dataVersion: string;
   /** $ref URI → the dataVersion of that reference alone. The fill source for Spec.refVersions. */
   versionsByRef: Record<string, string>;
+  /**
+   * The Intent's GUI filters (`SemanticPort.describeFilters`), resolved only under `ComposePolicy.l1Filters`.
+   * Absent otherwise (and when the port does not implement it or the call failed -- fail-open, like
+   * describeShape); `fixation.ts` builds a ResolvedRefs without it.
+   */
+  descriptors?: FilterDescriptor[];
 }
 
 /** The result of resolveHandleVersions: resolved handles + their combined/per-ref dataVersion. */
@@ -64,6 +71,7 @@ export async function resolveRefs(
   intent: CanonicalIntent,
   ctx: ComposeContext,
   tenant?: string,
+  locale?: string,
 ): Promise<ResolvedRefs> {
   // Propagate tenant to resolveQuery to correctly resolve per-tenant promoted Intents.
   // A resolveQuery failure is wrapped as SEMANTIC_FAILED here (fixation.ts's materializeFixation shares
@@ -94,5 +102,29 @@ export async function resolveRefs(
     );
   }
 
-  return { handles, uris: handles.map((h) => h.uri), shapesByRef, dataVersion, versionsByRef };
+  // Intent-declared filters for L1 injection (ComposePolicy.l1Filters). The session's locale selects the label
+  // language; prepareCompose folds a hash of the returned descriptors into the cache key, so Specs for
+  // different locales / tenant option lists are cached separately. A failure only means "no filters" (an
+  // optional enhancement must not fail the compose), like describeShape above.
+  let descriptors: FilterDescriptor[] | undefined;
+  if (ctx.policy?.l1Filters === true && ctx.semantic.describeFilters != null) {
+    try {
+      const describeCtx = { ...(tenant != null ? { tenant } : {}), ...(locale != null ? { locale } : {}) };
+      descriptors = await ctx.semantic.describeFilters(
+        intent,
+        Object.keys(describeCtx).length > 0 ? describeCtx : undefined,
+      );
+    } catch {
+      descriptors = undefined;
+    }
+  }
+
+  return {
+    handles,
+    uris: handles.map((h) => h.uri),
+    shapesByRef,
+    dataVersion,
+    versionsByRef,
+    ...(descriptors != null && descriptors.length > 0 ? { descriptors } : {}),
+  };
 }

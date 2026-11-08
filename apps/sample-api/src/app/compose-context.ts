@@ -65,9 +65,13 @@ export function admitFixationForLocale(_fixation: FixationRecord, session: Sessi
  */
 export function sharedComposePolicy(
   l2Smoke?: ComposePolicy["l2Smoke"],
-): Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget"> {
+): Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget" | "l1Filters"> {
   return {
     allowL2: true,
+    // L1 filter injection: the Intent facets declared in intents/catalog.ts become control.select + data.bind
+    // on generated (L1) screens, so changing a filter re-resolves data with no recompose and no model call.
+    // A boolean, so it is code-defined like the other fields here (the Policy-as-Code schema does not carry it).
+    l1Filters: true,
     // Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
     // to the deterministic fallback on expiry rather than hanging indefinitely behind a slow/hung LLM call.
     budget: { deadlineMs: composeDeadlineMs() },
@@ -103,7 +107,7 @@ export function createComposeContext(args: {
   semantic: SemanticPort;
   storage: StoragePort;
   llm: LlmPort;
-  shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget">;
+  shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget" | "l1Filters">;
   policyRuntime?: PolicyRuntime;
   /** Wraps the console observer with `@kohaku-ui/otel`'s OTel observer. Default false. See app-core.ts's
    * `AppDeps.otel` doc comment for why this is a plain boolean rather than a `process.env` read. */

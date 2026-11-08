@@ -22,6 +22,7 @@ from kohaku.spec import (
     SPEC_VERSION,
     CacheKeyParts,
     DataShape,
+    FilterDescriptor,
     GuiAction,
     Intent,
     IntentInput,
@@ -52,15 +53,17 @@ from .context import (
     ComposePolicy,
     OnDraftPartial,
     ResolvedRefs,
+    filter_descriptors_hash,
     policy_fingerprint,
     tier_llm_fingerprint_material,
 )
 from .errors import ComposeError
 from .fallback import build_fallback_spec
+from .inject_filters import InjectFiltersResult
 from .l1_generate import L1Result, generate_l1
 from .l2_generate import generate_l2
-from .post import PostProcessContext, post_process
-from .trace import ComposeAttempt, ComposeTrace, TokenUsage, TraceInput
+from .post import FilterInjection, PostProcessContext, post_process
+from .trace import ComposeAttempt, ComposeTrace, TokenUsage, TraceFilters, TraceInput
 
 COMPOSER_ID = "composer@0.1.0"
 
@@ -266,7 +269,9 @@ async def prepare_compose(
 
     # 2. Deterministic query resolution (reference-passing handles) + dataVersion composition.
     tenant = opts.session.tenant if opts.session is not None else None
-    refs = await _resolve_refs(intent, ctx, tenant)
+    refs = await _resolve_refs(
+        intent, ctx, tenant, opts.session.locale if opts.session is not None else None
+    )
 
     # 3. Cache key (generatorVersion is appended as a trailing component only when given; policyFingerprint
     # is a derived 7th component — see context.py's policy_fingerprint doc — likewise omitted (empty
@@ -280,7 +285,11 @@ async def prepare_compose(
         # show a "-" placeholder for a component that in fact contributed a real segment to the cache key.
         specVersion=SPEC_VERSION,
         generatorVersion=policy.generatorVersion,
-        policyFingerprint=policy_fingerprint(policy, tier_llm_fingerprint_material(ctx)),
+        policyFingerprint=policy_fingerprint(
+            policy,
+            tier_llm_fingerprint_material(ctx),
+            filter_descriptors_hash(refs.descriptors),
+        ),
     )
     key = cache_key(key_parts)
 
@@ -500,9 +509,9 @@ async def _generate_spec(prepared: PreparedCompose, ctx: ComposeContext) -> Gene
     # 6-7. L1 constrained generation → L2 free-form generation → deterministic fallback (branching consolidated in _run_tier_generation).
     attempts: list[ComposeAttempt] = []
     outcome = await _run_tier_generation(prepared, ctx, attempts)
-    spec = _build_spec_from_outcome(prepared, ctx, outcome)
+    spec, filters = _build_spec_from_outcome(prepared, ctx, outcome)
     # 9-10. Cache store + leader trace assembly.
-    return await _persist_and_trace(prepared, ctx, spec, outcome, attempts)
+    return await _persist_and_trace(prepared, ctx, spec, outcome, attempts, filters)
 
 
 async def _get_spec_cache_safely(
@@ -586,7 +595,7 @@ async def _try_fixed_spec(prepared: PreparedCompose, ctx: ComposeContext) -> Gen
 
 def _build_spec_from_outcome(
     prepared: PreparedCompose, ctx: ComposeContext, outcome: _TierOutcome
-) -> UISpec:
+) -> tuple[UISpec, TraceFilters | None]:
     """Builds the delivered Spec from a _TierOutcome. On ok: assemble + post-processing; on fallback: returns
     the deterministic fallback Spec and fires the observer hook exactly once (the once-per-generation contract
     is fixed here)."""
@@ -608,7 +617,30 @@ def _build_spec_from_outcome(
             generator_version=policy.generatorVersion,
             kit={"id": kit.id, "version": kit.version} if kit is not None else None,
         )
-        return post_and_validate(assembled, refs, ctx)
+        # ComposePolicy.l1Filters: Intent-declared filters are injected into a freshly generated L1 Spec only
+        # (never L0 -- a hand-written template owns its own controls -- nor L2 nor the fallback Spec).
+        filter_report: list[InjectFiltersResult] = []
+        descriptors = (
+            refs.descriptors if outcome.tier == "L1" and policy.l1Filters is True else None
+        )
+        spec = post_and_validate(
+            assembled,
+            refs,
+            ctx,
+            FilterInjection(
+                descriptors=descriptors,
+                max_variants=policy.l1FiltersMaxVariants,
+                report=filter_report.append,
+            )
+            if descriptors is not None
+            else None,
+        )
+        trace_filters = (
+            TraceFilters(injected=filter_report[0].injected, skipped=filter_report[0].skipped)
+            if len(filter_report) > 0
+            else None
+        )
+        return spec, trace_filters
 
     spec = build_fallback_spec(
         intent=intent,
@@ -639,7 +671,7 @@ def _build_spec_from_outcome(
         ),
         outcome.error,
     )
-    return spec
+    return spec, None
 
 
 async def _persist_and_trace(
@@ -648,6 +680,7 @@ async def _persist_and_trace(
     spec: UISpec,
     outcome: _TierOutcome,
     attempts: list[ComposeAttempt],
+    filters: TraceFilters | None = None,
 ) -> GenerateOutcome:
     """After the cache store (condition/timing consolidated in _should_persist), builds the ComposeTrace for the
     leader. The L0 short-circuit does the equivalent store/trace on the _try_fixed_spec side, so this is dedicated
@@ -672,6 +705,7 @@ async def _persist_and_trace(
         fallback_reason=fallback_reason,
         model=model,
         cancelled=cancelled,
+        filters=filters,
     )
     return GenerateOutcome(spec=spec, trace=trace)
 
@@ -976,6 +1010,7 @@ def _build_trace(
     fallback_reason: str | None,
     model: str | None,
     cancelled: bool = False,
+    filters: TraceFilters | None = None,
 ) -> ComposeTrace:
     return ComposeTrace(
         input=prepared.trace_base.input,
@@ -992,6 +1027,7 @@ def _build_trace(
         usage=_sum_usage(attempts),
         durationMs=(time.monotonic() - prepared.started_at) * 1000,
         cancelled=cancelled,
+        filters=filters,
         correlationId=prepared.trace_base.correlationId,
     )
 
@@ -1166,7 +1202,9 @@ async def recompose(
     return result, diff_spec(prev, result.spec)
 
 
-async def _resolve_refs(intent: Intent, ctx: ComposeContext, tenant: str | None) -> ResolvedRefs:
+async def _resolve_refs(
+    intent: Intent, ctx: ComposeContext, tenant: str | None, locale: str | None = None
+) -> ResolvedRefs:
     try:
         resolved = await ctx.semantic.resolve_query(intent, tenant=tenant)
     except Exception as e:
@@ -1196,12 +1234,26 @@ async def _resolve_refs(intent: Intent, ctx: ComposeContext, tenant: str | None)
 
     await asyncio.gather(*(_shape(h) for h in handles))
 
+    # Intent-declared filters for L1 injection (ComposePolicy.l1Filters). The session's locale selects the label
+    # language; prepare_compose folds a hash of the returned descriptors into the cache key, so Specs for
+    # different locales / tenant option lists are cached separately. A failure only means "no filters" (an
+    # optional enhancement must not fail the compose), like describe_shape above.
+    descriptors: list[FilterDescriptor] | None = None
+    describe_filters = getattr(ctx.semantic, "describe_filters", None)
+    if ctx.policy is not None and ctx.policy.l1Filters is True and describe_filters is not None:
+        try:
+            described = await describe_filters(intent, tenant=tenant, locale=locale)
+            descriptors = list(described) if len(described) > 0 else None
+        except Exception:  # noqa: BLE001,S110
+            descriptors = None
+
     return ResolvedRefs(
         handles=handles,
         uris=[h.uri for h in handles],
         shapesByRef=shapes_by_ref,
         dataVersion=data_version,
         versionsByRef=versions_by_ref,
+        descriptors=descriptors,
     )
 
 
@@ -1248,12 +1300,22 @@ def _assemble_spec(
     return UISpec.model_validate(wire)
 
 
-def post_and_validate(spec: UISpec, refs: ResolvedRefs, ctx: ComposeContext) -> UISpec:
+def post_and_validate(
+    spec: UISpec,
+    refs: ResolvedRefs,
+    ctx: ComposeContext,
+    filters: FilterInjection | None = None,
+) -> UISpec:
     """Deterministic post-processing + final Spec validation. Running skeleton construction through the same path
-    keeps component-version filling and props-default filling consistent with the generated Spec."""
+    keeps component-version filling and props-default filling consistent with the generated Spec. `filters`
+    (L1 only, from `ComposePolicy.l1Filters`) additionally injects the Intent-declared filters after ID
+    normalization."""
     extra_rules = ctx.policy.extraRules if ctx.policy is not None else []
     processed = post_process(
-        spec, PostProcessContext(catalog=ctx.catalog, shapesByRef=refs.shapesByRef), extra_rules
+        spec,
+        PostProcessContext(catalog=ctx.catalog, shapesByRef=refs.shapesByRef),
+        extra_rules,
+        filters,
     )
     try:
         # Drop to wire form via a JSON round-trip (same as TS), then run final validation.

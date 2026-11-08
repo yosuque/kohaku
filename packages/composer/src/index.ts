@@ -61,6 +61,9 @@ export {
 export {
   canonicalProps,
   chartKind,
+  type FilterInjection,
+  type InjectFiltersResult,
+  injectFilters,
   normalizeIds,
   type PostProcessContext,
   type PostRule,

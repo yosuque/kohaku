@@ -245,8 +245,24 @@ class TestPolicyFingerprint:
                 "effort",
                 "tierLlm",
                 "tierGate",
+                "l1Filters",
             ]
         )
+
+    def test_l1_filters_true_changes_the_fingerprint_false_or_unset_does_not(self) -> None:
+        """Port of the TS test: l1Filters folds in only when True, as an absent key otherwise."""
+        assert policy_fingerprint(ComposePolicy(l1Filters=False)) == ""
+        assert policy_fingerprint(ComposePolicy()) == ""
+        on = policy_fingerprint(ComposePolicy(l1Filters=True))
+        assert _HEX16_RE.match(on) is not None
+        base = policy_fingerprint(ComposePolicy(outputLanguage="Japanese"))
+        assert policy_fingerprint(ComposePolicy(outputLanguage="Japanese", l1Filters=False)) == base
+        assert policy_fingerprint(ComposePolicy(outputLanguage="Japanese", l1Filters=True)) != base
+
+    def test_l1_filters_true_pinned_to_exact_value(self) -> None:
+        """Absolute pin, byte-identical to the TS pin (l1Filters touches neither designSystem nor any
+        field with a Python/TS default divergence) -- also fixed by the cross-language golden."""
+        assert policy_fingerprint(ComposePolicy(l1Filters=True)) == "ba3199e750d0bb46"
 
     def test_effort_l1_only_pinned_to_exact_value(self) -> None:
         """Absolute pin (M-4), unlike the relative-difference coverage that predates it: a bug that

@@ -9,7 +9,7 @@ import {
 import { COMPOSER_ID } from "./constants.js";
 import type { ComposeCachePolicy, ComposeContext, ComposeL2Policy } from "./context.js";
 import { ComposeError } from "./errors.js";
-import { postProcess } from "./post/index.js";
+import { type FilterInjection, postProcess } from "./post/index.js";
 import type { ResolvedRefs } from "./refs.js";
 
 /**
@@ -90,13 +90,20 @@ export function assembleSpec(args: {
 /**
  * Deterministic post-processing (ID normalization, chart-kind rule, default sort, props normalization) +
  * final Spec validation. Routing composeStream's skeleton construction through the same path too makes the
- * component-version filling and props-default filling match the generated Spec.
+ * component-version filling and props-default filling match the generated Spec. `filters` (L1 only, from
+ * `ComposePolicy.l1Filters`) additionally injects the Intent-declared filters after ID normalization.
  */
-export function postAndValidate(spec: UISpec, refs: ResolvedRefs, ctx: ComposeContext): UISpec {
+export function postAndValidate(
+  spec: UISpec,
+  refs: ResolvedRefs,
+  ctx: ComposeContext,
+  filters?: FilterInjection,
+): UISpec {
   const processed = postProcess(
     spec,
     { catalog: ctx.catalog, shapesByRef: refs.shapesByRef },
     ctx.policy?.extraRules ?? [],
+    filters,
   );
   try {
     // The JSON round trip is pre-processing, not a substitute for Zod parse: it drops the keys of undefined

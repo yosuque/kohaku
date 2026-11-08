@@ -432,6 +432,32 @@ See TS's `docs/design.md#prompt-caching` (and its Japanese counterpart) for the 
 trade-off and the measurement script (`apps/sample-api/scripts/measure-grammar-latency.ts`)
 used to decide whether either is worth turning on for a given model/provider.
 
+## L1 filters / `l1Filters` (symmetric with TS)
+
+`ComposePolicy(l1Filters=True)` (default `False`) turns on deterministic filter injection into
+L1-generated Specs, mirroring TS's `ComposePolicy.l1Filters` (design.md #78):
+
+- `kohaku.intents`: `IntentDef.filters(locale=None)` derives `FilterDescriptor`s
+  (`kohaku.spec`: `param`, `queryParam`, `paths`, `label`, `options`) from the Intent's `facets` +
+  `queries[].paramMap`; a filter whose query param is also a `fixedParams` key or is shared with another
+  Intent param on the same path is excluded.
+- `kohaku.semantic_llm`: the default port implements the optional
+  `describe_filters(intent, *, tenant=None, locale=None)`; the composer probes it with
+  `getattr` (`SupportsDescribeFilters`) and passes the session's tenant and locale.
+- `kohaku.composer.inject_filters.inject_filters` is the post-step (run after `normalize_ids`
+  and before `canonical_props`; L1 only; `max_variants` defaults to 64 = `ComposePolicy.l1FiltersMaxVariants`).
+  The descriptors' hash (`filter_descriptors_hash`) and the cap join `policy_fingerprint` (`l1Filters`
+  folds in only when `True`, as an absent key), so another locale or a tenant-specific option list
+  is cached separately. `inject_filters`' output, the descriptor hash and the fingerprint bytes are
+  pinned byte-for-byte against TS by the cross-language golden (`l1Filters` in
+  `cross-language-canonical.json`).
+- `kohaku.host_rest` `/compose/stream`: the last patch (`StreamPatchEvent.converged`) carries a
+  replacement `capability` and `actions`; `kohaku.host_mcp` pre-resolves at most 32 non-initial bind
+  variants whatever the policy. `examples/sales-api` enables it.
+
+Python naming note: the policy fields are `l1Filters` / `l1FiltersMaxVariants` (camelCase, like the rest of
+`ComposePolicy`'s wire-adjacent fields), not `l1_filters`.
+
 ## Reasoning effort / per-tier LLM (symmetric with TS)
 
 Two additive, opt-in knobs mirror the TS side exactly (both defaulted off/unset; leaving
