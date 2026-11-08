@@ -293,7 +293,10 @@ describe("planCatalogMigration", () => {
         const stored = nestedFixation();
         const before = structuredClone(stored);
         const catalog = catalogWithMigrate(mutating((props) => props));
-        const plan = await planCatalogMigration({ storage: stubStorage([stored]), catalogFor: () => catalog });
+        const plan = await planCatalogMigration({
+          storage: stubStorage([stored]),
+          catalogFor: () => catalog,
+        });
         expect(plan.steps).toHaveLength(1);
         expect(plan.steps[0]!.pinnedSpec.components[0]!.props).toEqual({
           label: "Revenue",
@@ -307,7 +310,10 @@ describe("planCatalogMigration", () => {
         const stored = nestedFixation();
         const before = structuredClone(stored);
         const catalog = catalogWithMigrate(mutating(() => undefined));
-        const plan = await planCatalogMigration({ storage: stubStorage([stored]), catalogFor: () => catalog });
+        const plan = await planCatalogMigration({
+          storage: stubStorage([stored]),
+          catalogFor: () => catalog,
+        });
         expect(plan.steps).toEqual([]);
         expect(plan.blocked).toHaveLength(1);
         expect(stored).toEqual(before);

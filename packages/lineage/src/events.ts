@@ -305,8 +305,9 @@ export interface ActionApprovedPayload {
  * carries no token id (`jti`) or any other value the token could be reconstructed from: the audit proves
  * *that* a specific `(action, payloadHash)` was approved for `requesterId` until `expiresAt`, nothing
  * that could be replayed. `expiresAt` is computed by the host as issue time + `ttlSeconds` (the
- * `ApprovalPort` does not report its own expiry), so it is advisory: it differs from the real expiry when the
- * port's own default TTL differs from `DEFAULT_APPROVAL_TTL_SECONDS`, or when the port clamps the lifetime.
+ * `ApprovalPort` does not report its own expiry): it is the **requested** TTL added to the issue time, so it
+ * is advisory -- it differs from the real expiry when the port's own default TTL differs from
+ * `DEFAULT_APPROVAL_TTL_SECONDS`, or when the port clamps the lifetime. Do not use it to refuse a new issuance.
  */
 export interface ActionApprovalIssuedPayload {
   action: string;
