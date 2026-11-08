@@ -22,6 +22,7 @@ from .port import (
     NormalizedInfo,
     UnknownIntentError,
     create_llm_semantic_port,
+    default_output_locale,
 )
 from .prompt import (
     build_normalize_system_prompt,
@@ -43,6 +44,7 @@ __all__ = [
     "build_normalize_user_prompt",
     "create_intent_catalog",
     "create_llm_semantic_port",
+    "default_output_locale",
     "normalize_gui_action",
     "normalize_nl_query",
     "render_catalog_doc",

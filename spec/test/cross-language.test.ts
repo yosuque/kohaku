@@ -55,6 +55,7 @@ import {
 import {
   buildNormalizeSystemPrompt,
   buildNormalizeUserPrompt,
+  defaultOutputLocale,
   normalizeGuiAction,
 } from "../../packages/semantic-llm/src/index.js";
 import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
@@ -103,6 +104,7 @@ interface Fixture {
     system: string;
     user: string;
   }[];
+  semanticLocale: { tag: string | null; label: string }[];
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -263,6 +265,15 @@ describe("cross-language golden (semantic-llm, deterministic pieces)", () => {
     for (const c of fixture.semanticPrompts) {
       expect(buildNormalizeSystemPrompt(c.rules)).toBe(c.system);
       expect(buildNormalizeUserPrompt(c.catalogDoc, c.locale, c.text)).toBe(c.user);
+    }
+  });
+});
+
+describe("cross-language golden (semantic-llm, default outputLocale)", () => {
+  it('defaultOutputLocale reproduces the fixture (BCP-47-like tags pass, everything else is "und")', () => {
+    expect(fixture.semanticLocale.length).toBeGreaterThan(0);
+    for (const c of fixture.semanticLocale) {
+      expect(defaultOutputLocale(c.tag ?? undefined), JSON.stringify(c.tag)).toBe(c.label);
     }
   });
 });

@@ -11,6 +11,7 @@ it with your own SemanticPort when the catalog, prompt or fallback policy outgro
 from __future__ import annotations
 
 import inspect
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -33,6 +34,21 @@ from kohaku.spec import (
 from .catalog import IntentCatalogLike
 from .gui import normalize_gui_action
 from .nl import normalize_nl_query
+
+_LOCALE_TAG = re.compile(r"[A-Za-z0-9-]{1,35}")
+"""A BCP-47-like language tag: ASCII letters, digits and hyphens, at most 35 characters."""
+
+
+def default_output_locale(locale: str | None) -> str:
+    """The default `output_locale`: the "(locale)" label in the normalizer's user prompt. The tag comes from
+    the client (`NLQuery.locale`) and is interpolated outside the USER_QUESTION delimiter block, so anything
+    that is not a BCP-47-like tag (ASCII letters, digits, hyphens; at most 35 characters) is replaced by
+    "und" (undetermined) instead of reaching the prompt verbatim. An absent tag is "en". A custom
+    `output_locale` replaces this entirely and owns its own sanitization. Port of TS `defaultOutputLocale`
+    (pinned by the cross-language golden `semanticLocale`)."""
+    if locale is None:
+        return "en"
+    return locale if _LOCALE_TAG.fullmatch(locale) is not None else "und"
 
 
 class UnknownIntentError(Exception):
@@ -100,11 +116,10 @@ class LlmSemanticPort:
             return normalize_gui_action(input, catalog)
         assert isinstance(input, NLQuery)
         locale_tag = input.locale if input.locale is not None else ctx.locale
-        locale = (
-            self._output_locale(locale_tag)
-            if self._output_locale is not None
-            else (locale_tag if locale_tag is not None else "en")
+        output_locale = (
+            self._output_locale if self._output_locale is not None else default_output_locale
         )
+        locale = output_locale(locale_tag)
         result = await normalize_nl_query(
             input=input,
             catalog=catalog,
@@ -201,8 +216,8 @@ def create_llm_semantic_port(
     - rules: extra system-prompt rules (product-specific), rendered as "- ..." lines after the generic ones.
     - fallback_intent: Intent to fall back to (params { request: text }) when the model's answer fits no Intent.
       Without it, normalize raises SemanticNormalizeError.
-    - output_locale: maps a locale tag to the "(locale)" label in the prompt. Default: the tag itself, "en"
-      when absent.
+    - output_locale: maps a locale tag to the "(locale)" label in the prompt. Default: `default_output_locale` (the
+      tag itself when it is BCP-47-like, "und" otherwise, "en" when absent).
     - max_question_chars: rejects an NL question longer than this many characters before any LLM call
       (default 2000).
     - on_normalized: observation hook called after every successful NL normalization (both the matched-Intent

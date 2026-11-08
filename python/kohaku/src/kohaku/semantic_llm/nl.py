@@ -58,7 +58,10 @@ async def normalize_nl_query(
     max_question_chars: int | None = None,
 ) -> NlNormalization:
     limit = DEFAULT_MAX_QUESTION_CHARS if max_question_chars is None else max_question_chars
-    if len(input.text) > limit:
+    # TS counts UTF-16 code units (`text.length`), not code points: count the same unit so an astral character
+    # (emoji) is accepted or rejected identically in both languages. surrogatepass keeps a lone surrogate
+    # (possible in a Python str, as in a JS string) countable instead of raising.
+    if len(input.text.encode("utf-16-le", errors="surrogatepass")) // 2 > limit:
         raise SemanticNormalizeError(
             input.text, f"the question is too long (max {limit} characters)"
         )

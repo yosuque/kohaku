@@ -561,6 +561,14 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   any request carrying `temperature` / `top_p` / `top_k` with a 400. kohaku's
   identical-display guarantee comes from the Spec cache, with temperature 0 only auxiliary,
   so the loss on older models is cosmetic.
+- **`kohaku.semantic_llm`'s catalog doc is not byte-identical to TS.** `render_catalog_doc` renders each
+  Intent's params JSON Schema from the params DSL (`kohaku.intents.ObjectSchema`), while TS uses zod's
+  `toJSONSchema`; the doc feeds only the NL-normalization LLM call (never a cache key or a validation).
+  The cross-language golden therefore covers `build_normalize_system_prompt` /
+  `build_normalize_user_prompt` (pure string builders), `normalize_gui_action` and
+  `default_output_locale`, but not `render_catalog_doc`. Two further notes: `describe_shape` answers
+  `None` (instead of being absent) when the option is omitted, and `IntentCatalogLike`'s optional members
+  (`revision`, `validate_params`) are probed with `getattr`.
 - Internal APIs (functions and methods that do not appear on the wire) follow Python's
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.

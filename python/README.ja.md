@@ -516,6 +516,14 @@ failed catalog/structure validation」という文言とは別物にし、この
   `top_p` / `top_k` を含むリクエストを Messages API が 400 で拒否するため。kohaku の
   同一表示の保証は Spec キャッシュによるもので temperature 0 は補助にすぎず、旧モデルでの
   影響は小さい。
+- **`kohaku.semantic_llm` のカタログ doc は TS とバイト一致しない**: `render_catalog_doc` は
+  各 Intent の params JSON Schema を params DSL(`kohaku.intents.ObjectSchema`)から描画する
+  (TS は zod の `toJSONSchema`)。この doc は NL 正規化の LLM 呼び出しにしか使われず、キャッシュ
+  キーにも検証にも入らない。そのため言語間 golden が押さえるのは `build_normalize_system_prompt` /
+  `build_normalize_user_prompt`(純粋な文字列ビルダー)、`normalize_gui_action`、
+  `default_output_locale` で、`render_catalog_doc` は含まない。ほかに、`describe_shape` は
+  オプション省略時に(欠落ではなく)`None` を返すこと、`IntentCatalogLike` の任意メンバー
+  (`revision`、`validate_params`)は `getattr` で探ることが TS との違いである。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
 - **`ComponentDefinition.deprecated` に `migrateProps` 相当が無い**(design.md #65):

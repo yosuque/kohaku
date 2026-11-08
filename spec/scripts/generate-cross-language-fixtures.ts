@@ -74,11 +74,13 @@ import { coreCatalog } from "../../packages/registry/src/core/index.js";
 import {
   buildNormalizeSystemPrompt,
   buildNormalizeUserPrompt,
+  defaultOutputLocale,
   normalizeGuiAction,
 } from "../../packages/semantic-llm/src/index.js";
 import {
   createSemanticGuiCatalog,
   SEMANTIC_GUI_CASES,
+  SEMANTIC_LOCALE_TAGS,
   SEMANTIC_PROMPT_CASES,
 } from "../test/semantic-gui-catalog.js";
 
@@ -438,6 +440,11 @@ async function main(): Promise<void> {
     user: buildNormalizeUserPrompt(c.catalogDoc, c.locale, c.text),
   }));
 
+  const semanticLocaleCases = SEMANTIC_LOCALE_TAGS.map((tag) => ({
+    tag,
+    label: defaultOutputLocale(tag ?? undefined),
+  }));
+
   const exampleSpec = parseSpec(
     JSON.parse(readFileSync(join(OUT_DIR, "../../examples/quarterly-sales.spec.json"), "utf8")),
   );
@@ -723,13 +730,14 @@ async function main(): Promise<void> {
         promptFragments,
         semanticGui: semanticGuiCases,
         semanticPrompts: semanticPromptCases,
+        semanticLocale: semanticLocaleCases,
       },
       null,
       2,
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

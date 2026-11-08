@@ -34,6 +34,21 @@ export class UnknownIntentError extends Error {
   }
 }
 
+/** A BCP-47-like language tag: ASCII letters, digits and hyphens, at most 35 characters (RFC 5646's longest practical tag). */
+const LOCALE_TAG = /^[A-Za-z0-9-]{1,35}$/;
+
+/**
+ * The default `outputLocale`: the "(locale)" label in the normalizer's user prompt. The tag comes from the client
+ * (`NLQuery.locale`) and is interpolated outside the USER_QUESTION delimiter block, so anything that is not a
+ * BCP-47-like tag (letters, digits, hyphens; at most 35 characters) is replaced by `"und"` (undetermined) instead
+ * of reaching the prompt verbatim. An absent tag is `"en"`. A custom `outputLocale` replaces this entirely and
+ * owns its own sanitization.
+ */
+export function defaultOutputLocale(locale?: string): string {
+  if (locale == null) return "en";
+  return LOCALE_TAG.test(locale) ? locale : "und";
+}
+
 export interface LlmSemanticPortOptions {
   llm: LlmPort;
   /** One catalog, or a per-tenant resolver (promotion adds Intents per tenant). */
@@ -45,7 +60,7 @@ export interface LlmSemanticPortOptions {
   rules?: (ctx: SessionContext) => string[];
   /** Intent to fall back to (params { request: text }) when the model's answer fits no Intent. Without it, normalize throws SemanticNormalizeError. */
   fallbackIntent?: string;
-  /** Maps a locale tag to the "(locale)" label in the prompt. Default: the tag itself, "en" when absent. */
+  /** Maps a locale tag to the "(locale)" label in the prompt. Default: `defaultOutputLocale` (the tag itself when it is BCP-47-like, "und" otherwise, "en" when absent). */
   outputLocale?: (locale?: string) => string;
   /** Rejects an NL question longer than this many characters before any LLM call. Default: 2000. */
   maxQuestionChars?: number;
@@ -69,7 +84,7 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
   const { llm, dataVersion, describeShape, rules, fallbackIntent, maxQuestionChars, onNormalized } = options;
   const catalogFor =
     typeof options.catalog === "function" ? options.catalog : () => options.catalog as IntentCatalogLike;
-  const outputLocale = options.outputLocale ?? ((locale?: string) => locale ?? "en");
+  const outputLocale = options.outputLocale ?? defaultOutputLocale;
 
   const port: SemanticPort = {
     async normalize(input: SemanticInput, ctx: SessionContext): Promise<IntentInput> {

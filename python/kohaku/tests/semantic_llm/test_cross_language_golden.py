@@ -15,6 +15,7 @@ import pytest
 from kohaku.semantic_llm import (
     build_normalize_system_prompt,
     build_normalize_user_prompt,
+    default_output_locale,
     normalize_gui_action,
 )
 from kohaku.spec import GuiAction, IntentInput, finalize_intent
@@ -58,3 +59,11 @@ def test_semantic_prompts(cross_language_fixture: dict[str, Any]) -> None:
             build_normalize_user_prompt(case["catalogDoc"], case["locale"], case["text"])
             == case["user"]
         )
+
+
+def test_semantic_locale(cross_language_fixture: dict[str, Any]) -> None:
+    """default_output_locale must reproduce the TS label for every tag (BCP-47-like passes, the rest is "und")."""
+    cases = cross_language_fixture["semanticLocale"]
+    assert cases
+    for case in cases:
+        assert default_output_locale(case["tag"]) == case["label"], repr(case["tag"])
