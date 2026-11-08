@@ -132,6 +132,62 @@ def test_action_payload_scan(cross_language_fixture: dict[str, Any]) -> None:
         assert got == case["issues"], f"scan mismatch for payload={case['payload']!r}"
 
 
+def _canonical_equal(actual: object, expected: object, label: str) -> None:
+    """Compare as canonical JSON: the representation both languages are pinned to (True vs 1, 3 vs 3.0)."""
+    assert canonical_stringify(actual) == canonical_stringify(expected), label
+
+
+def test_domain_mcp(cross_language_fixture: dict[str, Any]) -> None:
+    """kohaku.domain_mcp's pure functions (schema projection, argument coercion, tabular conversion,
+    outputSchema -> DataShape) must reproduce the TS-generated fixture. TS counterpart:
+    spec/test/cross-language.test.ts (domainMcp)."""
+    from types import SimpleNamespace
+
+    from kohaku.domain_mcp import (
+        coerce_tool_arguments,
+        project_input_schema,
+        shape_from_output_schema,
+        to_tabular_data,
+    )
+
+    fixture = cross_language_fixture["domainMcp"]
+
+    assert fixture["schemaProjection"]
+    for case in fixture["schemaProjection"]:
+        got = project_input_schema(case["inputSchema"]).to_wire()
+        _canonical_equal(got, case["expected"], f"projection mismatch for {case['inputSchema']!r}")
+
+    assert fixture["argumentCoercion"]
+    for case in fixture["argumentCoercion"]:
+        coerced: object
+        try:
+            coerced = coerce_tool_arguments(case["args"], case["inputSchema"])
+        except ValueError:
+            coerced = None  # McpArgumentError: the fixture's `expected: null`
+        _canonical_equal(coerced, case["expected"], f"coercion mismatch for {case['args']!r}")
+
+    assert fixture["tabular"]
+    for case in fixture["tabular"]:
+        raw = case["result"]
+        result = SimpleNamespace(
+            content=[SimpleNamespace(**block) for block in raw.get("content", [])],
+            structured_content=raw.get("structuredContent"),
+            is_error=raw.get("isError", False),
+        )
+        tabular: object
+        try:
+            tabular = to_tabular_data(result, case["dataVersion"]).to_wire()
+        except (ValueError, RuntimeError):
+            tabular = None  # McpResultError / McpToolError: the fixture's `expected: null`
+        _canonical_equal(tabular, case["expected"], f"tabular mismatch for {raw!r}")
+
+    assert fixture["shape"]
+    for case in fixture["shape"]:
+        shape = shape_from_output_schema(case["outputSchema"])
+        dumped = None if shape is None else shape.model_dump(exclude_none=True)
+        _canonical_equal(dumped, case["expected"], f"shape mismatch for {case['outputSchema']!r}")
+
+
 def test_sandbox_dom_allowlist(cross_language_fixture: dict[str, Any]) -> None:
     """The sandbox DOM allowlist mirror (kohaku.spec.sandbox_dom) must not drift from the TS source."""
     expected = cross_language_fixture["sandboxDom"]

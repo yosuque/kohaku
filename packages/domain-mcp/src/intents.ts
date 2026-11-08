@@ -1,5 +1,6 @@
 import { defineIntent, type IntentDef } from "@kohaku-ui/intents";
 import { z } from "zod";
+import { unwrapNullable } from "./nullable.js";
 import type { McpDomainPort } from "./port.js";
 import type { McpToolInfo } from "./types.js";
 
@@ -26,7 +27,8 @@ function canonicalSegment(toolName: string): string {
 }
 
 /** The Zod field for one scalar `inputSchema` property, or null when the type has no Intent-param form. */
-function fieldFor(property: unknown): z.ZodType | null {
+function fieldFor(rawProperty: unknown): z.ZodType | null {
+  const property = unwrapNullable(rawProperty);
   if (!isPlainObject(property)) return null;
   switch (property["type"]) {
     case "string": {

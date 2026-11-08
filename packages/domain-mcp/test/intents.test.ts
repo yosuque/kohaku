@@ -58,6 +58,27 @@ describe("createMcpIntents", () => {
     expect(onSkip).toHaveBeenCalledWith({ tool: "b", reason: expect.stringContaining("ids") });
   });
 
+  it("reads a parameter through a nullable anyOf (how Pydantic writes Optional[...])", async () => {
+    const tool = {
+      name: "find",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { anyOf: [{ type: "integer" }, { type: "null" }], default: null },
+          kind: { anyOf: [{ type: "string", enum: ["a", "b"] }, { type: "null" }] },
+          odd: { anyOf: [{ type: "integer" }, { type: "string" }] },
+        },
+      },
+      annotations: { readOnlyHint: true },
+    };
+    const port = await createMcpDomainPort({ client: fakeClient({ tools: [tool] }) });
+    const [intent] = createMcpIntents(port, { source: "x" });
+    // `odd` is a genuine union, not an optional: it stays out of the Intent.
+    expect(Object.keys(intent?.params.shape ?? {})).toEqual(["limit", "kind"]);
+    expect(intent?.params.parse({ limit: "3", kind: "a" })).toEqual({ limit: 3, kind: "a" });
+    expect(() => intent?.params.parse({ kind: "zzz" })).toThrow();
+  });
+
   it("derives a canonical name from the tool name, and refuses two tools that map to the same one", async () => {
     const make = (name: string) => ({
       name,

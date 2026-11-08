@@ -2037,6 +2037,75 @@
       },
       {
         "args": {
+          "limit": "5",
+          "flag": "true",
+          "either": "7"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "flag": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "either": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "expected": {
+          "limit": 5,
+          "flag": true,
+          "either": "7"
+        }
+      },
+      {
+        "args": {
+          "limit": "x"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
           "n": "abc"
         },
         "inputSchema": {
@@ -3035,6 +3104,18 @@
             {
               "type": "text",
               "text": "no rows today"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "[NaN]"
             }
           ]
         },

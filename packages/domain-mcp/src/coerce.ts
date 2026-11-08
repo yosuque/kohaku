@@ -1,4 +1,5 @@
 import type { JsonObject, JsonValue } from "@kohaku-ui/spec-core";
+import { unwrapNullable } from "./nullable.js";
 
 /**
  * A `query://` ref carries its parameters as strings, but an MCP tool declares typed arguments. This is thrown
@@ -27,7 +28,7 @@ interface InputSchemaLike {
 function propertyType(inputSchema: InputSchemaLike, name: string): string | undefined {
   const properties = inputSchema.properties;
   if (properties == null || !Object.hasOwn(properties, name)) return undefined;
-  const property = properties[name];
+  const property = unwrapNullable(properties[name]);
   if (typeof property !== "object" || property === null) return undefined;
   const type = (property as { type?: unknown }).type;
   return typeof type === "string" ? type : undefined;

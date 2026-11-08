@@ -92,6 +92,21 @@ const COERCION_CASES: { args: Record<string, unknown>; inputSchema: unknown }[] 
     inputSchema: { type: "object", properties: { s: { type: "string" }, t: {} } },
   },
   { args: { n: 4, b: false }, inputSchema: COERCION_SCHEMA },
+  {
+    args: { limit: "5", flag: "true", either: "7" },
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { anyOf: [{ type: "integer" }, { type: "null" }], default: null },
+        flag: { anyOf: [{ type: "null" }, { type: "boolean" }] },
+        either: { anyOf: [{ type: "integer" }, { type: "string" }] },
+      },
+    },
+  },
+  {
+    args: { limit: "x" },
+    inputSchema: { type: "object", properties: { limit: { anyOf: [{ type: "integer" }, { type: "null" }] } } },
+  },
   { args: { n: "abc" }, inputSchema: COERCION_SCHEMA },
   { args: { n: "" }, inputSchema: COERCION_SCHEMA },
   { args: { n: " 3" }, inputSchema: COERCION_SCHEMA },
@@ -133,6 +148,7 @@ const TABULAR_CASES: McpCallResult[] = [
   { content: [], structuredContent: { a: 1, b: 2 } },
   { content: [], structuredContent: [1, 2] },
   { content: [{ type: "text", text: "no rows today" }] },
+  { content: [{ type: "text", text: "[NaN]" }] },
   { content: [] },
   { content: [{ type: "image", data: "x" }] },
   { isError: true, content: [{ type: "text", text: "boom" }] },

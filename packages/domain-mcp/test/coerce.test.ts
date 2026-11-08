@@ -77,6 +77,23 @@ describe("coerceToolArguments", () => {
     }
   });
 
+  it("reads the type through a nullable anyOf (how Pydantic writes Optional[...])", () => {
+    const nullable = {
+      type: "object",
+      properties: {
+        limit: { anyOf: [{ type: "integer" }, { type: "null" }], default: null },
+        flag: { anyOf: [{ type: "null" }, { type: "boolean" }] },
+        either: { anyOf: [{ type: "integer" }, { type: "string" }] },
+      },
+    };
+    expect(coerceToolArguments({ limit: "5", flag: "true", either: "7" }, nullable)).toEqual({
+      limit: 5,
+      flag: true,
+      either: "7",
+    });
+    expect(() => coerceToolArguments({ limit: "x" }, nullable)).toThrow(McpArgumentError);
+  });
+
   it("tolerates an inputSchema without properties", () => {
     expect(coerceToolArguments({ a: "1" }, { type: "object" })).toEqual({ a: "1" });
   });

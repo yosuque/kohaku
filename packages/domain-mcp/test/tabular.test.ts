@@ -81,6 +81,7 @@ describe("toTabularData", () => {
     ["an object with several non-row properties", { content: [], structuredContent: { a: 1, b: 2 } }],
     ["an array of non-objects", { content: [], structuredContent: [1, 2] }],
     ["free text", { content: [{ type: "text", text: "no rows today" }] }],
+    ["JSON text that is not JSON (NaN)", { content: [{ type: "text", text: "[NaN]" }] }],
     ["an empty result", { content: [] }],
     ["a non-text first content", { content: [{ type: "image", data: "x" }] }],
   ])("throws McpResultError for %s", (_label, result) => {
