@@ -13,6 +13,7 @@ from starlette.responses import Response
 
 from kohaku.host_core import (
     ACTION_GATE_UNAVAILABLE_MESSAGE,
+    GATED_READ_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
     ActionGateRequest,
@@ -23,6 +24,7 @@ from kohaku.host_core import (
     record_action_gate_result,
     record_action_gate_unavailable_denial,
     record_undeclared_action_denial,
+    run_gated_read_guard,
 )
 from kohaku.spec import (
     ActionTier,
@@ -217,6 +219,30 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         if isinstance(authorized, Response):
             return authorized
         principal, tenant = authorized
+        # The read path never runs a governed Action (SPEC ACT-RD-001, design.md #77): a ref naming an operation
+        # whose tier is "confirm" / "approve" is refused before domain.invoke, since only /binding/action holds
+        # such an operation for a confirmation or an approval. An unreadable operation index fails closed (503),
+        # the same outcome the action path gives. host_core's run_gated_read_guard audits both as `action.denied`.
+        request_id = request_id_of(request, deps)
+        guard = await run_gated_read_guard(
+            operation_index=lambda: operation_index(deps),
+            audit=ActionAuditContext(
+                recorder=deps.action_audit_recorder,
+                action=base.path,
+                payload=params,
+                principal=principal,
+                tenant=tenant,
+                correlation_id=request_id,
+                report=lambda e: report_host_error(deps, "binding/resolve.audit", request_id, e),
+            ),
+            report_index_failure=lambda e: report_host_error(
+                deps, "binding/resolve", request_id, e
+            ),
+        )
+        if guard.kind == "indexUnavailable":
+            return _error("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, 503, request_id)
+        if guard.kind == "gated":
+            return _error("CAPABILITY_DENIED", GATED_READ_MESSAGE, 403, request_id)
         try:
             data = await deps.domain.invoke(
                 base.path,
@@ -227,7 +253,6 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         except BaseException as e:
             # The raw error message never reaches the client (it may leak internals); the original error still
             # reaches on_error via report_host_error.
-            request_id = request_id_of(request, deps)
             await report_host_error(deps, "binding/resolve", request_id, e)
             return _error("REF_NOT_FOUND", _REF_NOT_FOUND_MESSAGE, 404, request_id)
 

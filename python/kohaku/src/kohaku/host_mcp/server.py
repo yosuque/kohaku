@@ -30,6 +30,7 @@ from kohaku.composer import (
 from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
     ACTION_GATE_UNAVAILABLE_MESSAGE,
+    GATED_READ_MESSAGE,
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
@@ -40,6 +41,7 @@ from kohaku.host_core import (
     IntentSourceGui,
     IntentSourceIntent,
     IntentSourceNl,
+    OperationIndex,
     ParsedInvokableRefOk,
     PolicyRateLimiterTakeParams,
     RateLimitedInfo,
@@ -52,6 +54,7 @@ from kohaku.host_core import (
     record_action_gate_result,
     record_action_gate_unavailable_denial,
     record_undeclared_action_denial,
+    run_gated_read_guard,
     to_jsonable,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
@@ -789,7 +792,11 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         # _snapshot_html_for below so the legacyUiResource co-emission (which needs the identical ref
         # set) does not re-invoke domain.invoke for refs already resolved here.
         initial_data, preresolved_refs = await _preresolve_initial_data(
-            result.spec, deps, principal
+            result.spec,
+            deps,
+            principal,
+            operation_index=_operation_index,
+            correlation_id=correlation_id,
         )
         # The capability token is co-embedded in _meta for the same reason as INITIAL_DATA_META_KEY (see
         # CAPABILITY_META_KEY's doc comment): structured_content enters the model's context, so a bearer write
@@ -811,7 +818,13 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # without co-emission (fail-open — the legacy-compat add-on does not drag down the actual delivery). Same shape as TS.
             try:
                 snapshot_html = await _snapshot_html_for(
-                    result, deps, options, principal, preresolved_refs
+                    result,
+                    deps,
+                    options,
+                    principal,
+                    preresolved_refs,
+                    operation_index=_operation_index,
+                    correlation_id=correlation_id,
                 )
                 content.append(
                     mcp_types.EmbeddedResource(
@@ -1015,6 +1028,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                     principal,
                     _locale_of(args),
                     _correlation_id_of(ctx),
+                    operation_index=_operation_index,
                 )
                 # The file name is derived from the intent hash (identical displays coalesce into the same file and do not collide).
                 locator = await snapshot_writer(f"snapshot-{spec.intent.hash}.html", html)
@@ -1105,6 +1119,39 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             verdict = await deps.authz.verify(capability, VerifyRequest(kind="read", ref=base.raw))
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
+            # The read path never runs a governed Action (SPEC ACT-RD-001, design.md #77): a ref naming an
+            # operation whose tier is "confirm" / "approve" is refused before domain.invoke (only `_action`
+            # holds such an operation for a confirmation or an approval), and an unreadable operation index
+            # fails closed. host_core's run_gated_read_guard (shared with REST's /binding/resolve) audits both
+            # as `action.denied`.
+            correlation_id = _correlation_id_of(ctx)
+            guard = await run_gated_read_guard(
+                operation_index=_operation_index,
+                audit=ActionAuditContext(
+                    recorder=deps.action_audit_recorder,
+                    action=base.path,
+                    payload=params,
+                    principal=verdict.principal or principal,
+                    tenant=verdict.tenant or None,
+                    correlation_id=correlation_id,
+                    report=lambda exc: _report_mcp_error(
+                        deps,
+                        f"{prefix}_resolve_binding.audit",
+                        exc,
+                        correlation_id=correlation_id,
+                    ),
+                ),
+                report_index_failure=lambda exc: _report_mcp_error(
+                    deps,
+                    f"{prefix}_resolve_binding.operationIndex",
+                    exc,
+                    correlation_id=correlation_id,
+                ),
+            )
+            if guard.kind == "indexUnavailable":
+                return _tool_error("operation index unavailable")
+            if guard.kind == "gated":
+                return _tool_error(f"capability denied: {GATED_READ_MESSAGE}")
             # The capability's signed tenant, when it binds one (a REST-issued capability replayed here), is
             # carried through to the invocation; this profile resolves no tenant of its own (CAP-TEN-002).
             data = await deps.domain.invoke(
@@ -1793,6 +1840,8 @@ async def _build_snapshot(
     principal: Principal,
     locale: str | None = None,
     correlation_id: str | None = None,
+    *,
+    operation_index: OperationIndex,
 ) -> tuple[UISpec, str]:
     """Assemble the body of the self-contained snapshot HTML. Records audit symmetrically with the compose
     surface, preresolves all bind variants of each data in the Spec via domain.invoke, and embeds them into #kohaku-snapshot.
@@ -1804,7 +1853,14 @@ async def _build_snapshot(
     # concurrency + an overall deadline). Here the snapshot is the deliverable itself (no other resolution pass
     # to share with), so a resolution failure or timeout is propagated rather than swallowed (do not emit
     # incomplete HTML).
-    html = await _snapshot_html_for(result, deps, options, principal)
+    html = await _snapshot_html_for(
+        result,
+        deps,
+        options,
+        principal,
+        operation_index=operation_index,
+        correlation_id=correlation_id,
+    )
     return result.spec, html
 
 
@@ -1834,6 +1890,9 @@ async def _snapshot_html_for(
     options: AttachOptions,
     principal: Principal,
     preresolved: dict[str, TabularData] | None = None,
+    *,
+    operation_index: OperationIndex,
+    correlation_id: str | None = None,
 ) -> str:
     """Assemble self-contained snapshot HTML from a composed result (shared by the render_snapshot tool and the
     mcp-ui legacy UIResource co-emission).
@@ -1876,6 +1935,8 @@ async def _snapshot_html_for(
             missing,
             deps,
             principal,
+            operation_index=operation_index,
+            correlation_id=correlation_id,
             # Read from the initial_data module at call time (not imported by value into this module's own
             # namespace) so a test that patches kohaku.host_mcp.initial_data.PRERESOLVE_*_S -- the module
             # _resolve_refs_bounded and _preresolve_initial_data actually read -- also bounds this snapshot

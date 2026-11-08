@@ -101,6 +101,15 @@ from .fixation import (
     resolve_fixated_result,
     settle_fixation,
 )
+from .gated_read import (
+    GATED_READ_MESSAGE,
+    GatedReadGated,
+    GatedReadIndexUnavailable,
+    GatedReadOutcome,
+    GatedReadReadable,
+    is_gated_operation,
+    run_gated_read_guard,
+)
 from .intent import (
     IntentSource,
     IntentSourceGui,
@@ -143,6 +152,13 @@ from .view_recorder import record_view_fallback
 
 __all__ = [
     "ACTION_GATE_UNAVAILABLE_MESSAGE",
+    "GATED_READ_MESSAGE",
+    "GatedReadGated",
+    "GatedReadIndexUnavailable",
+    "GatedReadOutcome",
+    "GatedReadReadable",
+    "is_gated_operation",
+    "run_gated_read_guard",
     "APPROVAL_TOKEN_REJECTED_MESSAGE",
     "APPROVAL_TOKEN_REQUIRED_MESSAGE",
     "CONFIRMATION_REQUIRED_MESSAGE",

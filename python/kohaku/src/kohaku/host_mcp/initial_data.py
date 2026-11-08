@@ -16,7 +16,13 @@ import asyncio
 import json
 from typing import cast
 
-from kohaku.host_core import ParsedInvokableRefOk, parse_invokable_ref
+from kohaku.host_core import (
+    ActionAuditContext,
+    OperationIndex,
+    ParsedInvokableRefOk,
+    parse_invokable_ref,
+    run_gated_read_guard,
+)
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.spec import (
     InvocationContext,
@@ -55,18 +61,52 @@ PRERESOLVE_TOTAL_TIMEOUT_S = 10.0
 
 
 async def _resolve_variant(
-    variant: str, deps: McpHostDeps, principal: Principal
+    variant: str,
+    deps: McpHostDeps,
+    principal: Principal,
+    operation_index: OperationIndex,
+    correlation_id: str | None,
 ) -> TabularData | None:
     """Shared helper that preresolves a single effective ref with read. An unknown source is None (not co-embedded).
 
     Pure parse/merge via host_core's parse_invokable_ref (shared with the REST/MCP resolve_binding sites).
     Deliberately no verify step here (this is preresolution, not a caller-supplied capability check) — an
     unknown source still yields None (not an embedding target) rather than a raised error.
+
+    Preresolution is a data-plane read too: it never runs a governed Action (SPEC ACT-RD-001, design.md #77). A
+    ref naming a gated operation is skipped (None: not an embedding target; the denial is audited by the guard),
+    and an unreadable operation index skips it as well (fail-closed; reported to on_error). Both are the same
+    per-ref fail-open as an unknown source: the compose result itself stays successful.
     """
     parsed = parse_invokable_ref(variant, deps.query_source)
     if not isinstance(parsed, ParsedInvokableRefOk):
         return None
     base, params = parsed.ref.base, parsed.ref.params
+
+    async def _report_audit(error: BaseException) -> None:
+        await _host_core_notify_hook(
+            deps.on_error, McpErrorInfo(endpoint="compose.initialData.audit", error=error)
+        )
+
+    async def _report_index_failure(error: BaseException) -> None:
+        await _host_core_notify_hook(
+            deps.on_error, McpErrorInfo(endpoint="compose.initialData", error=error)
+        )
+
+    guard = await run_gated_read_guard(
+        operation_index=operation_index,
+        audit=ActionAuditContext(
+            recorder=deps.action_audit_recorder,
+            action=base.path,
+            payload=params,
+            principal=principal,
+            report=_report_audit,
+            correlation_id=correlation_id,
+        ),
+        report_index_failure=_report_index_failure,
+    )
+    if guard.kind != "readable":
+        return None
     resolved = await deps.domain.invoke(
         base.path,
         params,
@@ -94,6 +134,8 @@ async def _resolve_ref_bounded(
     results: dict[str, TabularData],
     deadline: _PreresolveDeadline,
     timeout_s: float,
+    operation_index: OperationIndex,
+    correlation_id: str | None,
 ) -> None:
     """Resolves one ref under the shared concurrency semaphore, writing a successful result into `results`.
 
@@ -113,7 +155,8 @@ async def _resolve_ref_bounded(
         try:
             # per-ref timeout: cut off so a ref that never returns does not hold its concurrency slot forever.
             resolved = await asyncio.wait_for(
-                _resolve_variant(ref, deps, principal), timeout=timeout_s
+                _resolve_variant(ref, deps, principal, operation_index, correlation_id),
+                timeout=timeout_s,
             )
         except Exception as exc:  # noqa: BLE001 — per-ref fail-open (including timeout)
             if deadline.exceeded:
@@ -152,6 +195,8 @@ async def _resolve_refs_bounded(
     deps: McpHostDeps,
     principal: Principal,
     *,
+    operation_index: OperationIndex,
+    correlation_id: str | None = None,
     timeout_s: float,
     total_timeout_s: float,
 ) -> dict[str, TabularData]:
@@ -175,7 +220,17 @@ async def _resolve_refs_bounded(
     deadline = _PreresolveDeadline()
     tasks = [
         asyncio.ensure_future(
-            _resolve_ref_bounded(ref, deps, principal, semaphore, resolved, deadline, timeout_s)
+            _resolve_ref_bounded(
+                ref,
+                deps,
+                principal,
+                semaphore,
+                resolved,
+                deadline,
+                timeout_s,
+                operation_index,
+                correlation_id,
+            )
         )
         for ref in refs
     ]
@@ -189,7 +244,12 @@ async def _resolve_refs_bounded(
 
 
 async def _preresolve_initial_data(
-    spec: UISpec, deps: McpHostDeps, principal: Principal
+    spec: UISpec,
+    deps: McpHostDeps,
+    principal: Principal,
+    *,
+    operation_index: OperationIndex,
+    correlation_id: str | None = None,
 ) -> tuple[dict[str, TabularData], dict[str, TabularData]]:
     """Preresolve the initial data `{effective ref: TabularData}` co-embedded in the tool result's _meta.
 
@@ -232,6 +292,8 @@ async def _preresolve_initial_data(
         ordered_refs,
         deps,
         principal,
+        operation_index=operation_index,
+        correlation_id=correlation_id,
         timeout_s=PRERESOLVE_TIMEOUT_S,
         total_timeout_s=PRERESOLVE_TOTAL_TIMEOUT_S,
     )
