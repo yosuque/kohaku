@@ -1,5 +1,5 @@
 import { parseQueryRef } from "@kohaku-ui/data-binding";
-import { errorMessage, notifyHook, parseInvokableRef } from "@kohaku-ui/host-core";
+import { errorMessage, notifyHook, parseInvokableRef, runGatedReadGuard } from "@kohaku-ui/host-core";
 import { enumerateBindVariants, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 import type { ToolCallContext } from "./types.js";
 
@@ -74,6 +74,24 @@ async function resolveVariant(variant: string, ctx: ToolCallContext): Promise<Ta
   const parsed = parseInvokableRef(variant, ctx.deps.querySource);
   if (parsed.kind === "source_mismatch") return null;
   const { base, params } = parsed.ref;
+  // Pre-resolution is a data-plane read too: it never runs a governed Action (SPEC ACT-RD-001, design.md #77).
+  // A ref naming a gated operation is skipped (not an embedding target; the denial is audited by the guard), and
+  // an unreadable operation index skips it as well (fail-closed; reported to the hook). Both are the same
+  // per-ref fail-open as an unknown source: the compose result itself stays successful.
+  const requestId = ctx.requestId ?? "initial-data";
+  const guard = await runGatedReadGuard({
+    operationIndex: ctx.operationIndex,
+    audit: {
+      recorder: ctx.deps.actionAuditRecorder,
+      action: base.path,
+      payload: params,
+      principal: ctx.principal,
+      correlationId: requestId,
+      report: (error) => notifyHook(ctx.deps.onError, { endpoint: "compose.initialData.audit", error }),
+    },
+    reportIndexFailure: (error) => notifyHook(ctx.deps.onError, { endpoint: "compose.initialData", error }),
+  });
+  if (guard.kind !== "readable") return null;
   const resolved = await ctx.deps.domain.invoke(base.path, params, { principal: ctx.principal });
   return resolved as TabularData;
 }

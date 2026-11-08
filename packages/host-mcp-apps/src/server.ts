@@ -707,6 +707,27 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           principal,
         );
         if ("isError" in authorized) return authorized;
+        // The read path never runs a governed Action (SPEC ACT-RD-001, design.md #77): a ref naming an
+        // operation whose tier is "confirm" / "approve" is refused before domain.invoke (only `_action` holds
+        // such an operation for a confirmation or an approval), and an unreadable operation index fails closed.
+        // host-core's runGatedReadGuard (shared with REST's /binding/resolve) audits both as `action.denied`.
+        const requestId = mcpCorrelationId(extra);
+        const guard = await hostCore.runGatedReadGuard({
+          operationIndex: ctx.operationIndex,
+          audit: {
+            recorder: ctx.deps.actionAuditRecorder,
+            action: base.path,
+            payload: params,
+            principal: authorized.principal,
+            ...(authorized.tenant != null ? { tenant: authorized.tenant } : {}),
+            correlationId: requestId,
+            report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_resolve_binding.audit`, e, requestId),
+          },
+          reportIndexFailure: (e) =>
+            reportMcpError(ctx.deps, `${ctx.prefix}_resolve_binding.operationIndex`, e, requestId),
+        });
+        if (guard.kind === "indexUnavailable") return toolError("operation index unavailable");
+        if (guard.kind === "gated") return toolError(`capability denied: ${hostCore.GATED_READ_MESSAGE}`);
         // The capability's signed tenant, when it binds one (a REST-issued capability replayed here), is
         // carried through to the invocation; this profile resolves no tenant of its own (SPEC CAP-TEN-002).
         const data = await ctx.deps.domain.invoke(base.path, params, {
