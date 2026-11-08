@@ -31,6 +31,32 @@ describe("createJwtAuthzPort", () => {
   });
 });
 
+describe("createJwtAuthzPort capability tenant (delegated to authz-hmac)", () => {
+  const scopes = [{ kind: "read" as const, ref: "query://sales/x" }];
+  const req = { kind: "read" as const, ref: "query://sales/x" };
+
+  it("round-trips opts.tenant through issue and verify", async () => {
+    const port = createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap-secret" });
+    const token = await port.issueCapability({ id: "u1" }, scopes, { tenant: "acme" });
+    expect(await port.verify(token, req)).toMatchObject({ ok: true, tenant: "acme" });
+  });
+
+  it("requireCapabilityTenant rejects a tenant-less capability, independent of the JWT's own requireTenant", async () => {
+    const port = createJwtAuthzPort({
+      key: { secret: SECRET },
+      capabilitySecret: "cap-secret",
+      requireCapabilityTenant: true,
+    });
+    const without = await port.issueCapability({ id: "u1" }, scopes);
+    expect(await port.verify(without, req)).toEqual({ ok: false, reason: "capability lacks tenant" });
+    const withTenant = await port.issueCapability({ id: "u1" }, scopes, { tenant: "acme" });
+    expect((await port.verify(withTenant, req)).ok).toBe(true);
+
+    const lenient = createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap-secret" });
+    expect((await lenient.verify(await lenient.issueCapability({ id: "u1" }, scopes), req)).ok).toBe(true);
+  });
+});
+
 describe("createJwtAuthzPort (default capability TTL)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -73,5 +99,5 @@ describeAuthzPortContract(
   async () => ({
     port: createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap-secret" }),
   }),
-  { revocation: true },
+  { revocation: true, tenant: true },
 );

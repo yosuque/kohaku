@@ -5,6 +5,8 @@ Split out of the former monolithic `_fastapi_routes.py` to mirror packages/host-
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
@@ -38,7 +40,6 @@ from .shared import (
     ANONYMOUS,
     _bearer_token,
     _error,
-    _get_principal,
     _json,
     _message,
     _read_json,
@@ -72,6 +73,60 @@ def _resolve_principal(deps: KohakuHostDeps, verdict: VerifyResult) -> Principal
     if deps.auth is None:
         return ANONYMOUS
     return _error("CAPABILITY_DENIED", "capability verified without a principal", 403)
+
+
+# Client message when the tenant bound into a capability and the request's resolved tenant disagree.
+_CAPABILITY_TENANT_MISMATCH_MESSAGE = "capability tenant does not match the request tenant"
+
+
+async def _effective_tenant(
+    deps: KohakuHostDeps, request: Request, verdict: VerifyResult
+) -> str | None | Response:
+    """The tenant a verified capability runs under (SPEC CAP-TEN-001). The tenant signed into the capability
+    is authoritative: when the host also resolves a tenant for this request (`deps.tenant`) and it differs,
+    the request is denied (fail-closed, 403 CAPABILITY_DENIED) rather than silently preferring either side.
+    A capability that binds no tenant (issued by a host that never resolved one, or before tenants were
+    signed) falls back to the host's own resolution, which keeps pre-upgrade tokens working. Returns the
+    Response to return as-is on a mismatch.
+    """
+    resolved = await _resolve_tenant(deps, request)
+    bound = verdict.tenant
+    if bound is None or bound == "":
+        return resolved
+    if resolved is not None and resolved != bound:
+        return _error("CAPABILITY_DENIED", _CAPABILITY_TENANT_MISMATCH_MESSAGE, 403)
+    return bound
+
+
+async def _authorize_and_rate_limit(
+    deps: KohakuHostDeps,
+    request: Request,
+    req: VerifyRequest,
+    token: str,
+    route_class: Literal["action", "resolve"],
+) -> tuple[Principal, str | None] | Response:
+    """The shared authorization prologue of the capability-gated routes: verify the bearer token against
+    `req`, deny a not-ok verdict with 403 CAPABILITY_DENIED (carrying the verdict's own reason), resolve the
+    principal to act as (`_resolve_principal`), settle the tenant (`_effective_tenant`), and finally take the
+    route's rate-limit token keyed by that verified (tenant, principal, route_class) -- after verification,
+    so the key is never taken from unauthenticated request headers. Returns the Response to return as-is on
+    any denial, or the resolved (principal, tenant).
+    """
+    verdict = await deps.authz.verify(token, req)
+    if not verdict.ok:
+        return _error("CAPABILITY_DENIED", verdict.reason or "capability denied", 403)
+    principal = _resolve_principal(deps, verdict)
+    if isinstance(principal, Response):
+        return principal
+    tenant = await _effective_tenant(deps, request, verdict)
+    if isinstance(tenant, Response):
+        return tenant
+    limited = await check_rate_limit(
+        deps, principal, tenant, route_class, request_id_of(request, deps)
+    )
+    if limited is not None:
+        return limited
+    return principal, tenant
 
 
 async def _handle_action_gate_result(
@@ -131,15 +186,6 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     # --- Reference-passing data resolution -----------------------------------
     @router.get("/binding/resolve")
     async def binding_resolve(request: Request) -> Response:
-        rate_limited = await check_rate_limit(
-            deps,
-            await _get_principal(deps, request),
-            await _resolve_tenant(deps, request),
-            "resolve",
-            request_id_of(request, deps),
-        )
-        if rate_limited is not None:
-            return rate_limited
         ref_param = request.query_params.get("ref")
         if ref_param is None:
             return _error("BAD_REQUEST", "ref query parameter is required", 400)
@@ -165,17 +211,17 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 404,
             )
         base, params = parsed.ref.base, parsed.ref.params
-        verdict = await deps.authz.verify(token, VerifyRequest(kind="read", ref=base.raw))
-        if not verdict.ok:
-            return _error("CAPABILITY_DENIED", verdict.reason or "capability denied", 403)
-        principal = _resolve_principal(deps, verdict)
-        if isinstance(principal, Response):
-            return principal
+        authorized = await _authorize_and_rate_limit(
+            deps, request, VerifyRequest(kind="read", ref=base.raw), token, "resolve"
+        )
+        if isinstance(authorized, Response):
+            return authorized
+        principal, tenant = authorized
         try:
             data = await deps.domain.invoke(
                 base.path,
                 params,
-                InvocationContext(principal=principal, capability=token),
+                InvocationContext(principal=principal, capability=token, tenant=tenant),
             )
             return _json(data)
         except BaseException as e:
@@ -188,32 +234,26 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     # --- Direct write path ----------------------------------------------------
     @router.post("/binding/action")
     async def binding_action(request: Request) -> Response:
-        rate_limited = await check_rate_limit(
-            deps,
-            await _get_principal(deps, request),
-            await _resolve_tenant(deps, request),
-            "action",
-            request_id_of(request, deps),
-        )
-        if rate_limited is not None:
-            return rate_limited
-        body = parse_action_body(await _read_json(request))
-        if body is None:
-            return _error("BAD_REQUEST", "action is required", 400)
+        # The bearer's presence is checked before the body is read and parsed: with the rate limiter now behind
+        # capability verification, a flood of unauthenticated requests should be turned away as cheaply as possible.
         token = _bearer_token(request)
         if token is None:
             return _error(
                 "CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required", 401
             )
-        verdict = await deps.authz.verify(token, VerifyRequest(kind="write", ref=body.action))
-        if not verdict.ok:
-            return _error("CAPABILITY_DENIED", verdict.reason or "capability denied", 403)
-        principal = _resolve_principal(deps, verdict)
-        if isinstance(principal, Response):
-            return principal
+        body = parse_action_body(await _read_json(request))
+        if body is None:
+            return _error("BAD_REQUEST", "action is required", 400)
+        authorized = await _authorize_and_rate_limit(
+            deps, request, VerifyRequest(kind="write", ref=body.action), token, "action"
+        )
+        if isinstance(authorized, Response):
+            return authorized
+        # The tenant is the capability's signed one (SPEC CAP-TEN-001), not the request header's: it scopes the
+        # approval token binding below, the audit record and the domain invocation alike.
+        principal, tenant = authorized
         payload = body.payload if body.payload is not None else {}
         request_id = request_id_of(request, deps)
-        tenant = await _resolve_tenant(deps, request)
 
         # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
         # domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
@@ -281,7 +321,7 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             result = await deps.domain.invoke(
                 body.action,
                 payload,
-                InvocationContext(principal=principal, capability=token),
+                InvocationContext(principal=principal, capability=token, tenant=tenant),
             )
         except BaseException as e:
             # A failure of the write itself (domain.invoke) is not yet committed, so respond with an error.

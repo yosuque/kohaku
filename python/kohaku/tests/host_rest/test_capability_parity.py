@@ -63,8 +63,8 @@ def test_rest_and_mcp_issue_identical_scopes(tmp_path: Any) -> None:
             spec, principal, harness.deps, "compose", "test-request-id"
         )
         mcp_token = await _issue_capability(spec, principal, harness.authz)
-        _, rest_scopes = harness.authz._tokens[rest_token]
-        _, mcp_scopes = harness.authz._tokens[mcp_token]
+        _, rest_scopes, _ = harness.authz._tokens[rest_token]
+        _, mcp_scopes, _ = harness.authz._tokens[mcp_token]
         assert rest_scopes == mcp_scopes
         assert rest_scopes == collect_capability_scopes(spec)
 
@@ -100,8 +100,8 @@ def test_rest_and_mcp_drop_the_same_write_scope_with_allowed_actions(tmp_path: A
             allowed_actions=allowed_actions,
             on_dropped_action=mcp_dropped.append,
         )
-        _, rest_scopes = harness.authz._tokens[rest_token]
-        _, mcp_scopes = harness.authz._tokens[mcp_token]
+        _, rest_scopes, _ = harness.authz._tokens[rest_token]
+        _, mcp_scopes, _ = harness.authz._tokens[mcp_token]
         assert rest_scopes == mcp_scopes
         assert all(s.kind != "write" for s in rest_scopes)
         assert rest_dropped == mcp_dropped == ["annotate"]

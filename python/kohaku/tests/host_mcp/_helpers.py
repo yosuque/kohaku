@@ -47,7 +47,12 @@ class SimpleAuthz:
     """Simple authz: token = "cap:" + permitted refs joined by "|". verify is prefix match (for tests)."""
 
     async def issue_capability(
-        self, principal: Any, scopes: list[Any], *, ttl_seconds: int | None = None
+        self,
+        principal: Any,
+        scopes: list[Any],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
     ) -> str:
         return "cap:" + "|".join(s.ref for s in scopes)
 

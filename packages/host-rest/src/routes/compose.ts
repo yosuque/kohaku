@@ -241,7 +241,7 @@ async function deliverComposed(
   try {
     // Propagate client-disconnect / timeout aborts through to compose (the L1/L2 LLM calls; call.signal).
     const result = await composeForRest(intent, session, ctx, call);
-    const capability = await issueSpecCapability(result.spec, principal, ctx, call);
+    const capability = await issueSpecCapability(result.spec, principal, ctx, call, session.tenant);
     // Audit recording is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the MCP
     // profile's auditComposed): swallow recorder failures so they do not take down delivery (including
     // cached Specs), notify the observability hook (onError) of the failure, and still return a successful
@@ -361,7 +361,7 @@ async function streamFixated(
 ): Promise<void> {
   const { session, principal, ctx, call } = args;
   const { deps } = ctx;
-  const capability = await issueSpecCapability(fixated.spec, principal, ctx, call);
+  const capability = await issueSpecCapability(fixated.spec, principal, ctx, call, session.tenant);
   const actions = await actionsFor(ctx, fixated.spec, call);
   await stream.writeSSE({
     event: "spec",
@@ -421,8 +421,14 @@ async function streamGenerated(
   })) {
     if (ev.kind === "spec") {
       capability ??= ev.final
-        ? await issueSpecCapability(ev.spec, principal, ctx, call)
-        : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
+        ? await issueSpecCapability(ev.spec, principal, ctx, call, session.tenant)
+        : await hostCore.issueCapabilityForRefs(
+            deps.authz,
+            principal,
+            ev.refs,
+            capabilityTtl(deps),
+            session.tenant != null ? { tenant: session.tenant } : undefined,
+          );
       const actions = await actionsFor(ctx, ev.spec, call);
       await stream.writeSSE({
         event: "spec",

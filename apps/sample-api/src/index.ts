@@ -79,7 +79,9 @@ async function main(): Promise<void> {
   const llm = createLlmFromEnv();
   // One shared connection for storage + the revocation store (a no-op distinction for file/memory; for
   // redis/postgres this opens exactly one client/pool instead of one each — see createPortsFromEnv's doc).
-  const ports = createPortsFromEnv(process.env, { dataDir: DATA_DIR });
+  // This REST host issues every capability with the request's resolved tenant (SPEC CAP-TEN-001), so under
+  // KOHAKU_AUTHZ=jwt it also refuses a tenant-less one (sample-mcp does not resolve a tenant and opts out).
+  const ports = createPortsFromEnv(process.env, { dataDir: DATA_DIR }, { requireCapabilityTenant: true });
   // Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
   // request (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly at
   // startup instead (a no-op for file/memory -- see PortsFromEnv.ready's doc comment).

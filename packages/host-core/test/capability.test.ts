@@ -393,3 +393,84 @@ describe("verifyCapabilitySafely", () => {
     expect(result.kind).toBe("unavailable");
   });
 });
+
+/** A minimal AuthzPort whose token is the JSON of what was issued, so a verify echoes the issued tenant back. */
+function echoAuthz(): AuthzPort {
+  return {
+    async issueCapability(principal, scopes, opts) {
+      return JSON.stringify({ sub: principal.id, scopes, tenant: opts?.tenant });
+    },
+    async verify(token, req) {
+      const claims = JSON.parse(token) as { sub: string; scopes: Scope[]; tenant?: string };
+      const granted = claims.scopes.some((s) => s.kind === req.kind && s.ref === req.ref);
+      if (!granted) return { ok: false, reason: "scope does not cover request" };
+      return {
+        ok: true,
+        principal: { id: claims.sub },
+        ...(claims.tenant != null ? { tenant: claims.tenant } : {}),
+      };
+    },
+  };
+}
+
+describe("capability tenant binding (SPEC CAP-TEN-001)", () => {
+  const read = { kind: "read" as const, ref: "query://sales/summary?fy=2026" };
+
+  it("issueCapabilityForSpec binds options.tenant, and a verify of that token reports it", async () => {
+    const authz = echoAuthz();
+    const token = await issueCapabilityForSpec(authz, PRINCIPAL, specWithRefAndAction(), undefined, {
+      tenant: "acme",
+    });
+    expect(await authz.verify(token, read)).toMatchObject({ ok: true, tenant: "acme" });
+  });
+
+  it("issueCapabilityForRefs binds options.tenant", async () => {
+    const authz = echoAuthz();
+    const token = await issueCapabilityForRefs(authz, PRINCIPAL, [read.ref], undefined, { tenant: "acme" });
+    expect(await authz.verify(token, read)).toMatchObject({ ok: true, tenant: "acme" });
+  });
+
+  it("issueSpecCapabilitySafely binds options.tenant (the function both hosts call)", async () => {
+    const authz = echoAuthz();
+    const token = await issueSpecCapabilitySafely(
+      authz,
+      PRINCIPAL,
+      specWithRefAndAction(),
+      async () => new Set(["sales.updateTarget"]),
+      vi.fn(),
+      undefined,
+      { tenant: "acme" },
+    );
+    expect(await authz.verify(token, read)).toMatchObject({ ok: true, tenant: "acme" });
+  });
+
+  it("omits the tenant from the issue options entirely when none is given (the legacy call shape)", async () => {
+    const issueCapability = vi.fn(
+      async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number; tenant?: string }) => "t",
+    );
+    const authz: AuthzPort = {
+      issueCapability,
+      async verify() {
+        return { ok: true };
+      },
+    };
+    await issueCapabilityForSpec(authz, PRINCIPAL, specWithRefAndAction(), 120, { tenant: undefined });
+    await issueCapabilityForRefs(authz, PRINCIPAL, [read.ref], 120, {});
+    expect(issueCapability.mock.calls[0]![2]).toEqual({ ttlSeconds: 120 });
+    expect(issueCapability.mock.calls[1]![2]).toEqual({ ttlSeconds: 120 });
+  });
+
+  it("passes tenant alongside ttlSeconds to authz.issueCapability", async () => {
+    const issueCapability = vi.fn(
+      async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number; tenant?: string }) => "t",
+    );
+    const authz: AuthzPort = {
+      issueCapability,
+      async verify() {
+        return { ok: true };
+      },
+    };
+    await issueCapabilityForSpec(authz, PRINCIPAL, specWithRefAndAction(), 120, { tenant: "acme" });
+    expect(issueCapability.mock.calls[0]![2]).toEqual({ ttlSeconds: 120, tenant: "acme" });
+  });
+});

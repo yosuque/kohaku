@@ -27,6 +27,14 @@ export interface HmacAuthzOptions {
    * from the rollout instant) -- otherwise a still-valid pre-upgrade token would start failing `verify`.
    */
   requireJti?: boolean;
+  /**
+   * When true, `verify` rejects a capability token that carries no `tenant` claim (reason: "capability lacks
+   * tenant"). Default false (a tenant-less token verifies, and `VerifyResult.tenant` is absent). Turn this on
+   * for a multi-tenant deployment whose every issuer passes the resolved tenant (SPEC CAP-TEN-001); leave it
+   * off while a profile that never resolves a tenant (MCP) shares the port, or while pre-upgrade tokens can
+   * still be in circulation.
+   */
+  requireTenant?: boolean;
 }
 
 /** Re-exported from spec-core (moved there so port-contracts can import the union instead of re-declaring it). */
@@ -52,6 +60,19 @@ interface HmacClaims {
   exp: number;
   /** Absent on a token minted before revocation support existed. */
   jti?: string;
+  /** Absent on a token issued without a tenant. An older verifier ignores this unknown claim. */
+  tenant?: string;
+}
+
+/** Longest tenant claim `issueCapability` signs and `verify` accepts (UTF-16 code units). */
+const MAX_CAPABILITY_TENANT_LENGTH = 256;
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+
+/** A tenant claim is a short identifier: at most 256 code units and no control characters (SPEC CAP-TEN-001). */
+function isValidTenantClaim(tenant: string): boolean {
+  return tenant.length <= MAX_CAPABILITY_TENANT_LENGTH && !CONTROL_CHARACTERS.test(tenant);
 }
 
 function isHmacClaims(value: unknown): value is HmacClaims {
@@ -62,6 +83,7 @@ function isHmacClaims(value: unknown): value is HmacClaims {
     typeof c.exp === "number" &&
     Number.isFinite(c.exp) &&
     (c.jti === undefined || typeof c.jti === "string") &&
+    (c.tenant === undefined || (typeof c.tenant === "string" && isValidTenantClaim(c.tenant))) &&
     Array.isArray(c.scopes) &&
     c.scopes.every(
       (scope) =>
@@ -76,12 +98,13 @@ function isHmacClaims(value: unknown): value is HmacClaims {
 /**
  * A homegrown HMAC-SHA256 capability token (on-behalf-of: the host acts under the user's delegated authority).
  * A structure whose contents are transparent, prioritizing didactic value: base64url(payload).base64url(hmac)
- * payload = { sub, scopes: [{kind, ref}], exp, jti }
+ * payload = { sub, scopes: [{kind, ref}], exp, jti, tenant? }
  */
 export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = {}): HmacAuthzPort {
   const defaultTtl = options.ttlSeconds ?? DEFAULT_CAPABILITY_TTL_SECONDS;
   const revocations = options.revocations ?? createMemoryRevocationStore();
   const requireJti = options.requireJti ?? false;
+  const requireTenant = options.requireTenant ?? false;
   const sign = (payload: string): string => createHmac("sha256", secret).update(payload).digest("base64url");
 
   /** Verifies the signature and decodes the payload. Shared by `verify` and `revokeCapability`. */
@@ -131,12 +154,19 @@ export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = 
 
   return {
     async issueCapability(principal: Principal, scopes: Scope[], opts = {}) {
+      if (opts.tenant != null && !isValidTenantClaim(opts.tenant)) {
+        throw new TypeError(
+          `capability tenant must be at most ${MAX_CAPABILITY_TENANT_LENGTH} characters with no control characters`,
+        );
+      }
       const payload = Buffer.from(
         JSON.stringify({
           sub: principal.id,
           scopes,
           exp: Math.floor(Date.now() / 1000) + (opts.ttlSeconds ?? defaultTtl),
           jti: randomBytes(16).toString("base64url"),
+          // An empty tenant is no tenant: it is never signed, so verify cannot return an empty-string tenant.
+          ...(opts.tenant != null && opts.tenant !== "" ? { tenant: opts.tenant } : {}),
         }),
       ).toString("base64url");
       return `${payload}.${sign(payload)}`;
@@ -153,6 +183,11 @@ export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = 
       if (requireJti && claims.jti == null) {
         return { ok: false, reason: "capability lacks jti" };
       }
+      // An empty tenant claim (never signed by this issuer) counts as no tenant.
+      const tenant = claims.tenant === "" ? undefined : claims.tenant;
+      if (requireTenant && tenant == null) {
+        return { ok: false, reason: "capability lacks tenant" };
+      }
       const granted = claims.scopes.some((scope) => scope.kind === req.kind && req.ref === scope.ref);
       if (!granted) {
         return { ok: false, reason: `scope does not cover ${req.kind}:${req.ref}` };
@@ -165,7 +200,11 @@ export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = 
       if (claims.jti != null && (await revocations.isRevoked(claims.jti))) {
         return { ok: false, reason: "capability revoked" };
       }
-      return { ok: true, principal: { id: claims.sub } };
+      return {
+        ok: true,
+        principal: { id: claims.sub },
+        ...(tenant != null ? { tenant } : {}),
+      };
     },
 
     async revokeCapability(token): Promise<RevokeCapabilityResult> {

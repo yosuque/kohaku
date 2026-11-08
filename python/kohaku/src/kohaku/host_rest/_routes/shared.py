@@ -44,6 +44,7 @@ from kohaku.host_core import (
     TraceContext,
     get_lock,
 )
+from kohaku.host_core import authz_accepts_tenant as _host_core_authz_accepts_tenant
 from kohaku.host_core import create_action_gate as _host_core_create_action_gate
 from kohaku.host_core import create_allowed_actions as _host_core_create_allowed_actions
 from kohaku.host_core import create_operation_index as _host_core_create_operation_index
@@ -370,6 +371,32 @@ def validate_operation_index_at_attach(deps: KohakuHostDeps) -> None:
         deps._operation_index_fn,
         lambda e: report_host_error(deps, "attach.operationIndex", str(uuid.uuid4()), e),
     )
+
+
+async def capability_tenant_for(
+    deps: KohakuHostDeps, tenant: str | None, request_id: str
+) -> str | None:
+    """The tenant to bind into an issued capability (SPEC CAP-TEN-001): `tenant` itself, unless `deps.authz`'s
+    `issue_capability` does not accept a `tenant` keyword (a custom port written before the option existed;
+    decided once per port function by `inspect.signature`, never by catching a TypeError). In that case the
+    capability is issued without a tenant binding and this reports, once per `deps`, through `on_error`
+    (endpoint `capability.tenant_unsupported`) with a fixed message naming the port class. The binding is
+    silently absent for such a port, so it should be upgraded (add `tenant: str | None = None`)."""
+    if tenant is None or _host_core_authz_accepts_tenant(deps.authz):
+        return tenant
+    if not deps._tenant_unsupported_reported:
+        deps._tenant_unsupported_reported = True
+        port = type(deps.authz).__name__
+        await report_host_error(
+            deps,
+            "capability.tenant_unsupported",
+            request_id,
+            RuntimeError(
+                f"{port}.issue_capability does not accept a `tenant` keyword, so capabilities are issued "
+                "without a tenant binding; add `tenant: str | None = None` to it (SPEC CAP-TEN-001)"
+            ),
+        )
+    return None
 
 
 def action_gate_for(deps: KohakuHostDeps) -> ActionGate:

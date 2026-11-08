@@ -245,12 +245,18 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
         }
         // Paired with the sandbox bridge's allowlist (exact match on data.$ref), issue exactly one read scope.
         // No write scope is included (preview is read-only).
+        // The preview capability binds the request's resolved tenant like a compose-issued one does (SPEC
+        // CAP-TEN-001), so a data plane that requires a tenant-bound capability accepts it.
+        const tenant = await resolveTenant(c, deps);
         const capability =
           candidate.ref != null
             ? await deps.authz.issueCapability(
                 await getPrincipal(c),
                 [{ kind: "read", ref: candidate.ref }],
-                { ttlSeconds: deps.capabilityTtlSeconds ?? DEFAULT_CAPABILITY_TTL_SECONDS },
+                {
+                  ttlSeconds: deps.capabilityTtlSeconds ?? DEFAULT_CAPABILITY_TTL_SECONDS,
+                  ...(tenant != null ? { tenant } : {}),
+                },
               )
             : undefined;
         return c.json({

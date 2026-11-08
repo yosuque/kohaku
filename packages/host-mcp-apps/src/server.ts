@@ -308,6 +308,8 @@ async function composeForDelivery(
   // hallucinated/injected action.invoke action name becoming a bearer write scope), symmetric with the
   // REST profile's issueSpecCapability wrapper. If listOperations rejects, issueSpecCapabilitySafely falls
   // back to an empty allowed set (fail-closed for writes; delivery proceeds) and reports the rejection.
+  // No tenant is passed: the MCP profile never resolves one (design.md #63), so this capability binds none.
+  // The data-plane tools below still honour the tenant of a capability that does bind one (SPEC CAP-TEN-002).
   const capability = await hostCore.issueSpecCapabilitySafely(
     ctx.deps.authz,
     ctx.principal,
@@ -697,17 +699,20 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           return toolError(`unknown query source "${parsed.source}"`);
         }
         const { base, params } = parsed.ref;
-        const resolvedPrincipal = await authorizeCapability(
+        const authorized = await authorizeCapability(
           ctx.deps,
           `${ctx.prefix}_resolve_binding`,
           capability,
           { kind: "read", ref: base.raw },
           principal,
         );
-        if ("isError" in resolvedPrincipal) return resolvedPrincipal;
+        if ("isError" in authorized) return authorized;
+        // The capability's signed tenant, when it binds one (a REST-issued capability replayed here), is
+        // carried through to the invocation; this profile resolves no tenant of its own (SPEC CAP-TEN-002).
         const data = await ctx.deps.domain.invoke(base.path, params, {
-          principal: resolvedPrincipal,
+          principal: authorized.principal,
           capability,
+          ...(authorized.tenant != null ? { tenant: authorized.tenant } : {}),
         });
         const rows = (data as { rows?: unknown[] }).rows?.length ?? 0;
         return {
@@ -857,14 +862,15 @@ function registerActionTool(ctx: ToolContext): void {
           return toolError(`payload exceeds the maximum size (${MAX_ACTION_PAYLOAD_BYTES} bytes)`);
         }
         // Verify with the write scope, symmetric with the REST surface (/binding/action). A denial becomes a tool error rather than an RPC exception.
-        const resolvedPrincipal = await authorizeCapability(
+        const authorized = await authorizeCapability(
           ctx.deps,
           `${ctx.prefix}_action`,
           capability,
           { kind: "write", ref: action },
           principal,
         );
-        if ("isError" in resolvedPrincipal) return resolvedPrincipal;
+        if ("isError" in authorized) return authorized;
+        const { principal: resolvedPrincipal, tenant } = authorized;
 
         // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
         // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
@@ -875,14 +881,16 @@ function registerActionTool(ctx: ToolContext): void {
         // itself failing, or the gate / ApprovalPort throwing) is likewise a fail-closed denial for this call,
         // audited as `action.denied` through host-core's recordActionGateUnavailableDenial (ACT-APR-001), and
         // a declared operation whose paramsSchema failed validation is fail-closed for that operation alone.
-        // This profile performs no tenant resolution, so no `tenant` is ever passed to the recorder. The audit
-        // context is built once for every audit site below; the undeclared-action denial overrides `report` to
+        // This profile performs no tenant resolution: `tenant` is only ever the one the capability itself binds
+        // (SPEC CAP-TEN-002; a tenant-less capability leaves it undefined, as before). It scopes the approval
+        // binding (via the gate), the audit records and the domain invocation alike. The audit context is built once for every audit site below; the undeclared-action denial overrides `report` to
         // also carry the call's correlation id (the gate-result audit has never passed one).
         const auditContext: hostCore.ActionAuditContext = {
           recorder: ctx.deps.actionAuditRecorder,
           action,
           payload: payload as JsonObject,
           principal: resolvedPrincipal,
+          ...(tenant != null ? { tenant } : {}),
           correlationId: requestId,
           report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
         };
@@ -934,6 +942,7 @@ function registerActionTool(ctx: ToolContext): void {
         const result = await ctx.deps.domain.invoke(action, payload as JsonObject, {
           principal: resolvedPrincipal,
           capability,
+          ...(tenant != null ? { tenant } : {}),
         });
         // The write is already committed; a side-effect-declaration failure is fail-open — see host-core's applyActionEffects.
         // structuredContent is { result, invalidates?, refVersions? } (the shape data-binding's parseActionResult
@@ -1416,8 +1425,10 @@ async function verifyCapability(
  * The shared authorization prologue of the app-only tools: verify the capability (`verifyCapability`, whose
  * unavailable outcome is already a tool error), deny a `!ok` verdict as a `capability denied: <reason>` tool
  * error, then resolve the principal to act as: the verdict's own, falling back to `fallbackPrincipal` (the
- * one resolved for this call) when the `AuthzPort`'s verify returns none. Returns the tool error to return
- * as-is on any denial, or the resolved Principal.
+ * one resolved for this call) when the `AuthzPort`'s verify returns none. The capability's signed tenant, if
+ * it binds one, is returned alongside (SPEC CAP-TEN-002; this profile resolves none itself, so there is no
+ * request tenant to compare it with). Returns the tool error to return as-is on any denial, or the resolved
+ * principal and tenant.
  */
 async function authorizeCapability(
   deps: McpHostDeps,
@@ -1425,13 +1436,16 @@ async function authorizeCapability(
   capability: string,
   req: VerifyRequest,
   fallbackPrincipal: Principal,
-): Promise<Principal | ReturnType<typeof toolError>> {
+): Promise<{ principal: Principal; tenant: string | undefined } | ReturnType<typeof toolError>> {
   const verdict = await verifyCapability(deps, endpoint, capability, req);
   if ("isError" in verdict) return verdict;
   if (!verdict.ok) {
     return toolError(`capability denied: ${verdict.reason ?? ""}`);
   }
-  return verdict.principal ?? fallbackPrincipal;
+  return {
+    principal: verdict.principal ?? fallbackPrincipal,
+    tenant: verdict.tenant != null && verdict.tenant !== "" ? verdict.tenant : undefined,
+  };
 }
 
 /**

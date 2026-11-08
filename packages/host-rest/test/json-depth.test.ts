@@ -100,11 +100,12 @@ async function postJson(
   deps: KohakuHostDeps,
   path: string,
   rawJsonBody: string,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ status: number; body: unknown }> {
   const app = createKohakuRoutes(deps);
   const res = await app.request(path, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...extraHeaders },
     body: rawJsonBody,
   });
   return { status: res.status, body: await res.json() };
@@ -133,11 +134,13 @@ describe.each([5000, 100_000])("a %i-level-deep payload (no RangeError, a clean 
     expect((result.body as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
   });
 
-  it("/binding/action: rejected with 400 BAD_REQUEST before the (missing) capability is even checked", async () => {
+  it("/binding/action: rejected with 400 BAD_REQUEST by the body parse, before the capability is verified", async () => {
+    // A bearer must be present (its absence is a 401 before the body is read), but it is never verified.
     const result = await postJson(
       makeDeps(),
       "/binding/action",
       `{"action":"widget.submit","payload":{"a":${deepArray}}}`,
+      { authorization: "Bearer not-yet-verified" },
     );
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
