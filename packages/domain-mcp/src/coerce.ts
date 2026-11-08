@@ -46,6 +46,21 @@ function propertyType(inputSchema: InputSchemaLike, name: string): string | unde
   return typeof type === "string" ? type : undefined;
 }
 
+/**
+ * `_limit` is outside the capability's signed ref, so the one thing it may do is *lower* the signed limit. A
+ * negative, zero or fractional value would not (an upstream doing `rows[:limit]` reads -1 as "all but the last
+ * row"), so anything but a positive safe integer is refused rather than forwarded. Same grammar as
+ * {@link coerceValue}'s numbers, so `"5.0"` and `"1e1"` stay accepted.
+ */
+function positiveIntegerLimit(value: JsonValue): number {
+  const parsed =
+    typeof value === "string" ? (NUMBER_PATTERN.test(value) ? Number(value) : Number.NaN) : value;
+  if (typeof parsed !== "number" || !Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new McpArgumentError('argument "_limit": expected a positive integer');
+  }
+  return parsed;
+}
+
 function coerceValue(name: string, value: JsonValue, type: string | undefined): JsonValue {
   if (typeof value !== "string") return value;
   switch (type) {
@@ -76,8 +91,9 @@ function coerceValue(name: string, value: JsonValue, type: string | undefined): 
  *   `boolean`; everything else stays a string), and a value that does not convert throws `McpArgumentError`;
  * - the reserved parameters (`_cursor`, `_limit`, `_sort`, `_dir`) are never forwarded, except that `_limit` is
  *   mapped onto the tool's own numeric `limit` argument when its `inputSchema` declares one. `_limit` is not
- *   covered by the capability's signed ref, so it can only *lower* the signed `limit`: when both are present the
- *   smaller wins, and `maxLimit` (default 1000) then caps whatever is left;
+ *   covered by the capability's signed ref, so it can only *lower* the signed `limit`: it must be a positive safe
+ *   integer (anything else throws `McpArgumentError`, never widens), when both are present the smaller wins, and
+ *   `maxLimit` (default 1000) then caps whatever is left;
  * - a value that is not a string (already typed) is kept as is.
  *
  * Pure, so the Python mirror (`kohaku.domain_mcp.coerce`) is pinned to it by the cross-language golden fixture.
@@ -97,10 +113,7 @@ export function coerceToolArguments(
   if (limitType === "number" || limitType === "integer") {
     const candidates: number[] = [];
     if (typeof out["limit"] === "number") candidates.push(out["limit"]);
-    if (args["_limit"] !== undefined) {
-      const lowered = coerceValue("limit", args["_limit"], limitType);
-      if (typeof lowered === "number") candidates.push(lowered);
-    }
+    if (args["_limit"] !== undefined) candidates.push(positiveIntegerLimit(args["_limit"]));
     if (candidates.length > 0) {
       out["limit"] = Math.min(...candidates, options.maxLimit ?? DEFAULT_MAX_LIMIT);
     }

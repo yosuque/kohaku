@@ -42,6 +42,45 @@ describe("coerceToolArguments", () => {
     expect(coerceToolArguments({ limit: 4, _limit: "5" }, INPUT_SCHEMA)).toEqual({ limit: 4 });
   });
 
+  it.each([
+    ["negative", "-1"],
+    ["a large negative", "-1e9"],
+    ["zero", "0"],
+    ["fractional", "0.5"],
+    ["fractional above one", "1.5"],
+    ["non-numeric", "abc"],
+    ["empty", ""],
+    ["beyond the safe integers", "9007199254740993"],
+    ["a typed negative", -1],
+    ["a typed zero", 0],
+    ["a typed fraction", 0.5],
+    ["a typed boolean", true],
+  ])(
+    "refuses an _limit that is not a positive integer (%s): it can never widen the signed limit",
+    (_l, bad) => {
+      for (const schema of [INPUT_SCHEMA, { type: "object", properties: { limit: { type: "number" } } }]) {
+        for (const args of [{ limit: "1", _limit: bad }, { _limit: bad }]) {
+          try {
+            coerceToolArguments(args as never, schema);
+            expect.unreachable("expected a throw");
+          } catch (error) {
+            expect(error).toBeInstanceOf(McpArgumentError);
+            expect((error as McpArgumentError).message).toBe(
+              'argument "_limit": expected a positive integer',
+            );
+          }
+        }
+      }
+    },
+  );
+
+  it("accepts a positive integer _limit however it is spelled", () => {
+    expect(coerceToolArguments({ limit: "9", _limit: "5.0" }, INPUT_SCHEMA)).toEqual({ limit: 5 });
+    expect(coerceToolArguments({ limit: "9", _limit: "1e1" }, INPUT_SCHEMA)).toEqual({ limit: 9 });
+    expect(coerceToolArguments({ limit: "9", _limit: 3 }, INPUT_SCHEMA)).toEqual({ limit: 3 });
+    expect(coerceToolArguments({ _limit: "1" }, INPUT_SCHEMA)).toEqual({ limit: 1 });
+  });
+
   it("caps the limit at maxLimit (default 1000), whichever way it was supplied", () => {
     expect(coerceToolArguments({ limit: "5000" }, INPUT_SCHEMA)).toEqual({ limit: 1000 });
     expect(coerceToolArguments({ _limit: "2000" }, INPUT_SCHEMA)).toEqual({ limit: 1000 });

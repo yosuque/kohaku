@@ -58,6 +58,29 @@ def _property_type(input_schema: Mapping[str, Any], name: str) -> str | None:
     return type_ if isinstance(type_, str) else None
 
 
+def _positive_integer_limit(value: JsonValue) -> int:
+    """`_limit` is outside the capability's signed ref, so the one thing it may do is *lower* the signed limit. A
+    negative, zero or fractional value would not (an upstream doing `rows[:limit]` reads -1 as "all but the last
+    row"), so anything but a positive safe integer is refused rather than forwarded. Same grammar as
+    `_coerce_value`'s numbers, so "5.0" and "1e1" stay accepted. Port of TS `positiveIntegerLimit`."""
+    parsed: float
+    if isinstance(value, str):
+        parsed = float(value) if _NUMBER_PATTERN.fullmatch(value) else math.nan
+    elif _is_number(value):
+        parsed = cast("float", value)
+    else:
+        parsed = math.nan
+    # JS Number.isSafeInteger: integral and |n| <= 2**53 - 1.
+    if (
+        not math.isfinite(parsed)
+        or not parsed.is_integer()
+        or parsed < 1
+        or parsed >= _SAFE_INTEGER
+    ):
+        raise McpArgumentError('argument "_limit": expected a positive integer')
+    return int(parsed)
+
+
 def _coerce_value(name: str, value: JsonValue, type_: str | None) -> JsonValue:
     if not isinstance(value, str):
         return value
@@ -89,9 +112,9 @@ def coerce_tool_arguments(
     `boolean`; everything else stays a string), and a value that does not convert raises `McpArgumentError`. The
     reserved parameters (`_cursor`, `_limit`, `_sort`, `_dir`) are never forwarded, except that `_limit` is
     mapped onto the tool's own numeric `limit` argument when its `inputSchema` declares one. `_limit` is not
-    covered by the capability's signed ref, so it can only *lower* the signed `limit`: when both are present the
-    smaller wins, and `max_limit` (default 1000) then caps whatever is left. A value that is not a string is kept
-    as is.
+    covered by the capability's signed ref, so it can only *lower* the signed `limit`: it must be a positive safe
+    integer (anything else raises `McpArgumentError`, never widens), when both are present the smaller wins, and
+    `max_limit` (default 1000) then caps whatever is left. A value that is not a string is kept as is.
     """
     out: JsonObject = {}
     for name, value in args.items():
@@ -105,9 +128,7 @@ def coerce_tool_arguments(
         if _is_number(current):
             candidates.append(cast("int | float", current))
         if "_limit" in args:
-            lowered = _coerce_value("limit", args["_limit"], limit_type)
-            if _is_number(lowered):
-                candidates.append(cast("int | float", lowered))
+            candidates.append(_positive_integer_limit(args["_limit"]))
         if candidates:
             out["limit"] = min(*candidates, max_limit)
     return out
