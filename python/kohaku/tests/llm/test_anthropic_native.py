@@ -357,9 +357,7 @@ def test_tool_params_sets_strict_true() -> None:
     tool = AnthropicTool(
         name="response", input_schema={"type": "object", "additionalProperties": False}
     )
-    req = AnthropicRequest(
-        model="m", system=None, prompt="p", temperature=0, max_tokens=10, tool=tool
-    )
+    req = AnthropicRequest(model="m", system=None, prompt="p", max_tokens=10, tool=tool)
     params = _tool_params(req)
     assert params["tools"][0]["strict"] is True
     assert params["tools"][0]["input_schema"] is tool.input_schema
@@ -367,9 +365,7 @@ def test_tool_params_sets_strict_true() -> None:
 
 
 def test_tool_params_empty_without_tool() -> None:
-    req = AnthropicRequest(
-        model="m", system=None, prompt="p", temperature=0, max_tokens=10, tool=None
-    )
+    req = AnthropicRequest(model="m", system=None, prompt="p", max_tokens=10, tool=None)
     assert _tool_params(req) == {}
 
 
@@ -600,7 +596,6 @@ def test_user_content_default_off_returns_plain_prompt_even_with_prompt_parts() 
         model="m",
         system=None,
         prompt="STATICREST",
-        temperature=0,
         max_tokens=100,
         tool=None,
         prompt_parts=PromptParts(cacheable="STATIC", rest="REST"),
@@ -610,7 +605,7 @@ def test_user_content_default_off_returns_plain_prompt_even_with_prompt_parts() 
 
 def test_user_content_prompt_cache_on_but_no_prompt_parts_returns_plain_prompt() -> None:
     areq = AnthropicRequest(
-        model="m", system=None, prompt="just a string", temperature=0, max_tokens=100, tool=None
+        model="m", system=None, prompt="just a string", max_tokens=100, tool=None
     )
     assert _user_content(areq, PROMPT_CACHE_CONFIG) == "just a string"
 
@@ -622,7 +617,6 @@ def test_user_content_prompt_cache_on_splits_into_two_blocks_with_cache_control_
         model="m",
         system=None,
         prompt="STATICREST",
-        temperature=0,
         max_tokens=100,
         tool=None,
         prompt_parts=PromptParts(cacheable="STATIC", rest="REST"),
@@ -638,7 +632,6 @@ def test_user_content_empty_rest_sends_only_one_cached_block() -> None:
         model="m",
         system=None,
         prompt="STATIC",
-        temperature=0,
         max_tokens=100,
         tool=None,
         prompt_parts=PromptParts(cacheable="STATIC", rest=""),
@@ -653,7 +646,6 @@ def test_user_content_inconsistent_prompt_parts_falls_back_to_plain_prompt() -> 
         model="m",
         system=None,
         prompt="ACTUAL",
-        temperature=0,
         max_tokens=100,
         tool=None,
         prompt_parts=PromptParts(cacheable="NOT", rest="MATCHING"),
