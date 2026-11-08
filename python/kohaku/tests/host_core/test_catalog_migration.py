@@ -6,6 +6,8 @@ import asyncio
 from dataclasses import dataclass, replace
 from typing import Any
 
+import pytest
+
 from kohaku.host_core import (
     CatalogMigrationApplyResult,
     CatalogMigrationFixationReplacer,
@@ -134,7 +136,7 @@ def _old_clean_type_def() -> ComponentDefinition:
         ComponentDefinition(
             type=OLD_CLEAN_TYPE,
             version="1.0.0",
-            description="old kpi card (migrates cleanly, modulo missing migrateProps -- see below)",
+            description="old kpi card (migrates cleanly)",
             propsSchema=PropsSchema(
                 {
                     "type": "object",
@@ -146,6 +148,7 @@ def _old_clean_type_def() -> ComponentDefinition:
             deprecated=DeprecationDecl(
                 reason="superseded", replacedBy=DeprecationReplacedBy(type=NEW_TYPE)
             ),
+            migrate_props=lambda props: {"label": props["label"], "format": "currency"},
         )
     )
 
@@ -155,7 +158,7 @@ def _old_bad_type_def() -> ComponentDefinition:
         ComponentDefinition(
             type=OLD_BAD_TYPE,
             version="1.0.0",
-            description="old kpi card (also ends up missing NEW_TYPE's required format)",
+            description="old kpi card (no migrate_props -- ends up missing a required field)",
             propsSchema=PropsSchema(
                 {
                     "type": "object",
@@ -167,6 +170,7 @@ def _old_bad_type_def() -> ComponentDefinition:
             deprecated=DeprecationDecl(
                 reason="superseded", replacedBy=DeprecationReplacedBy(type=NEW_TYPE)
             ),
+            # No migrate_props: props stay {label}, which fails NEW_TYPE's required `format`.
         )
     )
 
@@ -226,12 +230,9 @@ def _untouched_fixation() -> FixationRecord:
 # --- plan_catalog_migration ---
 
 
-def test_a_props_incompatible_rewrite_is_blocked_rather_than_silently_dropped() -> None:
-    # Python's ComponentDefinition has no migrateProps (TS-only -- see kohaku.registry.types.DeprecationDecl's
-    # doc), so under `_migration_catalog()` (NEW_TYPE requires `format`, which nothing here ever supplies)
-    # even OLD_CLEAN_TYPE's rewrite fails revalidation. This is exactly the scenario `blocked` exists for;
-    # `test_rewrites_type_and_version_even_without_migrate_props` below covers the successful-rewrite path
-    # with a NEW_TYPE that doesn't require anything migrateProps would have supplied.
+def test_rewrites_a_fixation_whose_node_references_a_deprecated_type_with_a_working_migrate_props() -> (
+    None
+):
     catalog = _migration_catalog()
     storage = _StubStorage({None: [_clean_fixation()]})
 
@@ -239,17 +240,64 @@ def test_a_props_incompatible_rewrite_is_blocked_rather_than_silently_dropped() 
         return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
 
     plan = asyncio.run(run())
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.intentHash == INTENT_HASH_CLEAN
+    assert step.rewrittenNodeIds == ["kpi1"]
+    assert step.beforeStructureHash == "clean-before"
+    assert step.beforeRevision == "rev-clean"
+    rewritten = next(c for c in step.pinnedSpec.components if c.id == "kpi1")
+    assert rewritten.type == NEW_TYPE
+    assert rewritten.props == {"label": "Revenue", "format": "currency"}
+    assert step.afterStructureHash != step.beforeStructureHash
+    assert plan.blocked == []
+
+
+def test_reports_a_revalidation_failure_in_blocked_never_in_steps() -> None:
+    catalog = _migration_catalog()
+    storage = _StubStorage({None: [_blocked_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
     assert plan.steps == []
     assert len(plan.blocked) == 1
-    assert plan.blocked[0].intentHash == INTENT_HASH_CLEAN
-    assert plan.blocked[0].types == [OLD_CLEAN_TYPE]
+    blocked = plan.blocked[0]
+    assert blocked.intentHash == INTENT_HASH_BLOCKED
+    assert blocked.types == [OLD_BAD_TYPE]
+    assert len(blocked.issues) > 0
+    assert "kpi2:" in blocked.issues[0]
+
+
+def test_migrate_props_receives_the_nodes_props_and_the_original_is_left_untouched() -> None:
+    # Python-only: pins the call contract (migrate_props gets the node's own props dict) and that the
+    # fixation's stored pinnedSpec is not mutated by planning (TS gets this from object spread).
+    seen: list[dict[str, Any]] = []
+
+    def migrate(props: dict[str, Any]) -> dict[str, Any]:
+        seen.append(dict(props))
+        return {"label": props["label"], "format": "percent"}
+
+    old = replace(_old_clean_type_def(), migrate_props=migrate)
+    catalog = resolve_catalog(core_catalog(), Catalog(components=[_new_type_def(), old]))
+    fixation = _clean_fixation()
+    storage = _StubStorage({None: [fixation]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
+    assert seen == [{"label": "Revenue"}]
+    assert plan.steps[0].pinnedSpec.components[0].props == {"label": "Revenue", "format": "percent"}
+    assert fixation.pinnedSpec.components[0].props == {"label": "Revenue"}
+    assert fixation.pinnedSpec.components[0].type == OLD_CLEAN_TYPE
 
 
 def test_rewrites_type_and_version_even_without_migrate_props() -> None:
-    # A variant of the above using a NEW_TYPE whose schema does NOT require anything beyond `label`, so the
-    # type/version rewrite alone (no props change) is enough to pass revalidation -- proving the rewrite
-    # itself (not just the revalidation gate) works correctly in the absence of migrateProps.
-    new_type_no_extra_fields = define_component(
+    # Python-only: a deprecated part with no migrate_props keeps its props untouched (the TS `?:` branch),
+    # so the type/version rewrite alone must be enough when the replacement's schema accepts the old props.
+    new_type_label_only = define_component(
         ComponentDefinition(
             type=NEW_TYPE,
             version="2.0.0",
@@ -264,8 +312,8 @@ def test_rewrites_type_and_version_even_without_migrate_props() -> None:
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
         )
     )
-    old = _old_clean_type_def()
-    catalog = resolve_catalog(core_catalog(), Catalog(components=[new_type_no_extra_fields, old]))
+    old = replace(_old_clean_type_def(), migrate_props=None)
+    catalog = resolve_catalog(core_catalog(), Catalog(components=[new_type_label_only, old]))
     storage = _StubStorage({None: [_clean_fixation()]})
 
     async def run() -> CatalogMigrationPlan:
@@ -274,17 +322,70 @@ def test_rewrites_type_and_version_even_without_migrate_props() -> None:
     plan = asyncio.run(run())
     assert plan.blocked == []
     assert len(plan.steps) == 1
-    step = plan.steps[0]
-    assert step.intentHash == INTENT_HASH_CLEAN
-    assert step.rewrittenNodeIds == ["kpi1"]
-    assert step.beforeStructureHash == "clean-before"
-    assert step.beforeRevision == "rev-clean"
-    rewritten = next(c for c in step.pinnedSpec.components if c.id == "kpi1")
+    rewritten = next(c for c in plan.steps[0].pinnedSpec.components if c.id == "kpi1")
     assert rewritten.type == NEW_TYPE
     # replacedBy did not pin a version, so the old version pin is cleared rather than carried over.
     assert rewritten.version is None
     assert rewritten.props == {"label": "Revenue"}
-    assert step.afterStructureHash != step.beforeStructureHash
+
+
+def _plan_with_migrate_props(
+    migrate: Any, *, new_type: ComponentDefinition | None = None
+) -> CatalogMigrationPlan:
+    old = replace(_old_clean_type_def(), migrate_props=migrate)
+    catalog = resolve_catalog(
+        core_catalog(), Catalog(components=[new_type or _new_type_def(), old])
+    )
+    storage = _StubStorage({None: [_clean_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    return asyncio.run(run())
+
+
+def test_a_migrate_props_that_throws_propagates_out_of_the_plan() -> None:
+    # Same as TS: planCatalogMigration does not catch a throwing migrateProps.
+    def boom(_props: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("migrate exploded")
+
+    with pytest.raises(RuntimeError, match="migrate exploded"):
+        _plan_with_migrate_props(boom)
+
+
+@pytest.mark.parametrize("bad_result", [None, [], "x", 0])
+def test_a_non_object_migrate_props_result_is_blocked_with_the_reason(bad_result: Any) -> None:
+    # The replacement has no required fields here, so a None/[] result would otherwise validate (Python's
+    # catalog.validate collapses a falsy props to {}) and pin props=None. TS rejects it in safeParse.
+    label_only = define_component(
+        ComponentDefinition(
+            type=NEW_TYPE,
+            version="2.0.0",
+            description="new kpi card (no required fields)",
+            propsSchema=PropsSchema(
+                {"type": "object", "properties": {"label": {"type": "string"}}}
+            ),
+            capabilities=CapabilityDecl(events=[], data="required", children="none"),
+        )
+    )
+    plan = _plan_with_migrate_props(lambda _p: bad_result, new_type=label_only)
+    assert plan.steps == []
+    assert len(plan.blocked) == 1
+    blocked = plan.blocked[0]
+    assert blocked.intentHash == INTENT_HASH_CLEAN
+    assert blocked.types == [OLD_CLEAN_TYPE]
+    assert blocked.issues == [
+        f"kpi1: migrate_props returned {type(bad_result).__name__}, expected an object"
+    ]
+
+
+def test_reshaped_props_that_still_fail_the_replacement_schema_are_blocked() -> None:
+    # migrate_props runs but yields props the replacement rejects (format outside the enum).
+    plan = _plan_with_migrate_props(lambda p: {"label": p["label"], "format": "bogus"})
+    assert plan.steps == []
+    assert len(plan.blocked) == 1
+    assert plan.blocked[0].types == [OLD_CLEAN_TYPE]
+    assert "kpi1:" in plan.blocked[0].issues[0]
 
 
 def test_skips_a_fixation_referencing_no_deprecated_type_entirely() -> None:
@@ -352,15 +453,15 @@ def test_plan_hash_changes_when_only_the_catalogs_fingerprint_differs() -> None:
             storage=_StubStorage({None: [_clean_fixation()]}), catalog_for=lambda _t: catalog
         )
 
-    a = asyncio.run(run(_no_extra_fields_catalog()))
-    b = asyncio.run(run(_no_extra_fields_catalog_with_extra_component()))
+    a = asyncio.run(run(_migration_catalog()))
+    b = asyncio.run(run(_migration_catalog_with_extra_component()))
     assert a.steps[0].rewrittenNodeIds == b.steps[0].rewrittenNodeIds
     assert a.steps[0].targetCatalogFingerprint != b.steps[0].targetCatalogFingerprint
     assert a.planHash != b.planHash
 
 
 def test_records_target_and_before_catalog_fingerprint_on_each_step() -> None:
-    catalog = _no_extra_fields_catalog()
+    catalog = _migration_catalog()
     storage = _StubStorage({None: [_clean_fixation()]})
 
     async def run() -> CatalogMigrationPlan:
@@ -373,7 +474,7 @@ def test_records_target_and_before_catalog_fingerprint_on_each_step() -> None:
 
 
 def test_omits_before_catalog_fingerprint_for_a_legacy_fixation() -> None:
-    catalog = _no_extra_fields_catalog()
+    catalog = _migration_catalog()
     legacy = _fixation(
         INTENT_HASH_CLEAN,
         _fixed_spec(
@@ -398,24 +499,7 @@ def test_omits_before_catalog_fingerprint_for_a_legacy_fixation() -> None:
 
 
 def test_sweeps_every_tenant_tagging_steps_and_blocked() -> None:
-    new_type_no_extra_fields = define_component(
-        ComponentDefinition(
-            type=NEW_TYPE,
-            version="2.0.0",
-            description="new kpi card (label only)",
-            propsSchema=PropsSchema(
-                {
-                    "type": "object",
-                    "properties": {"label": {"type": "string"}},
-                    "required": ["label"],
-                }
-            ),
-            capabilities=CapabilityDecl(events=[], data="required", children="none"),
-        )
-    )
-    catalog = resolve_catalog(
-        core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def()])
-    )
+    catalog = _migration_catalog()
     acme_fixation = replace(_clean_fixation(), tenant="acme")
     storage = _StubStorage({"acme": [acme_fixation]})
 
@@ -456,7 +540,7 @@ def test_a_plan_whose_plan_hash_was_hand_edited_fails_verification() -> None:
 
 
 def test_a_plan_whose_step_content_was_hand_edited_fails_verification() -> None:
-    catalog = _no_extra_fields_catalog()
+    catalog = _migration_catalog()
     storage = _StubStorage({None: [_clean_fixation()]})
 
     async def run() -> CatalogMigrationPlan:
@@ -469,7 +553,7 @@ def test_a_plan_whose_step_content_was_hand_edited_fails_verification() -> None:
 
 
 def test_a_plan_whose_step_pinned_spec_alone_was_hand_edited_fails_verification() -> None:
-    catalog = _no_extra_fields_catalog()
+    catalog = _migration_catalog()
     storage = _StubStorage({None: [_clean_fixation()]})
 
     async def run() -> CatalogMigrationPlan:
@@ -537,46 +621,10 @@ class _FakeReplacer:
         )
 
 
-def _no_extra_fields_catalog() -> ResolvedCatalog:
-    new_type_no_extra_fields = define_component(
-        ComponentDefinition(
-            type=NEW_TYPE,
-            version="2.0.0",
-            description="new kpi card (label only)",
-            propsSchema=PropsSchema(
-                {
-                    "type": "object",
-                    "properties": {"label": {"type": "string"}},
-                    "required": ["label"],
-                }
-            ),
-            capabilities=CapabilityDecl(events=[], data="required", children="none"),
-        )
-    )
-    return resolve_catalog(
-        core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def()])
-    )
-
-
-def _no_extra_fields_catalog_with_extra_component() -> ResolvedCatalog:
-    """Same rewrite-relevant content as _no_extra_fields_catalog() (so a rewritten pinnedSpec still
-    validates cleanly), but with one extra, otherwise-irrelevant component -- a different overall
-    fingerprint (for drift tests that want the fingerprint to be the *only* thing that changed)."""
-    new_type_no_extra_fields = define_component(
-        ComponentDefinition(
-            type=NEW_TYPE,
-            version="2.0.0",
-            description="new kpi card (label only)",
-            propsSchema=PropsSchema(
-                {
-                    "type": "object",
-                    "properties": {"label": {"type": "string"}},
-                    "required": ["label"],
-                }
-            ),
-            capabilities=CapabilityDecl(events=[], data="required", children="none"),
-        )
-    )
+def _migration_catalog_with_extra_component() -> ResolvedCatalog:
+    """Same rewrite-relevant content as _migration_catalog() (so a rewritten pinnedSpec still validates
+    cleanly), but with one extra, otherwise-irrelevant component -- a different overall fingerprint (for
+    drift tests that want the fingerprint to be the *only* thing that changed)."""
     extra = define_component(
         ComponentDefinition(
             type="sales.unrelatedWidget",
@@ -587,34 +635,45 @@ def _no_extra_fields_catalog_with_extra_component() -> ResolvedCatalog:
         )
     )
     return resolve_catalog(
-        core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def(), extra])
+        core_catalog(),
+        Catalog(
+            components=[_new_type_def(), _old_clean_type_def(), _old_bad_type_def(), extra],
+        ),
     )
 
 
-def _no_extra_fields_catalog_tightened() -> ResolvedCatalog:
-    """Same type@version as _no_extra_fields_catalog() (so the fingerprint is IDENTICAL), but NEW_TYPE's
-    propsSchema additionally requires `currencyCode` -- an in-place propsSchema tightening a fingerprint
-    comparison alone cannot catch."""
+def _migration_catalog_with_tightened_new_type() -> ResolvedCatalog:
+    """Same type@version@deprecated-flag set as _migration_catalog() (so the fingerprint is IDENTICAL -- the
+    fingerprint never encodes props content), but NEW_TYPE's propsSchema additionally requires
+    `currencyCode`, which nothing in this file's migrate_props supplies. Simulates an in-place propsSchema
+    tightening a fingerprint comparison alone cannot catch."""
     tightened = define_component(
         ComponentDefinition(
             type=NEW_TYPE,
-            version="2.0.0",
-            description="new kpi card (label only)",
+            version="1.0.0",
+            description="new kpi card",
             propsSchema=PropsSchema(
                 {
                     "type": "object",
-                    "properties": {"label": {"type": "string"}, "currencyCode": {"type": "string"}},
-                    "required": ["label", "currencyCode"],
+                    "properties": {
+                        "label": {"type": "string"},
+                        "format": {"enum": ["currency", "percent"]},
+                        "currencyCode": {"type": "string"},
+                    },
+                    "required": ["label", "format", "currencyCode"],
                 }
             ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
         )
     )
-    return resolve_catalog(core_catalog(), Catalog(components=[tightened, _old_clean_type_def()]))
+    return resolve_catalog(
+        core_catalog(),
+        Catalog(components=[tightened, _old_clean_type_def(), _old_bad_type_def()]),
+    )
 
 
 def _build_plan() -> CatalogMigrationPlan:
-    catalog = _no_extra_fields_catalog()
+    catalog = _migration_catalog()
     storage = _StubStorage({None: [_clean_fixation()]})
 
     async def run() -> CatalogMigrationPlan:
@@ -635,7 +694,7 @@ def test_apply_calls_replace_with_guard_and_plan_hash() -> None:
             plan=plan,
             fixations=replacer,
             approver=APPROVER,
-            catalog_for=lambda _t: _no_extra_fields_catalog(),
+            catalog_for=lambda _t: _migration_catalog(),
         )
 
     result = asyncio.run(run())
@@ -667,7 +726,7 @@ def test_apply_reports_a_guard_mismatch_as_skipped() -> None:
             plan=plan,
             fixations=replacer,
             approver=APPROVER,
-            catalog_for=lambda _t: _no_extra_fields_catalog(),
+            catalog_for=lambda _t: _migration_catalog(),
         )
 
     result = asyncio.run(run())
@@ -701,6 +760,29 @@ def test_apply_never_calls_replace_for_a_step_already_in_plan_blocked() -> None:
     assert result.blocked == []
 
 
+def test_apply_passes_tenant_through_to_replace_and_back_to_applied() -> None:
+    catalog = _migration_catalog()
+    acme_fixation = replace(_clean_fixation(), tenant="acme")
+    storage = _StubStorage({"acme": [acme_fixation]})
+
+    async def run_plan() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(
+            storage=storage, catalog_for=lambda _t: catalog, tenants=[None, "acme"]
+        )
+
+    plan = asyncio.run(run_plan())
+    replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
+
+    async def run_apply() -> CatalogMigrationApplyResult:
+        return await apply_catalog_migration(
+            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: catalog
+        )
+
+    result = asyncio.run(run_apply())
+    assert replacer.calls[0]["tenant"] == "acme"  # type: ignore[attr-defined]
+    assert result.applied == [{"intentHash": INTENT_HASH_CLEAN, "tenant": "acme"}]
+
+
 # --- apply_catalog_migration: catalog drift (the catalog changed between plan and apply) ---
 
 
@@ -708,7 +790,7 @@ def test_apply_refuses_a_step_when_the_live_catalogs_fingerprint_differs_from_th
     None
 ):
     plan = _build_plan()
-    drifted_catalog = _no_extra_fields_catalog_with_extra_component()
+    drifted_catalog = _migration_catalog_with_extra_component()
     replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
 
     async def run() -> CatalogMigrationApplyResult:
@@ -732,7 +814,7 @@ def test_apply_refuses_a_step_whose_pinned_spec_fails_revalidation_even_though_t
     None
 ):
     plan = _build_plan()
-    tightened_catalog = _no_extra_fields_catalog_tightened()
+    tightened_catalog = _migration_catalog_with_tightened_new_type()
     # Sanity: this is exactly the case fingerprint comparison alone cannot catch.
     assert tightened_catalog.fingerprint == plan.steps[0].targetCatalogFingerprint
     replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
@@ -766,7 +848,7 @@ def test_apply_applies_cleanly_when_the_live_catalog_matches_the_plans_target_ex
             plan=plan,
             fixations=replacer,
             approver=APPROVER,
-            catalog_for=lambda _t: _no_extra_fields_catalog(),
+            catalog_for=lambda _t: _migration_catalog(),
         )
 
     result = asyncio.run(run())
