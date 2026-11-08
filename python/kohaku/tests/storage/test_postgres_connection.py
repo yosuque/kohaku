@@ -454,3 +454,34 @@ class TestMigrateFalse:
             await connection_module.assert_lineage_schema_current(_Pool(), "public")  # type: ignore[arg-type]
 
         run(go())
+
+
+class TestPortMigrateFalseCheck:
+    def test_the_catalog_check_runs_once_across_successful_calls_and_reruns_after_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kohaku.storage.postgres import create_postgres_storage_port, postgres_storage_port
+
+        async def go() -> None:
+            outcomes: list[Exception | None] = [RuntimeError("no correlation_id"), None]
+            calls: list[int] = []
+
+            async def fake_assert(pool: object, schema: str) -> None:
+                calls.append(1)
+                outcome = outcomes[len(calls) - 1]
+                if outcome is not None:
+                    raise outcome
+
+            monkeypatch.setattr(postgres_storage_port, "assert_lineage_schema_current", fake_assert)
+            port = create_postgres_storage_port(
+                pool=SimpleNamespace(closed=False),  # type: ignore[arg-type]
+                migrate=False,
+            )
+            with pytest.raises(RuntimeError, match="no correlation_id"):
+                await port.ready()
+            await port.ready()
+            await port.ready()
+            await port.ready()
+            assert len(calls) == 2  # the failure was not remembered; the pass was
+
+        run(go())
