@@ -247,3 +247,51 @@ describe("createJwtIdentityResolver requireTenant", () => {
     expect(await resolver.resolve(token)).toEqual({ principal: { id: "u" }, tenant: "acme" });
   });
 });
+
+describe("createJwtIdentityResolver tenant claim validation", () => {
+  const resolver = createJwtIdentityResolver({ key: { secret: SECRET } });
+
+  it("rejects an over-long tenant claim as INVALID_TENANT (it would otherwise fail later at capability issuance)", async () => {
+    await expect(resolver.resolve(await hs256({ sub: "u", tenant: "t".repeat(257) }))).rejects.toMatchObject({
+      code: "INVALID_TENANT",
+    });
+  });
+
+  it("accepts a tenant claim of exactly 256 UTF-16 code units", async () => {
+    expect((await resolver.resolve(await hs256({ sub: "u", tenant: "t".repeat(256) }))).tenant).toBe(
+      "t".repeat(256),
+    );
+  });
+
+  it("counts UTF-16 code units, not code points (128 astral characters are 256 units, 129 are 258)", async () => {
+    const ok = "😀".repeat(128);
+    expect((await resolver.resolve(await hs256({ sub: "u", tenant: ok }))).tenant).toBe(ok);
+    await expect(resolver.resolve(await hs256({ sub: "u", tenant: "😀".repeat(129) }))).rejects.toMatchObject(
+      {
+        code: "INVALID_TENANT",
+      },
+    );
+  });
+
+  it("rejects a tenant claim containing a control character as INVALID_TENANT", async () => {
+    for (const tenant of ["ac\nme", "ac\u0000me", "ac\u007fme"]) {
+      await expect(resolver.resolve(await hs256({ sub: "u", tenant }))).rejects.toMatchObject({
+        code: "INVALID_TENANT",
+      });
+    }
+  });
+
+  it("rejects an invalid tenant even when requireTenant is false (never silently downgraded to no tenant)", async () => {
+    await expect(resolver.resolve(await hs256({ sub: "u", tenant: "a\tb" }))).rejects.toMatchObject({
+      code: "INVALID_TENANT",
+    });
+  });
+
+  it("does not apply to a caller-supplied mapClaims (it owns its tenant handling)", async () => {
+    const mapped = createJwtIdentityResolver({
+      key: { secret: SECRET },
+      mapClaims: () => ({ principal: { id: "x" }, tenant: "a\nb" }),
+    });
+    expect((await mapped.resolve(await hs256({ sub: "u" }))).tenant).toBe("a\nb");
+  });
+});

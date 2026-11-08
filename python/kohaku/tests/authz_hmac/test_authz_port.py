@@ -1,7 +1,9 @@
-"""Tests for AuthzPort (port of TS: apps/sample-api/test/authz-port.test.ts + HMAC round-trip, expiry, wire format).
+"""Tests for the HMAC AuthzPort (port of TS: packages/authz-hmac/test/authz-port.test.ts, plus the HMAC
+round-trip, expiry and wire-format cases of apps/sample-api/test/authz-port.test.ts).
 
 Scope matching is exact (a prefix match would let ?region=us permit ?region=usa, and annotate permit annotateAll).
-Tokens are wire-compatible with TS (base64url(payload).base64url(hmac), payload = {sub, scopes, exp}).
+Tokens are wire-compatible with TS (base64url(payload).base64url(hmac), payload = {sub, scopes, exp, jti, tenant?}).
+The byte-level cross-language golden lives in tests/spec/test_cross_language_golden.py (``authzHmac``).
 """
 
 from __future__ import annotations
@@ -14,8 +16,9 @@ import json
 
 import pytest
 
+from kohaku.authz_hmac import create_hmac_authz_port
+from kohaku.authz_hmac.authz_port import b64url_encode as b64url
 from kohaku.spec import Principal, Scope, VerifyRequest
-from sales_api.authz_port import create_hmac_authz_port
 
 PRINCIPAL = Principal(id="u", roles=["user"])
 
@@ -57,7 +60,7 @@ class TestScopeExactMatch:
 class TestRoundtripAndWire:
     def test_roundtrip_returns_principal(self) -> None:
         async def run() -> None:
-            authz = create_hmac_authz_port()  # default secret
+            authz = create_hmac_authz_port("test-secret")
             cap = await authz.issue_capability(
                 PRINCIPAL, [Scope(kind="read", ref="query://sales/kpi?fy=2026")]
             )
@@ -78,7 +81,8 @@ class TestRoundtripAndWire:
             parts = cap.split(".")
             assert len(parts) == 2  # payload.signature
             payload = json.loads(_b64url_decode(parts[0]).decode("utf-8"))
-            assert list(payload.keys()) == ["sub", "scopes", "exp"]
+            assert list(payload.keys()) == ["sub", "scopes", "exp", "jti"]
+            assert isinstance(payload["jti"], str) and payload["jti"] != ""
             assert payload["sub"] == "u"
             assert payload["scopes"] == [{"kind": "write", "ref": "annotate"}]
             assert isinstance(payload["exp"], int)
@@ -227,7 +231,7 @@ class TestTenantClaim:
                 PRINCIPAL, [Scope(kind="read", ref="query://s/x")], tenant="acme"
             )
             payload = json.loads(_b64url_decode(cap.split(".")[0]).decode("utf-8"))
-            assert list(payload.keys()) == ["sub", "scopes", "exp", "tenant"]
+            assert list(payload.keys()) == ["sub", "scopes", "exp", "jti", "tenant"]
             result = await authz.verify(cap, VerifyRequest(kind="read", ref="query://s/x"))
             assert result.ok is True
             assert result.tenant == "acme"
@@ -309,14 +313,6 @@ class TestTenantClaim:
         asyncio.run(run())
 
 
-# Issued by this port (secret "interop-secret", fixed clock, tenant "acme"); the identical literal is verified
-# by the TS test packages/authz-hmac/test/authz-port.test.ts, so the interop is bidirectional.
-_PY_TENANT_TOKEN = (
-    "eyJzdWIiOiJweS11c2VyIiwic2NvcGVzIjpbeyJraW5kIjoicmVhZCIsInJlZiI6InF1ZXJ5Oi8vc2FsZXMvc3VtbWFyeT9meT0yMDI2In1d"
-    "LCJleHAiOjQxMDI0NDQ4MDAsInRlbmFudCI6ImFjbWUifQ.vf71x9NdeJ2ilagq-UuWcnUBzwzfT6zuFCqA8q-sKEk"
-)
-
-
 def _signed_with(secret: str, **claims: object) -> str:
     base: dict[str, object] = {
         "sub": "u",
@@ -334,24 +330,6 @@ def _signed_with(secret: str, **claims: object) -> str:
 
 
 class TestTenantClaimValidationAndInterop:
-    def test_issues_the_python_wire_token_the_ts_test_verifies(self) -> None:
-        async def run() -> None:
-            authz = create_hmac_authz_port("interop-secret", now=lambda: 1000.0)
-            token = await authz.issue_capability(
-                Principal(id="py-user"),
-                [Scope(kind="read", ref="query://sales/summary?fy=2026")],
-                ttl_seconds=4102444800 - 1000,
-                tenant="acme",
-            )
-            assert token == _PY_TENANT_TOKEN
-            result = await create_hmac_authz_port("interop-secret").verify(
-                _PY_TENANT_TOKEN,
-                _TS_REQ,
-            )
-            assert result.ok is True and result.tenant == "acme"
-
-        asyncio.run(run())
-
     def test_an_explicit_null_tenant_claim_is_malformed(self) -> None:
         async def run() -> None:
             authz = create_hmac_authz_port("s")
@@ -372,5 +350,222 @@ class TestTenantClaimValidationAndInterop:
                 assert denied.ok is False and denied.reason == "malformed payload"
                 with pytest.raises(ValueError, match="tenant"):
                     await authz.issue_capability(PRINCIPAL, [], tenant=tenant)
+
+        asyncio.run(run())
+
+
+class TestTtlOption:
+    """TS: createHmacAuthzPort options.ttlSeconds."""
+
+    def test_uses_ttl_seconds_as_the_default_and_lets_issue_capability_override_it(self) -> None:
+        async def run() -> None:
+            clock = {"t": 1_000_000.0}
+            authz = create_hmac_authz_port("test-secret", ttl_seconds=2, now=lambda: clock["t"])
+            scopes = [Scope(kind="read", ref="query://s/x")]
+            short = await authz.issue_capability(PRINCIPAL, scopes)
+            long = await authz.issue_capability(PRINCIPAL, scopes, ttl_seconds=10)
+            clock["t"] = 1_000_003.0
+            req = VerifyRequest(kind="read", ref="query://s/x")
+            assert (await authz.verify(short, req)).ok is False
+            assert (await authz.verify(long, req)).ok is True
+
+        asyncio.run(run())
+
+    def test_default_ttl_is_the_shared_spec_default(self) -> None:
+        """TS capability-ttl.test.ts: authz-hmac's DEFAULT_CAPABILITY_TTL_SECONDS is spec-core's, not a local copy."""
+        from kohaku.authz_hmac import DEFAULT_CAPABILITY_TTL_SECONDS as FROM_AUTHZ_HMAC
+        from kohaku.host_core import DEFAULT_CAPABILITY_TTL_SECONDS as FROM_HOST_CORE
+        from kohaku.spec import DEFAULT_CAPABILITY_TTL_SECONDS as FROM_SPEC
+
+        assert FROM_AUTHZ_HMAC == FROM_SPEC == FROM_HOST_CORE == 600
+
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret", now=lambda: 1000.0)
+            cap = await authz.issue_capability(PRINCIPAL, [])
+            payload = json.loads(_b64url_decode(cap.split(".")[0]).decode("utf-8"))
+            assert payload["exp"] == 1000 + FROM_SPEC
+
+        asyncio.run(run())
+
+
+class TestRequireJti:
+    """TS: createHmacAuthzPort options.requireJti."""
+
+    REQ = VerifyRequest(kind="read", ref="query://s/x")
+
+    def test_default_a_jti_less_token_still_verifies(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret")
+            assert (await authz.verify(_signed_with("test-secret"), self.REQ)).ok is True
+
+        asyncio.run(run())
+
+    def test_true_rejects_a_jti_less_token(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret", require_jti=True)
+            result = await authz.verify(_signed_with("test-secret"), self.REQ)
+            assert (result.ok, result.reason) == (False, "capability lacks jti")
+
+        asyncio.run(run())
+
+    def test_true_a_token_that_carries_a_jti_still_verifies(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret", require_jti=True)
+            cap = await authz.issue_capability(PRINCIPAL, [Scope(kind="read", ref="query://s/x")])
+            assert (await authz.verify(cap, self.REQ)).ok is True
+
+        asyncio.run(run())
+
+
+class _RecordingStore:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[str] = []
+        self._fail = fail
+
+    async def revoke(self, jti: str, expires_at: int) -> None:
+        self.calls.append(f"revoke:{jti}")
+
+    async def is_revoked(self, jti: str) -> bool:
+        self.calls.append(f"is_revoked:{jti}")
+        if self._fail:
+            raise RuntimeError("store unavailable (test)")
+        return False
+
+
+class TestScopeEvaluatedBeforeRevocationStore:
+    """TS: verify: scope evaluated before the revocation store."""
+
+    def test_an_out_of_scope_request_never_calls_is_revoked(self) -> None:
+        async def run() -> None:
+            store = _RecordingStore()
+            authz = create_hmac_authz_port("test-secret", revocation=store)
+            cap = await authz.issue_capability(PRINCIPAL, [Scope(kind="read", ref="query://s/x")])
+            result = await authz.verify(cap, VerifyRequest(kind="read", ref="query://s/y"))
+            assert result.ok is False
+            assert store.calls == []
+
+        asyncio.run(run())
+
+    def test_a_revocation_store_failure_propagates_fail_closed_for_an_in_scope_request(
+        self,
+    ) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret", revocation=_RecordingStore(fail=True))
+            cap = await authz.issue_capability(PRINCIPAL, [Scope(kind="read", ref="query://s/x")])
+            with pytest.raises(RuntimeError, match="store unavailable"):
+                await authz.verify(cap, VerifyRequest(kind="read", ref="query://s/x"))
+
+        asyncio.run(run())
+
+    def test_a_jti_less_token_never_consults_the_store(self) -> None:
+        async def run() -> None:
+            store = _RecordingStore()
+            authz = create_hmac_authz_port("test-secret", revocation=store)
+            result = await authz.verify(
+                _signed_with("test-secret"), VerifyRequest(kind="read", ref="query://s/x")
+            )
+            assert result.ok is True
+            assert store.calls == []
+
+        asyncio.run(run())
+
+
+class TestPreUpgradeTokenAndMalformedClaims:
+    def test_a_tenant_less_jti_less_pre_upgrade_token_verifies_with_no_tenant(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret")
+            result = await authz.verify(
+                _signed_with("test-secret"), VerifyRequest(kind="read", ref="query://s/x")
+            )
+            assert (result.ok, result.tenant) == (True, None)
+            assert result.principal is not None and result.principal.id == "u"
+
+        asyncio.run(run())
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            None,
+            [],
+            {"sub": "u", "scopes": "write", "exp": 9999999999},
+            {"sub": "u", "exp": 9999999999},
+            {"sub": "u", "scopes": [None], "exp": 9999999999},
+            {"sub": "u", "scopes": [{"kind": "write"}], "exp": 9999999999},
+            {"sub": "u", "scopes": [], "exp": "9999999999"},
+            {"sub": "u", "scopes": [], "exp": True},
+            {"sub": 1, "scopes": [], "exp": 9999999999},
+            {"sub": "u", "scopes": [], "exp": 9999999999, "jti": 1},
+            {"sub": "u", "scopes": [], "exp": 9999999999, "jti": None},
+        ],
+    )
+    def test_a_correctly_signed_malformed_claim_set_is_denied_never_raised(
+        self, claims: object
+    ) -> None:
+        """TS approval-port.test.ts "capability: %s -> denied as malformed": verify AND revoke both deny."""
+
+        async def run() -> None:
+            secret = "test-secret"
+            payload = b64url(json.dumps(claims, separators=(",", ":")).encode("utf-8"))
+            digest = hmac.new(
+                secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+            ).digest()
+            token = f"{payload}.{b64url(digest)}"
+            authz = create_hmac_authz_port(secret)
+            verified = await authz.verify(token, VerifyRequest(kind="write", ref="annotate"))
+            assert (verified.ok, verified.reason) == (False, "malformed payload")
+            revoked = await authz.revoke_capability(token)
+            assert (revoked.ok, revoked.code) == (False, "MALFORMED")
+
+        asyncio.run(run())
+
+    def test_a_non_finite_exp_is_malformed_not_immortal(self) -> None:
+        """json.loads accepts NaN / Infinity; `NaN <= now` is False, so without the finiteness check a NaN exp
+        would never expire (TS: Number.isFinite)."""
+
+        async def run() -> None:
+            secret = "test-secret"
+            payload = b64url(b'{"sub":"u","scopes":[],"exp":NaN}')
+            digest = hmac.new(
+                secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+            ).digest()
+            result = await create_hmac_authz_port(secret).verify(
+                f"{payload}.{b64url(digest)}", VerifyRequest(kind="read", ref="query://s/x")
+            )
+            assert (result.ok, result.reason) == (False, "malformed payload")
+
+        asyncio.run(run())
+
+
+class TestTenantLengthInUtf16CodeUnits:
+    """TS counts `String.length` (UTF-16 code units): an astral-plane character is 2 units."""
+
+    def test_an_astral_tenant_near_the_limit_is_counted_in_code_units(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("s")
+            req = VerifyRequest(kind="read", ref="query://s/x")
+            ok = "\U0001f600" * 128  # 128 characters = 256 code units: accepted
+            too_long = "\U0001f600" * 129  # 129 characters = 258 code units: rejected (like TS)
+            assert (await authz.verify(_signed_with("s", tenant=ok), req)).tenant == ok
+            denied = await authz.verify(_signed_with("s", tenant=too_long), req)
+            assert (denied.ok, denied.reason) == (False, "malformed payload")
+            await authz.issue_capability(PRINCIPAL, [], tenant=ok)
+            with pytest.raises(ValueError, match="tenant"):
+                await authz.issue_capability(PRINCIPAL, [], tenant=too_long)
+
+        asyncio.run(run())
+
+
+class TestHugeIntegerExp:
+    def test_an_integer_exp_too_large_for_a_float_is_malformed_not_an_exception(self) -> None:
+        async def run() -> None:
+            secret = "test-secret"
+            payload = b64url(b'{"sub":"u","scopes":[],"exp":1' + b"0" * 400 + b"}")
+            digest = hmac.new(
+                secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+            ).digest()
+            result = await create_hmac_authz_port(secret).verify(
+                f"{payload}.{b64url(digest)}", VerifyRequest(kind="read", ref="query://s/x")
+            )
+            assert (result.ok, result.reason) == (False, "malformed payload")
 
         asyncio.run(run())

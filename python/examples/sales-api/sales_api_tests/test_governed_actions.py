@@ -8,11 +8,10 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
+from kohaku.authz_hmac import create_hmac_approval_port, create_hmac_authz_port
 from kohaku.spec import JsonObject, Principal, Scope, action_payload_hash
 from kohaku.storage import MemoryStoragePort
 from sales_api.app import create_app
-from sales_api.approval_port import create_hmac_approval_port
-from sales_api.authz_port import create_hmac_authz_port
 from sales_api.fake_llm import create_deterministic_fake_llm
 
 _SECRET = "test-secret"

@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from kohaku.authz_hmac import create_hmac_authz_port
 from kohaku.evals import (
     SchemaExtractionInput,
     SchemaExtractionResult,
@@ -26,7 +27,6 @@ from kohaku.spec import PromotionState
 from kohaku.storage import FileStoragePort
 from sales_api.__main__ import schema_suggest_enabled, schema_suggest_timeout_ms
 from sales_api.app import SalesApp, create_app
-from sales_api.authz_port import create_hmac_authz_port
 
 PREFIX = "/api/kohaku"
 ARTIFACT_ID = "art-heatmap"

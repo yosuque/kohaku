@@ -6,10 +6,18 @@ import inspect
 import weakref
 from collections.abc import Callable
 
-from kohaku.spec import AuthzPort, Principal, Scope, UISpec, collect_capability_scopes
+from kohaku.spec import (
+    DEFAULT_CAPABILITY_TTL_SECONDS,
+    AuthzPort,
+    Principal,
+    Scope,
+    UISpec,
+    collect_capability_scopes,
+)
 
-# Default capability TTL (seconds) when a host does not override it. Shared by the REST and MCP profiles.
-DEFAULT_CAPABILITY_TTL_SECONDS = 600
+# DEFAULT_CAPABILITY_TTL_SECONDS (the default capability lifetime when a host does not override it, shared by
+# the REST and MCP profiles) is defined in kohaku.spec, like TS's spec-core, so an AuthzPort implementation
+# (kohaku.authz_hmac) can use it without importing this layer; `host_core` re-exports it for existing callers.
 
 
 _TENANT_SUPPORT_CACHE: weakref.WeakKeyDictionary[Callable[..., object], bool] = (

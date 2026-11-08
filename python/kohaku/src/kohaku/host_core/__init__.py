@@ -6,6 +6,8 @@ source of truth for the fixation (L1->L0) delivery + staleness self-healing sequ
 a composed Spec, and fail-open observability-hook helpers.
 """
 
+from kohaku.spec import DEFAULT_CAPABILITY_TTL_SECONDS
+
 from .action_audit import ActionAuditRecorder, ApprovalIssuedRecorder
 from .action_effects import (
     ActionEffectsHook,
@@ -49,7 +51,6 @@ from .binding_ref import (
     parse_invokable_ref,
 )
 from .capability import (
-    DEFAULT_CAPABILITY_TTL_SECONDS,
     WriteScopeDroppedError,
     authz_accepts_tenant,
     issue_capability_for_spec,

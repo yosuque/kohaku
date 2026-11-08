@@ -15,6 +15,7 @@ export {
   DEFAULT_CAPABILITY_TTL_SECONDS,
   type HmacAuthzOptions,
   type HmacAuthzPort,
+  isValidTenantClaim,
   type RevokeCapabilityResult,
 } from "./hmac-authz-port.js";
 export { createMemoryRevocationStore, type MemoryRevocationStoreTestHooks } from "./revocation.js";
