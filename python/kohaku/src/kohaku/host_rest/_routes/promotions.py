@@ -328,7 +328,12 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         assert ctx.principal is not None  # need_principal defaults True above
         data = await _read_json(request)
         draft = parse_component_draft(data.get("draft")) if isinstance(data, dict) else None
-        if draft is None:
+        # acknowledgedSuggestion is additive/optional and recorded, not enforced (see
+        # PromotionsApi.approve's own doc): absent flows through as "not passed" (the service defaults it to
+        # False). A present value must be a boolean (zod's `z.boolean().optional()`: null is rejected too).
+        acknowledged: Any = data.get("acknowledgedSuggestion") if isinstance(data, dict) else None
+        has_acknowledged = isinstance(data, dict) and "acknowledgedSuggestion" in data
+        if draft is None or (has_acknowledged and not isinstance(acknowledged, bool)):
             return _error(
                 "BAD_REQUEST",
                 "draft (componentType / version / intentName / description) is required",
@@ -337,10 +342,13 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         not_found = await _ensure_artifact(artifact_id, ctx.tenant)
         if not_found is not None:
             return not_found
+        approve_extra: dict[str, bool] = (
+            {"acknowledged_suggestion": acknowledged} if has_acknowledged else {}
+        )
         try:
             async with _get_lock(deps, _promotion_key(ctx.tenant)):
                 candidate = await ctx.promotions.approve(
-                    artifact_id, draft, ctx.principal, tenant=ctx.tenant
+                    artifact_id, draft, ctx.principal, tenant=ctx.tenant, **approve_extra
                 )
             return _json({"candidate": candidate})
         except BaseException as e:

@@ -197,12 +197,236 @@ def test_promotions_and_fixations_counts() -> None:
         "generated": 1,
         "used": 2,
         "nominated": 1,
+        "schemaSuggested": 0,
         "judged": 1,
         "reviewed": 1,
+        "schemaEdited": 0,
         "published": 1,
         "withdrawn": 1,
     }
+    assert list(s.promotions.keys()) == [
+        "generated",
+        "used",
+        "nominated",
+        "schemaSuggested",
+        "judged",
+        "reviewed",
+        "schemaEdited",
+        "published",
+        "withdrawn",
+    ]
     assert s.fixations == {"fixated": 1, "unfixated": 1}
+
+
+# --- review turnaround and suggestion acceptance ---
+
+
+def test_review_pairs_nominated_with_the_next_approve_or_reject_per_tenant_and_artifact() -> None:
+    events = [
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T00:00:00.000Z"),
+        ev("component.nominated", {"artifactId": "a2"}, ts="2026-07-01T00:00:00.000Z", tenant="t1"),
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "approve"},
+            ts="2026-07-01T00:01:00.000Z",
+        ),
+        # requestChanges is not a completion: a1 is re-nominated and reviewed again later. The re-nomination
+        # at 01:00:00 opens a fresh window (the previous one already closed via the approve above); the next
+        # re-nomination at 02:00:00 does NOT overwrite it, since a window for a1 is already open -- so the
+        # eventual reject at 02:03:00 measures the whole 01:00:00 -> 02:03:00 round-trip (1h3m).
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T01:00:00.000Z"),
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "requestChanges"},
+            ts="2026-07-01T01:00:30.000Z",
+        ),
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T02:00:00.000Z"),
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "reject"},
+            ts="2026-07-01T02:03:00.000Z",
+        ),
+        # a2 (tenant t1) is reviewed 5 minutes after its nomination
+        ev(
+            "component.reviewed",
+            {"artifactId": "a2", "decision": "approve"},
+            ts="2026-07-01T00:05:00.000Z",
+            tenant="t1",
+        ),
+        # a reviewed without any preceding nominated is ignored
+        ev(
+            "component.reviewed",
+            {"artifactId": "a3", "decision": "approve"},
+            ts="2026-07-01T00:05:00.000Z",
+        ),
+    ]
+    s = summarize_lineage(events)
+    # durations: a1 60_000 (first cycle), a2 300_000, a1 3_780_000 (second cycle: 01:00:00 -> 02:03:00)
+    assert s.review.count == 3
+    assert (s.review.durationMs.p50, s.review.durationMs.p95, s.review.durationMs.max) == (
+        300_000,
+        3_780_000,
+        3_780_000,
+    )
+
+
+def test_review_a_re_nomination_for_a_candidate_whose_window_is_open_does_not_restart_it() -> None:
+    events = [
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T00:00:00.000Z"),
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "requestChanges"},
+            ts="2026-07-01T00:30:00.000Z",
+        ),
+        # Re-nomination (e.g. reviewer-initiated resubmission), immediately followed by approve.
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T01:00:00.000Z"),
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "approve"},
+            ts="2026-07-01T01:00:00.050Z",
+        ),
+    ]
+    s = summarize_lineage(events)
+    assert s.review.count == 1
+    # ~1 hour (the full round-trip from the original nomination), not the ~50ms since the re-nomination.
+    assert s.review.durationMs.p50 == 60 * 60 * 1000 + 50
+
+
+def test_review_keys_the_pairing_by_tenant_and_artifact_id() -> None:
+    events = [
+        # Both tenants nominate the SAME artifactId a1 at the same t0, BEFORE either is reviewed.
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T00:00:00.000Z", tenant="tA"),
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T00:00:00.000Z", tenant="tB"),
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "approve"},
+            ts="2026-07-01T00:01:00.000Z",
+            tenant="tA",
+        ),
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "approve"},
+            ts="2026-07-01T00:10:00.000Z",
+            tenant="tB",
+        ),
+    ]
+    s = summarize_lineage(events)
+    assert s.review.count == 2
+    assert (s.review.durationMs.p50, s.review.durationMs.p95, s.review.durationMs.max) == (
+        60_000,
+        600_000,
+        600_000,
+    )
+
+
+def test_review_pairs_correctly_when_reviewed_precedes_nominated_in_array_order() -> None:
+    events = [
+        # The reviewed record sits FIRST in the input array, but its ts is later than the nomination's.
+        ev(
+            "component.reviewed",
+            {"artifactId": "a1", "decision": "approve"},
+            ts="2026-07-01T00:05:00.000Z",
+        ),
+        ev("component.nominated", {"artifactId": "a1"}, ts="2026-07-01T00:00:00.000Z"),
+    ]
+    s = summarize_lineage(events)
+    assert s.review.count == 1
+    assert s.review.durationMs.p50 == 5 * 60 * 1000
+
+
+def test_review_is_empty_when_nothing_was_reviewed() -> None:
+    from kohaku.host_rest.serialize import to_jsonable
+
+    s = summarize_lineage([ev("component.nominated", {"artifactId": "a1"})])
+    assert to_jsonable(s.review) == {
+        "count": 0,
+        "durationMs": {"p50": None, "p95": None, "max": None},
+        "acceptedAsIs": 0,
+    }
+
+
+def test_counts_schema_suggested_and_edited_and_the_zero_edit_acknowledged_acceptances() -> None:
+    events = [
+        ev("component.schemaSuggested", {"artifactId": "a1", "suggestion": {}}),
+        ev("component.schemaSuggested", {"artifactId": "a2", "suggestion": {}}),
+        ev(
+            "component.schemaEdited",
+            {
+                "artifactId": "a1",
+                "changed": [],
+                "unchanged": ["componentType"],
+                "acknowledged": True,
+            },
+        ),
+        ev(
+            "component.schemaEdited",
+            {
+                "artifactId": "a2",
+                "changed": [{"field": "description", "suggested": "a", "final": "b"}],
+                "unchanged": [],
+                "acknowledged": True,
+            },
+        ),
+    ]
+    s = summarize_lineage(events)
+    assert s.promotions["schemaSuggested"] == 2
+    assert s.promotions["schemaEdited"] == 2
+    # Only a1 has both changed: [] and acknowledged: true; a2 was edited so it never qualifies regardless.
+    assert s.review.acceptedAsIs == 1
+
+
+def test_accepted_as_is_requires_acknowledged_true_even_with_an_empty_changed() -> None:
+    events = [
+        # No edits, but no acknowledgment recorded (a missing field, same as false): does not count.
+        ev(
+            "component.schemaEdited",
+            {"artifactId": "a1", "changed": [], "unchanged": ["componentType"]},
+        ),
+        # No edits, explicit acknowledged: false: does not count.
+        ev(
+            "component.schemaEdited",
+            {
+                "artifactId": "a2",
+                "changed": [],
+                "unchanged": ["componentType"],
+                "acknowledged": False,
+            },
+        ),
+        # No edits and acknowledged: true: counts.
+        ev(
+            "component.schemaEdited",
+            {
+                "artifactId": "a3",
+                "changed": [],
+                "unchanged": ["componentType"],
+                "acknowledged": True,
+            },
+        ),
+    ]
+    s = summarize_lineage(events)
+    assert s.promotions["schemaEdited"] == 3
+    assert s.review.acceptedAsIs == 1
+
+
+def test_summary_wire_key_order_places_review_after_promotions() -> None:
+    from kohaku.host_rest.serialize import to_jsonable
+
+    wire = to_jsonable(summarize_lineage([]))
+    assert list(wire.keys()) == [
+        "events",
+        "composed",
+        "tiers",
+        "cache",
+        "fallback",
+        "durationMs",
+        "topIntents",
+        "promotions",
+        "review",
+        "fixations",
+        "usage",
+        "l2ByIntent",
+        "schemaEditsByComponent",
+    ]
 
 
 def test_tenant_scoped_summary() -> None:

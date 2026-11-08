@@ -659,7 +659,13 @@ class _FakePromotionsRaisingNotPublished:
         raise NotImplementedError
 
     async def approve(
-        self, artifact_id: str, draft: Any, reviewer: Principal, tenant: str | None = None
+        self,
+        artifact_id: str,
+        draft: Any,
+        reviewer: Principal,
+        tenant: str | None = None,
+        *,
+        acknowledged_suggestion: bool = False,
     ) -> Any:
         raise _FakeNotPublished("approval did not reach published")
 

@@ -11,7 +11,13 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { exportDistillationDataset } from "@kohaku-ui/evals";
+import {
+  createJudge,
+  createSchemaExtractor,
+  exportDistillationDataset,
+  l2PromotionRubric,
+} from "@kohaku-ui/evals";
+import { FakeLlm } from "@kohaku-ui/llm/fake";
 import {
   type ActionParamsSchema,
   ALLOWED_ATTRS,
@@ -511,6 +517,202 @@ async function main(): Promise<void> {
     promptRevision: PROMPT_REVISION,
   };
 
+  // Pins the L2 promotion judge's prompt text (rubric 0.4: the criterion list in the system prompt with its
+  // weights, and the user prompt with the DRAFT / SUGGESTION blocks) byte for byte across both languages, for
+  // both rubric variants ("full" and "no-schema", see JudgeVerdict.rubricVariant). A FakeLlm records exactly what
+  // the judge sent, so no prompt-building function needs to be exported; each case carries its input so the
+  // Python side rebuilds the same JudgeInput and compares system + prompt. Covers key order, nested indentation
+  // (JSON.stringify(x, null, 2)), an integer-valued float, an empty container, a backtick run in the HTML (the
+  // fence length), and every optional prompt section.
+  const judgePromptCases: { name: string; input: Record<string, unknown> }[] = [
+    {
+      name: "no-schema",
+      input: {
+        html: "<html><body><script>window.kohaku.ready()</script></body></html>",
+        request: "Sales as a calendar heatmap",
+        usage: { uses: 3, sessions: 2 },
+      },
+    },
+    {
+      name: "draft-only",
+      input: {
+        html: "<div>```nested fence```</div>",
+        request: "r",
+        usage: { uses: 5, sessions: 3 },
+        draft: {
+          componentType: "sales.calendarHeatmap",
+          intentName: "sales.calendar_heatmap",
+          paramsJsonSchema: {
+            type: "object",
+            properties: { fy: { type: "integer", minimum: 2020 }, ratio: { type: "number", default: 1.5 } },
+            required: ["fy"],
+          },
+          events: [],
+        },
+      },
+    },
+    {
+      name: "suggestion-only",
+      input: {
+        html: "<html></html>",
+        request: "as a table",
+        usage: { uses: 1, sessions: 1 },
+        suggestion: {
+          componentType: "sales.calendarHeatmap",
+          intentName: "sales.calendar_heatmap",
+          description: "Monthly heatmap",
+          events: [{ name: "cellSelected", description: "clicked" }],
+        },
+      },
+    },
+    {
+      name: "draft-and-suggestion-with-context",
+      input: {
+        html: "<html></html>",
+        request: "r",
+        usage: { uses: 5, sessions: 3 },
+        telemetry: { renderedCount: 4, errorCount: 1 },
+        catalogSummary: "- sales.trend (core intent)",
+        draft: { componentType: "sales.calendarHeatmap", intentName: "sales.calendar_heatmap" },
+        suggestion: {
+          componentType: "sales.oldSuggestion",
+          intentName: "sales.old_suggestion",
+          description: "d",
+          paramsJsonSchema: { type: "object", properties: {} },
+          events: [],
+        },
+      },
+    },
+  ];
+  const judgePrompts: {
+    name: string;
+    input: Record<string, unknown>;
+    system: string;
+    prompt: string;
+    rubricId: string;
+    rubricVersion: string;
+    rubricVariant: string | undefined;
+  }[] = [];
+  for (const c of judgePromptCases) {
+    const llm = new FakeLlm({
+      objects: [
+        {
+          criteria: l2PromotionRubric.criteria.map((criterion) => ({
+            id: criterion.id,
+            score: 0.5,
+            reasoning: criterion.id,
+          })),
+          summary: "scored",
+        },
+      ],
+    });
+    const verdict = await createJudge({ llm }).judge({
+      kind: "l2-component",
+      ...(c.input as Omit<Parameters<ReturnType<typeof createJudge>["judge"]>[0], "kind">),
+    });
+    const call = llm.calls[0]!;
+    judgePrompts.push({
+      name: c.name,
+      input: c.input,
+      system: call.system!,
+      prompt: call.prompt,
+      rubricId: verdict.rubricId,
+      rubricVersion: verdict.rubricVersion,
+      rubricVariant: verdict.rubricVariant,
+    });
+  }
+
+  // Pins the schema extractor's system + user prompt (design.md #73), the same FakeLlm-recording way as
+  // judgePrompts: the data-refs / allowlist / lint / catalog / examples sections and the system prompt, byte for
+  // byte. Deliberately limited to HTML with NO script syntax error: the TS collectL2Issues also compiles the
+  // script with `new Function` (L2_SCRIPT_SYNTAX), which Python has no JS runtime to mirror, so a syntax-error
+  // fixture would diverge by design. The lexical lint rules (unknown API, missing ready) are the same in both.
+  const extractorPromptCases: { name: string; input: Record<string, unknown>; examples: unknown[] }[] = [
+    {
+      name: "plain",
+      input: {
+        html: "<!DOCTYPE html><html><body><div id=hm></div><script>window.kohaku.fetchData('query://sales/trend?fy=2026&granularity=month&metric=revenue').then(function(d){window.kohaku.emit('cellSelected',{});window.kohaku.ready();});</script></body></html>",
+        request: "Sales as a calendar heatmap",
+        namespace: "sales",
+        queryPaths: ["trend", "summary", "kpi"],
+        catalogSummary: "- sales.trendChart (core component)\n- sales.trend (core intent)",
+      },
+      examples: [],
+    },
+    {
+      name: "lint-issues-and-examples",
+      input: {
+        html: "<html><body><script>window.kohaku.fetchAll('query://sales/kpi'); /* ``` */</script></body></html>",
+        request: "r",
+        namespace: "sales",
+      },
+      examples: [
+        {
+          htmlExcerpt: "<div>dial</div>",
+          suggestion: {
+            componentType: "sales.gauge",
+            version: "1.0.0",
+            intentName: "sales.gauge",
+            description: "gauge",
+          },
+          final: {
+            componentType: "sales.gaugeDial",
+            version: "1.0.0",
+            intentName: "sales.gauge_dial",
+            description: "Show attainment as a dial",
+            paramsJsonSchema: { type: "object", properties: { target: { type: "number", default: 1.5 } } },
+            queryTemplate: { path: "kpi", paramMap: { target: "t" } },
+          },
+        },
+        {
+          final: {
+            componentType: "sales.second",
+            version: "1.0.0",
+            intentName: "sales.second",
+            description: "d",
+          },
+        },
+      ],
+    },
+  ];
+  const extractorPrompts: {
+    name: string;
+    input: Record<string, unknown>;
+    examples: unknown[];
+    system: string;
+    prompt: string;
+    extractorId: string;
+    extractorVersion: string;
+  }[] = [];
+  for (const c of extractorPromptCases) {
+    const llm = new FakeLlm({
+      objects: [
+        {
+          componentType: "sales.calendarHeatmap",
+          intentName: "sales.calendar_heatmap",
+          description: "d",
+          paramsJsonSchema: { type: "object", properties: {} },
+          events: [],
+          confidence: 0.5,
+        },
+      ],
+    });
+    const suggestion = await createSchemaExtractor({
+      llm,
+      examples: async () => c.examples as never,
+    }).extract(c.input as never);
+    const call = llm.calls[0]!;
+    extractorPrompts.push({
+      name: c.name,
+      input: c.input,
+      examples: c.examples,
+      system: call.system!,
+      prompt: call.prompt,
+      extractorId: suggestion.extractorId,
+      extractorVersion: suggestion.extractorVersion,
+    });
+  }
+
   // KOHAKU_LLM_BASE_URL normalisation (docs/specification.md, "LLM providers"): claude / gemini take the vendor
   // root with or without the API-version path and both spellings must name the same endpoint in both
   // languages; openai / ollama / llama keep the OpenAI-compatible value untouched. `root` pins
@@ -793,6 +995,8 @@ async function main(): Promise<void> {
         distillation,
         fallback: fallbackCases,
         promptFragments,
+        judgePrompts,
+        extractorPrompts,
         domainMcp,
         semanticGui: semanticGuiCases,
         semanticPrompts: semanticPromptCases,

@@ -31,7 +31,14 @@ from kohaku.composer import (
     create_l2_js_sidecar,
     default_generator_version,
 )
-from kohaku.evals import JudgeInput, JudgeUsage, Telemetry, create_judge
+from kohaku.evals import (
+    JudgeInput,
+    JudgeUsage,
+    SchemaExtractionInput,
+    SchemaExtractor,
+    Telemetry,
+    create_judge,
+)
 from kohaku.host_core import (
     PolicyAppliedEvent,
     PolicyRuntime,
@@ -59,6 +66,7 @@ from kohaku.lineage import (
     PromotionErrorContext,
     PromotionPolicy,
     PublishContext,
+    SuggestContext,
     SummarizeLineageOptions,
     UnpublishContext,
     ValidatePublishContext,
@@ -293,6 +301,7 @@ async def create_app(
     prefix: str = "/api/kohaku",
     policy_file: KohakuPolicyFile | None = None,
     approvals: ApprovalPort | None = None,
+    schema_extractor: SchemaExtractor | None = None,
 ) -> SalesApp:
     """Assembles the FastAPI app by converging all packages (equivalent to app.ts's createApp).
 
@@ -309,6 +318,11 @@ async def create_app(
     be allowed (the gate returns denied), unchanged from before governed actions existed. __main__.py wires
     a real one (create_hmac_approval_port, reusing the same capability secret as the AuthzPort) for the
     running demo; mirrors TS sample-api's AppDeps.approvals.
+
+    schema_extractor (optional, off by default): LLM auto-extraction of the promotion schema at auto-nomination
+    (advisory prefill for the approval form; fail-open inside lineage). Opt-in at the entry point (__main__.py)
+    so the FakeLlm-scripted tests keep their exact response order. Mirrors TS sample-api's
+    AppDeps.schemaExtractor.
     """
     try:
         from fastapi import FastAPI, Header
@@ -367,6 +381,35 @@ async def create_app(
         rendered, errors = await telemetry_for(candidate.artifactId, context.tenant)
         # Transcribe only when there is actual-render observation (with 0 observations, it is not placed in the prompt, as before).
         telemetry = Telemetry(rendered_count=rendered, error_count=errors) if rendered > 0 else None
+        # The schema actually being registered (approve()'s own draft, forwarded via context.draft; #1) is the
+        # source of truth for the "schema fidelity" criterion. ComponentDraft carries no events field, so this
+        # block never claims events for it -- a candidate's machine-extracted suggestion may have proposed some,
+        # but those are unverified proposal data, surfaced below as `suggestion` context only.
+        draft: dict[str, Any] | None = None
+        if context.draft is not None:
+            draft = {
+                "componentType": context.draft.componentType,
+                "intentName": context.draft.intentName,
+                "paramsJsonSchema": context.draft.paramsJsonSchema,
+            }
+        # The advisory proposal attached at nomination, handed to the judge as context (rubric 0.4's "schema
+        # fidelity" criterion verifies `draft` above when present; `suggestion` alone is verified directly when
+        # `draft` is unknown).
+        suggestion: dict[str, Any] | None = None
+        if candidate.suggestion is not None:
+            # A persisted suggestion without a draft is malformed: let this raise (-> "judge could not run" in the
+            # verdict, like TS reading `candidate.suggestion.draft.componentType`) instead of substituting an empty
+            # draft, which would make the judge believe a schema was supplied.
+            suggested_draft = candidate.suggestion["draft"]
+            if not isinstance(suggested_draft, dict):
+                raise TypeError("the persisted schema suggestion has no draft")
+            suggestion = {
+                "componentType": suggested_draft.get("componentType"),
+                "intentName": suggested_draft.get("intentName"),
+                "description": suggested_draft.get("description"),
+                "paramsJsonSchema": suggested_draft.get("paramsJsonSchema"),
+                "events": candidate.suggestion.get("events"),
+            }
         verdict = await judge.judge(
             JudgeInput(
                 kind="l2-component",
@@ -374,6 +417,8 @@ async def create_app(
                 request=candidate.request if candidate.request is not None else "",
                 usage=JudgeUsage(uses=candidate.uses, sessions=candidate.sessions),
                 telemetry=telemetry,
+                draft=draft,
+                suggestion=suggestion,
             )
         )
         # Return the rubric version and summary to the verdict, stamping "which version judged how" into component.judged.
@@ -439,12 +484,51 @@ async def create_app(
             error,
         )
 
+    # Core (non-promoted) component types and Intent names, computed once: the "avoid these names" baseline the
+    # schema extractor's uniqueness instruction needs even before anything has ever been promoted.
+    core_component_types = [
+        d.type
+        for d in resolve_catalog(
+            core_catalog(), Catalog(components=list(sales_contribution.components))
+        ).list()
+    ]
+
+    def catalog_summary_for(tenant: str | None) -> str:
+        """The catalog summary the extractor's `catalog_summary` input expects: one "- <name>" line per entry."""
+        lines = [
+            *[f"- {t} (core component)" for t in core_component_types],
+            *[f"- {n} (core intent)" for n in sorted(core_intent_names)],
+            *[
+                f"- {e.draft.componentType} ({e.draft.intentName})"
+                for e in registry.entries_for(tenant)
+            ],
+        ]
+        return "\n".join(lines)
+
+    async def suggest_schema(candidate: PromotionCandidate, context: SuggestContext) -> Any:
+        """LLM auto-extraction of the promotion schema (advisory). None = "no proposal"."""
+        # No body to extract from: do not spend an LLM call deriving a proposal from an empty document.
+        if candidate.html is None or schema_extractor is None:
+            return None
+        return await schema_extractor.extract(
+            SchemaExtractionInput(
+                html=candidate.html,
+                request=candidate.request if candidate.request is not None else "",
+                namespace="sales",
+                query_paths=list(OPERATIONS),
+                catalog_summary=catalog_summary_for(context.tenant),
+                # Whose reviewer corrections the extractor's few-shot provider may read (design.md #73).
+                tenant=context.tenant,
+            )
+        )
+
     promotions = create_promotions(
         lineage=lineage,
         storage=storage,
         # A low threshold for the demo (the production default is uses>=20, sessions>=5). The judge is advisory.
         policy=PromotionPolicy(minUses=2, minDistinctSessions=1, judgeBlocking=False),
         judge=promotion_judge,
+        suggest_schema=suggest_schema if schema_extractor is not None else None,
         validate_publish=validate_publish,
         on_publish=on_publish,
         on_unpublish=on_unpublish,

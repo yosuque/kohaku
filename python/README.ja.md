@@ -145,7 +145,7 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
 │  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
-│  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
+│  │  ├─ evals/            # ← packages/evals(judge / スキーマ抽出 / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
 │  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
 │  │  │                    #   (← intent.ts)+ allowed_actions.py(← allowed-actions.ts)+
@@ -614,16 +614,10 @@ failed catalog/structure validation」という文言とは別物にし、この
   (`revision`、`validate_params`)は `getattr` で探ることが TS との違いである。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
-- **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
-  `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
-  フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
-  `schemaSuggested` / `schemaEdited` カウンタ(一方 analytics の `usage` 行、`l2ByIntent`、
-  `schemaEditsByComponent` は反映済み: `summarize_usage` と `summarize_lineage`、
-  design.md #74 / #73。`review` ブロックは引き続き未反映)、TS 側の rubric 0.4(Python の
-  `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
-  を欠く)、`CapabilityRevocationStore` と jti ベースの capability 失効、
+- **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):**
+  `CapabilityRevocationStore` と jti ベースの capability 失効、
   `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、
-  `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
+  `admin-react`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
