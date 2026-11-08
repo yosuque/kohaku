@@ -19,8 +19,9 @@
 # (`auto`, which raises the floor for an app), every npm PR raised catalog floors and failed CI.
 # A Dependabot PR that does change a catalog entry (an exact pin, e.g. react, or typescript) still fails CI
 # until `cli/src/init/versions.ts` (`EXTERNAL_VERSIONS`, the versions `kohaku init` writes into a generated
-# project) is synced by hand and the init goldens are regenerated:
-# `cli/test/init/render.test.ts` asserts it matches the catalog. Dependabot cannot edit that file.
+# project) is regenerated: run `pnpm init:versions` (plus the init goldens, if the template output changes;
+# `pnpm regen` does both) and push. `cli/test/init/render.test.ts` and a CI drift step assert it matches the
+# catalog. Dependabot cannot edit that file.
 #
 # --- Cadence -----------------------------------------------------------------------------------------------
 # Version updates run monthly with a 7-day cooldown, and uv / github-actions each land as one grouped PR, so a
