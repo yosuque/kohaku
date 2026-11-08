@@ -153,6 +153,8 @@ python/
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ authz_hmac/       # ← packages/authz-hmac (HMAC capability AuthzPort with jti revocation + the
 │  │  │                    #   approval-token ApprovalPort; one module per TS file, depends on spec only)
+│  │  ├─ authz_jwt/        # ← packages/authz-jwt (bearer-JWT identity resolver + the JWT AuthzPort whose
+│  │  │                    #   capabilities are authz_hmac's; needs the `jwt` extra; depends on spec + authz_hmac)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
 │  │  │                    #   (← intent.ts) + allowed_actions.py (← allowed-actions.ts) +
 │  │  │                    #   action_effects.py (← action-effects.ts) + view_recorder.py
@@ -553,7 +555,24 @@ given `create_memory_approval_store()`). Both are wire-compatible with the TS po
 port verifies and re-issues identically — and both pass the Python mirrors of the TS AuthzPort / ApprovalPort /
 revocation-store contract suites (`python/kohaku/tests/authz_hmac/_contract.py`). The ports take an injectable
 `now` and `generate_jti` (TS reads the wall clock and `randomBytes` directly) so tests can pin them. Unlike TS
-there is no default secret: pass one (the sales sample reads `KOHAKU_CAPABILITY_SECRET`). `python/examples/sales-api`'s
+there is no default secret: pass one (the sales sample reads `KOHAKU_CAPABILITY_SECRET`).
+
+The JWT / OIDC identity side is `kohaku.authz_jwt` (the mirror of TS's `packages/authz-jwt`; install the `jwt` extra,
+`pip install 'kohaku-ui[jwt]'`, which pulls PyJWT with its `crypto` extra; depends on `kohaku.spec` and
+`kohaku.authz_hmac` only). `create_jwt_identity_resolver(JwtSecretKey(secret) | JwtJwksKey(jwks) | JwtJwksUrlKey(url),
+issuer=, audience=, clock_tolerance_seconds=, algorithms=, claims=JwtClaimNames(...), map_claims=, require_tenant=)`
+verifies a bearer token and maps `sub / name / roles / tenant` to a `Principal` + tenant (`resolve(token)` /
+`from_authorization_header(header)`, failing with `JwtIdentityError` codes `MISSING_TOKEN / INVALID_TOKEN /
+MISSING_SUBJECT / MISSING_TENANT`); the same construction-time rules as TS apply (a secret of at least 32 bytes,
+`audience` mandatory for a JWKS, `https:` or local `http:` JWKS URLs only). `create_jwt_authz_port(key,
+capability_secret=, ..., require_capability_tenant=False)` pairs that resolver (`.identity`) with `authz_hmac`'s
+capability tokens, which it delegates to entirely, so a TS-issued capability verifies in it and the reverse. Remote
+JWKS fetching is PyJWT's `PyJWKClient` (run off the event loop, 5 s timeout, 30 s cooldown on unknown-`kid` refetches),
+hence the `PyJWT>=2.14.0` floor; PyJWT's extra default checks (`sub` / `jti` type, `iat` in the future, `aud` when none is
+configured) are switched off so a token gets the same verdict as under jose. The sales sample's
+`KOHAKU_AUTHZ=jwt` mode (`KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` / `KOHAKU_JWT_AUDIENCE` / `KOHAKU_JWT_ISSUER` /
+`KOHAKU_JWT_REQUIRE_TENANT` / `KOHAKU_DEMO_ADMIN_ROUTES`, as in the TS sample) is REST-only: the Python MCP entry points
+stay HMAC-only and refuse `KOHAKU_AUTHZ=jwt`. `python/examples/sales-api`'s
 `annotate` (`"confirm"` tier) and `publish` (`"approve"` tier) operations, and
 `sales_api_tests/test_governed_actions.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
@@ -674,7 +693,7 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   `schemaEditsByComponent`, by contrast, are mirrored: `summarize_usage` and `summarize_lineage`,
   design.md #74 / #73; the `review` block stays unported); rubric 0.4 on the TS side (Python's
   `kohaku.evals.judge.l2_promotion_rubric` is still at version "0.3", missing
-  `suggestion_fidelity`); the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
+  `suggestion_fidelity`); the `storage-redis` / `storage-postgres` production adapters;
   `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
 
