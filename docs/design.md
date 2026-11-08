@@ -895,6 +895,14 @@ in place of `tasks/update`).
   unverified; that check, along with re-testing `tasks/get`/`tasks/cancel` reachability whenever the SDK is
   upgraded, is the user's to do.
 
+- **Tasks are bound to their creator**: `TaskStore.create` takes an `owner`, and `get` / `requestCancel` answer exactly
+  like an unknown id for any other owner (a leaked task id alone does not reveal the task, return its completed
+  result — which carries the bearer write capability in `_meta` — or cancel it). The owner is the key the rate limiter
+  would use for the call (`rateLimitKey`, else the resolved principal's id, else the session id, else `"anonymous"`),
+  so the binding is only as strong as that key: without `resolvePrincipal` / `rateLimitKey`, callers that share a
+  connection (or, on stateless HTTP and stdio in TS, everyone) share an owner. A still-working task whose `ttlMs`
+  elapses is aborted when purged, and the id echoed in the unknown-task error is capped at 128 characters. Identical
+  in the Python port.
 - **Python port** (`kohaku.host_mcp.tasks`, wired in `host_mcp/server.py`): the same design, with
   `AttachOptions.tasks_enabled` (default `False`, same kill-switch semantics) and the same constants
   (`ttlMs` 600 000, `pollIntervalMs` 2 000) and fixed client failure messages (`_client_failure_message`

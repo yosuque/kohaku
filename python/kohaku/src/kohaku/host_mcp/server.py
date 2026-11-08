@@ -440,6 +440,9 @@ def _client_failure_message(exc: BaseException) -> str:
     return str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE
 
 
+# Cap on how much of a client-supplied task id an error message echoes back.
+_MAX_ECHOED_TASK_ID_LEN = 128
+
 # Side channel from a low-level `Server` instance to the in-memory `TaskStore` `attach_kohaku_to_mcp_server` built
 # for it, read by `_get_task_store_for_test`. Exists so a test can seed a task (or inspect one) without going
 # through a task-backed tool call. Weakly keyed, so it never keeps a Server alive.
@@ -852,6 +855,8 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         locale: str | None,
         principal: Principal,
         correlation_id: str | None,
+        owner: str,
+        trace_context: TraceContext | None,
     ) -> dict[str, Any]:
         """Starts a compose (any `_ComposeSource`) as a background task instead of awaiting it inline, returning
         the `CreateTaskResult` describing the just-created "working" task. Only called after `_task_capable` has
@@ -865,11 +870,16 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         never raises for an aborted call — it degrades to the same fallback Spec any other L1/L2 failure would,
         just marked `trace.cancelled` — so this is the only reliable signal).
 
+        `owner` binds the task to its creator (`_task_owner_key`): `tasks/get` / `tasks/cancel` from any other
+        caller answer exactly like an unknown task id.
+
         The compose is deliberately NOT awaited here — it runs to completion (or cancellation, or failure) in the
         background, and the tool call returns immediately with the task descriptor.
         """
         created = _tasks.create(
-            ttl_ms=COMPOSE_TASK_TTL_MS, poll_interval_ms=COMPOSE_TASK_POLL_INTERVAL_MS
+            owner=owner,
+            ttl_ms=COMPOSE_TASK_TTL_MS,
+            poll_interval_ms=COMPOSE_TASK_POLL_INTERVAL_MS,
         )
 
         async def _body() -> None:
@@ -889,7 +899,13 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 # classification as _safe_tool: a task's failure message reaches the client through tasks/get,
                 # so a raw provider SDK message (e.g. an LlmError naming the missing API key) must not be
                 # stored there.
-                await _report_mcp_error(deps, "tasks.compose", exc, correlation_id=correlation_id)
+                await _report_mcp_error(
+                    deps,
+                    "tasks.compose",
+                    exc,
+                    correlation_id=correlation_id,
+                    trace_context=trace_context,
+                )
                 _tasks.fail(created.task_id, {"message": _client_failure_message(exc)})
 
         body = asyncio.ensure_future(_body())
@@ -909,7 +925,14 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         synchronous `_compose_and_package`. Rate limiting and principal resolution happened before this (in each
         handler), as in TS."""
         if _task_capable(ctx):
-            return _start_compose_task(source, locale, principal, correlation_id)
+            return _start_compose_task(
+                source,
+                locale,
+                principal,
+                correlation_id,
+                await _mcp_rate_limit_key(deps, principal, ctx),
+                _trace_context_of(ctx),
+            )
         return await _compose_and_package(source, locale, principal, correlation_id)
 
     # --- Tool definitions (name -> Tool + handler) --------------------------
@@ -1476,15 +1499,27 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
     server.add_request_handler(
         "resources/read", mcp_types.ReadResourceRequestParams, _read_resource
     )
+
     # tasks/get and tasks/cancel are not tools (no tools/list visibility), so their registration is not subject to
     # any tool-ordering constraint. Gated behind AttachOptions.tasks_enabled (default off): the default is a
     # product decision (whether to hand a declaring client a task handle at all); leave the server silent about
     # the extension entirely unless asked.
+    async def _task_owner_key(ctx: ServerRequestContext[Any]) -> str:
+        """The owner a `tasks/get` / `tasks/cancel` caller is matched against: the key the rate limiter would
+        use for this call (see `_mcp_rate_limit_key`) -- `deps.rate_limit_key`, else the resolved principal's id,
+        else the connection id. A throw from `resolve_principal` / `rate_limit_key` propagates and fails the
+        request closed, like a tool call."""
+        return await _mcp_rate_limit_key(deps, await _current_principal(ctx), ctx)
+
     if options.tasks_enabled is True:
-        _register_task_methods(server, _tasks)
+        _register_task_methods(server, _tasks, _task_owner_key)
 
 
-def _register_task_methods(server: Server, tasks: TaskStore) -> None:
+def _register_task_methods(
+    server: Server,
+    tasks: TaskStore,
+    owner_key_of: Callable[[ServerRequestContext[Any]], Awaitable[str]],
+) -> None:
     """Registers this profile's two Task-extension methods and advertises the extension (see tasks.py's module doc
     for why kohaku defines its own snapshots rather than the SDK's 2025-11-25 `tasks/*` types). `tasks/update` is
     deliberately NOT implemented: it exists for a server that reaches `status: "input_required"` to collect
@@ -1497,6 +1532,9 @@ def _register_task_methods(server: Server, tasks: TaskStore) -> None:
     methods rather than answering METHOD_NOT_FOUND — and `Server.extensions` for the `ServerCapabilities.extensions`
     advertisement (surfaced on `server/discover`). With nothing registered both names answer METHOD_NOT_FOUND,
     which is what `tasks_enabled` off relies on.
+
+    Both methods are bound to the task's creator (`owner_key_of`, see `TaskStore`): a caller whose owner key
+    differs gets the same InvalidParams answer as for an unknown id, so a leaked task id reveals nothing.
     """
     import mcp_types
     from mcp.shared.exceptions import MCPError
@@ -1505,23 +1543,34 @@ def _register_task_methods(server: Server, tasks: TaskStore) -> None:
         task_id: str
 
     def _unknown(task_id: str) -> MCPError:
+        # The id is client-controlled input echoed back: bound it.
+        shown = (
+            task_id
+            if len(task_id) <= _MAX_ECHOED_TASK_ID_LEN
+            else task_id[:_MAX_ECHOED_TASK_ID_LEN] + "..."
+        )
         return MCPError(
-            code=mcp_types.INVALID_PARAMS, message=f"Unknown or expired taskId: {task_id}"
+            code=mcp_types.INVALID_PARAMS, message=f"Unknown or expired taskId: {shown}"
         )
 
-    async def _tasks_get(_ctx: ServerRequestContext[Any], params: _TaskIdParams) -> dict[str, Any]:
-        task = tasks.get(params.task_id)
+    async def _tasks_get(ctx: ServerRequestContext[Any], params: _TaskIdParams) -> dict[str, Any]:
+        task = tasks.get(params.task_id, await owner_key_of(ctx))
         if task is None:
             raise _unknown(params.task_id)
         return task
 
     async def _tasks_cancel(
-        _ctx: ServerRequestContext[Any], params: _TaskIdParams
+        ctx: ServerRequestContext[Any], params: _TaskIdParams
     ) -> dict[str, Any]:
-        if not tasks.request_cancel(params.task_id):
+        if not tasks.request_cancel(params.task_id, await owner_key_of(ctx)):
             raise _unknown(params.task_id)
         return {}
 
+    # NOTE: this relies on the low-level `Server.extensions` attribute (identifier -> settings), which
+    # `Server.get_capabilities()` reads when it builds `ServerCapabilities.extensions` -- the public seam the SDK's
+    # own `MCPServer(extensions=[...])` populates. On an `mcp` upgrade re-check that (a) that attribute still
+    # exists and feeds `server/discover`, (b) `add_request_handler` still routes the non-spec `tasks/*` names, and
+    # (c) a `resultType: "task"` tools/call result still passes the outbound sieve: test_tasks.py pins all three.
     server.extensions[TASKS_EXTENSION_ID] = {}
     server.add_request_handler("tasks/get", _TaskIdParams, _tasks_get)
     server.add_request_handler("tasks/cancel", _TaskIdParams, _tasks_cancel)

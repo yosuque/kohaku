@@ -57,6 +57,9 @@ from ._helpers import (
     make_no_fixed_compose_ctx,
 )
 
+# The owner every store test (and every wire test, via `_OwnerKey`) binds its tasks to.
+_OWNER = "owner-a"
+
 # ---------------------------------------------------------------------------
 # TaskStore (create_task_store, in-memory, no timer)
 # ---------------------------------------------------------------------------
@@ -65,44 +68,44 @@ from ._helpers import (
 class TestTaskStore:
     def test_create_returns_a_working_task_and_get_returns_the_same_snapshot(self) -> None:
         store = create_task_store()
-        created = store.create(ttl_ms=60_000, poll_interval_ms=2_000)
+        created = store.create(owner=_OWNER, ttl_ms=60_000, poll_interval_ms=2_000)
         assert created.task["status"] == "working"
         assert created.task["taskId"] == created.task_id
         assert created.task["ttlMs"] == 60_000
         assert created.task["pollIntervalMs"] == 2_000
-        assert store.get(created.task_id) == created.task
+        assert store.get(created.task_id, _OWNER) == created.task
 
     def test_complete_transitions_to_completed_and_a_second_complete_or_fail_is_a_no_op(
         self,
     ) -> None:
         store = create_task_store()
-        task_id = store.create(ttl_ms=60_000).task_id
+        task_id = store.create(owner=_OWNER, ttl_ms=60_000).task_id
         store.complete(task_id, {"spec": "x"})
-        task = store.get(task_id)
+        task = store.get(task_id, _OWNER)
         assert task is not None
         assert task["status"] == "completed"
         assert task["result"] == {"spec": "x"}
 
         # No-op once terminal (matches the store's "already-terminal" guard).
         store.fail(task_id, {"message": "too late"})
-        after = store.get(task_id)
+        after = store.get(task_id, _OWNER)
         assert after is not None
         assert after["status"] == "completed"
 
     def test_fail_transitions_to_failed_and_carries_the_error(self) -> None:
         store = create_task_store()
-        task_id = store.create(ttl_ms=60_000).task_id
+        task_id = store.create(owner=_OWNER, ttl_ms=60_000).task_id
         store.fail(task_id, {"message": "boom"})
-        task = store.get(task_id)
+        task = store.get(task_id, _OWNER)
         assert task is not None
         assert task["status"] == "failed"
         assert task["error"] == {"message": "boom"}
 
     def test_cancelled_transitions_to_cancelled_with_no_extra_fields(self) -> None:
         store = create_task_store()
-        task_id = store.create(ttl_ms=60_000).task_id
+        task_id = store.create(owner=_OWNER, ttl_ms=60_000).task_id
         store.cancelled(task_id)
-        task = store.get(task_id)
+        task = store.get(task_id, _OWNER)
         assert task is not None
         assert task["status"] == "cancelled"
         assert "result" not in task
@@ -112,49 +115,108 @@ class TestTaskStore:
         self,
     ) -> None:
         store = create_task_store()
-        created = store.create(ttl_ms=60_000)
+        created = store.create(owner=_OWNER, ttl_ms=60_000)
         assert created.abort.signal.aborted is False
 
-        assert store.request_cancel(created.task_id) is True
+        assert store.request_cancel(created.task_id, _OWNER) is True
         assert created.abort.signal.aborted is True
 
         # Idempotent: abort() firing does not itself flip status, so a second cancel still acks.
-        assert store.request_cancel(created.task_id) is True
+        assert store.request_cancel(created.task_id, _OWNER) is True
 
         # Once terminal, a cancel still acks (non-error per the spec's non-blocking framing).
         store.complete(created.task_id, {})
-        assert store.request_cancel(created.task_id) is True
+        assert store.request_cancel(created.task_id, _OWNER) is True
 
     def test_request_cancel_on_an_unknown_id_returns_false(self) -> None:
         store = create_task_store()
-        assert store.request_cancel("no-such-task") is False
+        assert store.request_cancel("no-such-task", _OWNER) is False
 
     def test_get_and_request_cancel_lazily_purge_an_expired_task(self) -> None:
         now = [1_000_000.0]
         store = create_task_store(lambda: now[0])
-        task_id = store.create(ttl_ms=1_000).task_id
-        task = store.get(task_id)
+        task_id = store.create(owner=_OWNER, ttl_ms=1_000).task_id
+        task = store.get(task_id, _OWNER)
         assert task is not None
         assert task["status"] == "working"
 
         now[0] += 1_001  # past ttl_ms
-        assert store.get(task_id) is None
-        assert store.request_cancel(task_id) is False
+        assert store.get(task_id, _OWNER) is None
+        assert store.request_cancel(task_id, _OWNER) is False
 
     def test_create_purges_other_expired_tasks(self) -> None:
         now = [0.0]
         store = create_task_store(lambda: now[0])
-        old = store.create(ttl_ms=100)
+        old = store.create(owner=_OWNER, ttl_ms=100)
         now[0] += 200  # old has expired
-        fresh = store.create(ttl_ms=100)
-        assert store.get(old.task_id) is None
-        fresh_task = store.get(fresh.task_id)
+        fresh = store.create(owner=_OWNER, ttl_ms=100)
+        assert store.get(old.task_id, _OWNER) is None
+        fresh_task = store.get(fresh.task_id, _OWNER)
         assert fresh_task is not None
         assert fresh_task["status"] == "working"
 
+    def test_a_different_owner_sees_the_task_exactly_as_unknown(self) -> None:
+        """Ownership: an id alone must neither reveal the task, nor return its result, nor cancel it."""
+        store = create_task_store()
+        created = store.create(owner=_OWNER, ttl_ms=60_000)
+        store.complete(created.task_id, {"capability": "bearer-write-token"})
+
+        assert store.get(created.task_id, "owner-b") is None
+        assert store.get(created.task_id, "owner-b") == store.get("no-such-task", "owner-b")
+        assert store.request_cancel(created.task_id, "owner-b") is False
+        assert store.request_cancel(created.task_id, "owner-b") == store.request_cancel(
+            "no-such-task", "owner-b"
+        )
+        # The creator is unaffected.
+        assert store.get(created.task_id, _OWNER) is not None
+
+    def test_a_foreign_cancel_does_not_fire_the_abort_signal(self) -> None:
+        store = create_task_store()
+        created = store.create(owner=_OWNER, ttl_ms=60_000)
+        assert store.request_cancel(created.task_id, "owner-b") is False
+        assert created.abort.signal.aborted is False
+
+    def test_an_expired_working_task_is_aborted_when_purged(self) -> None:
+        now = [0.0]
+        store = create_task_store(lambda: now[0])
+        created = store.create(owner=_OWNER, ttl_ms=100)
+        now[0] += 200
+        assert store.get(created.task_id, _OWNER) is None
+        assert created.abort.signal.aborted is True
+
+    def test_an_expired_terminal_task_is_not_aborted_when_purged(self) -> None:
+        now = [0.0]
+        store = create_task_store(lambda: now[0])
+        created = store.create(owner=_OWNER, ttl_ms=100)
+        store.complete(created.task_id, {})
+        now[0] += 200
+        assert store.get(created.task_id, _OWNER) is None
+        assert created.abort.signal.aborted is False
+
+    def test_cancel_requested_then_the_work_completes_normally_settles_as_completed(self) -> None:
+        """Cancellation is non-blocking and non-guaranteed: the abort firing does not itself flip the status, so
+        work that finishes anyway wins."""
+        store = create_task_store()
+        created = store.create(owner=_OWNER, ttl_ms=60_000)
+        assert store.request_cancel(created.task_id, _OWNER) is True
+        store.complete(created.task_id, {"spec": "x"})
+        task = store.get(created.task_id, _OWNER)
+        assert task is not None
+        assert task["status"] == "completed"
+
+    def test_cancel_requested_then_the_work_raises_settles_as_failed(self) -> None:
+        store = create_task_store()
+        created = store.create(owner=_OWNER, ttl_ms=60_000)
+        assert store.request_cancel(created.task_id, _OWNER) is True
+        store.fail(created.task_id, {"message": "boom"})
+        task = store.get(created.task_id, _OWNER)
+        assert task is not None
+        assert task["status"] == "failed"
+        assert task["error"] == {"message": "boom"}
+
     def test_timestamps_are_iso_8601_utc_with_millisecond_precision(self) -> None:
         store = create_task_store(lambda: 1_700_000_000_123.0)
-        task = store.create(ttl_ms=60_000).task
+        task = store.create(owner=_OWNER, ttl_ms=60_000).task
         assert task["createdAt"] == "2023-11-14T22:13:20.123Z"
         assert task["lastUpdatedAt"] == "2023-11-14T22:13:20.123Z"
 
@@ -186,13 +248,30 @@ _DOMAIN = TrendDomain()
 _AUTHZ = SimpleAuthz()
 
 
-def _deps(compose: Any) -> McpHostDeps:
-    return McpHostDeps(compose=compose, domain=_DOMAIN, authz=_AUTHZ, query_source="sales")
+class _OwnerKey:
+    """`McpHostDeps.rate_limit_key`: the owner every request is attributed to (a test flips `.value` to play a
+    second caller). The Tasks extension keys task ownership on the same value the rate limiter would use."""
+
+    def __init__(self, value: str = _OWNER) -> None:
+        self.value = value
+
+    def __call__(self, _ctx: Any) -> str:
+        return self.value
+
+
+def _deps(compose: Any, owner: _OwnerKey | None = None) -> McpHostDeps:
+    return McpHostDeps(
+        compose=compose,
+        domain=_DOMAIN,
+        authz=_AUTHZ,
+        query_source="sales",
+        rate_limit_key=owner if owner is not None else _OwnerKey(),
+    )
 
 
 @asynccontextmanager
 async def _attached(
-    compose: Any, *, tasks_enabled: bool, declare: bool = True
+    compose: Any, *, tasks_enabled: bool, declare: bool = True, owner: _OwnerKey | None = None
 ) -> AsyncIterator[tuple[Server, Client]]:
     """A server with kohaku attached (tasks_enabled as given) plus a modern-era in-process client.
 
@@ -203,7 +282,7 @@ async def _attached(
     server = Server("kohaku-tasks-test")
     attach_kohaku_to_mcp_server(
         server,
-        _deps(compose),
+        _deps(compose, owner),
         AttachOptions(renderer_html=RENDERER_HTML_PLAIN, tasks_enabled=tasks_enabled),
     )
     extensions = [advertise(TASKS_EXTENSION_ID)] if declare else None
@@ -322,7 +401,7 @@ class TestPerRequestOptInGate:
 
                 # The store actually holds a "working" task under this id (proves the tool call really started
                 # a task, not just stamped fake-looking fields on a synchronous response).
-                task = _store_of(server).get(result["taskId"])
+                task = _store_of(server).get(result["taskId"], _OWNER)
                 assert task is not None
                 assert task["status"] == "working"
                 await (
@@ -427,6 +506,11 @@ class TestTasksEnabledDefaultOffKillSwitch:
 
 
 class TestTasksGetAndCancel:
+    # Not ported from the TS "reachability" block: the `-32020 HeaderMismatch` test for a `tasks/get` / `tasks/cancel`
+    # request without `Mcp-Name: <taskId>`. That rule is SEP-2663's Streamable HTTP binding, enforced by the SDK's
+    # HTTP transport before any handler runs; this suite drives the in-process direct dispatcher, which has no
+    # headers, and kohaku's own code has no part in it.
+
     def test_tasks_get_reaches_the_handler_and_returns_the_task_snapshot(
         self, tmp_path: Path
     ) -> None:
@@ -435,7 +519,7 @@ class TestTasksGetAndCancel:
                 server,
                 client,
             ):
-                task_id = _store_of(server).create(ttl_ms=60_000).task_id
+                task_id = _store_of(server).create(owner=_OWNER, ttl_ms=60_000).task_id
                 result = await _raw_tasks_get(client, task_id)
                 assert result["taskId"] == task_id
                 assert result["status"] == "working"
@@ -451,7 +535,7 @@ class TestTasksGetAndCancel:
                 server,
                 client,
             ):
-                created = _store_of(server).create(ttl_ms=60_000)
+                created = _store_of(server).create(owner=_OWNER, ttl_ms=60_000)
                 await _raw_tasks_cancel(client, created.task_id)
                 assert created.abort.signal.aborted is True
 
@@ -495,12 +579,157 @@ class TestTasksGetAndCancel:
         asyncio.run(run())
 
 
+class TestTaskOwnership:
+    """Tasks are bound to their creator: a leaked task id alone must not read or cancel the task."""
+
+    def test_another_caller_gets_the_unknown_task_answer_for_get_and_cancel(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            owner = _OwnerKey("owner-a")
+            async with _attached(make_compose_ctx(tmp_path), tasks_enabled=True, owner=owner) as (
+                server,
+                client,
+            ):
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                task_id = created["taskId"]
+                for _attempt in range(50):
+                    polled = await _raw_tasks_get(client, task_id)
+                    if polled["status"] != "working":
+                        break
+                    await _tick(2)
+                assert polled["status"] == "completed"
+                assert "_meta" in polled["result"]  # the result carries the bearer write capability
+
+                owner.value = "owner-b"
+                answers = []
+                for send in (_raw_tasks_get, _raw_tasks_cancel):
+                    with pytest.raises(MCPError) as known:
+                        await send(client, task_id)
+                    with pytest.raises(MCPError) as unknown:
+                        await send(client, "no-such-task")
+                    assert known.value.code == mcp_types.INVALID_PARAMS
+                    assert known.value.code == unknown.value.code
+                    answers.append(known.value.message.replace(task_id, "ID"))
+                    # Indistinguishable from an unknown id apart from the echoed id itself.
+                    assert known.value.message.replace(
+                        task_id, "ID"
+                    ) == unknown.value.message.replace("no-such-task", "ID")
+                assert len(answers) == 2
+
+                # The creator still sees it.
+                owner.value = "owner-a"
+                again = await _raw_tasks_get(client, task_id)
+                assert again["status"] == "completed"
+                assert _store_of(server).get(task_id, "owner-b") is None
+
+        asyncio.run(run())
+
+    def test_a_foreign_tasks_cancel_does_not_abort_the_task(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            owner = _OwnerKey("owner-a")
+            async with _attached(make_compose_ctx(tmp_path), tasks_enabled=True, owner=owner) as (
+                server,
+                client,
+            ):
+                created = _store_of(server).create(owner="owner-a", ttl_ms=60_000)
+                owner.value = "owner-b"
+                with pytest.raises(MCPError):
+                    await _raw_tasks_cancel(client, created.task_id)
+                assert created.abort.signal.aborted is False
+
+        asyncio.run(run())
+
+    def test_the_echoed_task_id_in_the_error_message_is_capped(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with _attached(make_compose_ctx(tmp_path), tasks_enabled=True) as (_s, client):
+                huge = "x" * 5_000
+                for send in (_raw_tasks_get, _raw_tasks_cancel):
+                    with pytest.raises(MCPError) as excinfo:
+                        await send(client, huge)
+                    assert excinfo.value.code == mcp_types.INVALID_PARAMS
+                    assert len(excinfo.value.message) < 200
+                    assert "x" * 129 not in excinfo.value.message
+
+        asyncio.run(run())
+
+    def test_a_task_is_attributed_to_the_rate_limit_key_of_its_creating_call(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            owner = _OwnerKey("owner-a")
+            async with _attached(make_compose_ctx(tmp_path), tasks_enabled=True, owner=owner) as (
+                server,
+                client,
+            ):
+                owner.value = "owner-c"
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                assert _store_of(server).get(created["taskId"], "owner-c") is not None
+                assert _store_of(server).get(created["taskId"], "owner-a") is None
+                await _tick()
+
+        asyncio.run(run())
+
+
 # ---------------------------------------------------------------------------
 # Cancellation wiring and failure messages
 # ---------------------------------------------------------------------------
 
 
 class TestCancellationWiring:
+    def test_cancel_after_completion_and_a_double_cancel_ack_and_leave_the_status(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            async with _attached(make_compose_ctx(tmp_path), tasks_enabled=True) as (_s, client):
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                task_id = created["taskId"]
+                for _attempt in range(50):
+                    polled = await _raw_tasks_get(client, task_id)
+                    if polled["status"] != "working":
+                        break
+                    await _tick(2)
+                assert polled["status"] == "completed"
+
+                # A late cancel of a finished task is an ack, not an error, and does not flip the status;
+                # a second cancel is the same.
+                await _raw_tasks_cancel(client, task_id)
+                await _raw_tasks_cancel(client, task_id)
+                assert (await _raw_tasks_get(client, task_id))["status"] == "completed"
+
+        asyncio.run(run())
+
+    def test_a_double_cancel_of_a_working_task_acks_both_times(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            llm = _PendingUntilAbortLlm()
+            compose = make_no_fixed_compose_ctx(tmp_path, llm=llm)
+            async with _attached(compose, tasks_enabled=True) as (server, client):
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                task_id = created["taskId"]
+                await asyncio.wait_for(llm.started.wait(), timeout=5)
+                await _raw_tasks_cancel(client, task_id)
+                await _raw_tasks_cancel(client, task_id)
+                for _attempt in range(100):
+                    final = _store_of(server).get(task_id, _OWNER)
+                    if final is not None and final["status"] != "working":
+                        break
+                    await asyncio.sleep(0.01)
+                final = _store_of(server).get(task_id, _OWNER)
+                assert final is not None
+                assert final["status"] == "cancelled"
+                # ... and a cancel after the task settled as cancelled still acks.
+                await _raw_tasks_cancel(client, task_id)
+
+        asyncio.run(run())
+
     def test_a_real_tasks_cancel_settles_a_mid_generation_compose_as_cancelled(
         self, tmp_path: Path
     ) -> None:
@@ -516,7 +745,7 @@ class TestCancellationWiring:
                 )
                 assert result["resultType"] == "task"
                 task_id = result["taskId"]
-                task = _store_of(server).get(task_id)
+                task = _store_of(server).get(task_id, _OWNER)
                 assert task is not None
                 assert task["status"] == "working"
 
@@ -526,11 +755,11 @@ class TestCancellationWiring:
                 await _raw_tasks_cancel(client, task_id)
 
                 for _attempt in range(100):
-                    final = _store_of(server).get(task_id)
+                    final = _store_of(server).get(task_id, _OWNER)
                     if final is not None and final["status"] != "working":
                         break
                     await asyncio.sleep(0.01)
-                final = _store_of(server).get(task_id)
+                final = _store_of(server).get(task_id, _OWNER)
                 assert final is not None
                 assert final["status"] == "cancelled"
 
@@ -572,11 +801,11 @@ class TestCancellationWiring:
                     assert created["resultType"] == "task"
                     task_id = created["taskId"]
                     for _attempt in range(100):
-                        final = _store_of(server).get(task_id)
+                        final = _store_of(server).get(task_id, _OWNER)
                         if final is not None and final["status"] != "working":
                             break
                         await asyncio.sleep(0.01)
-                    final = _store_of(server).get(task_id)
+                    final = _store_of(server).get(task_id, _OWNER)
                     assert final is not None
                     assert final["status"] == "failed"
                     assert final["error"] == {"message": expected}
@@ -603,6 +832,7 @@ class TestCancellationWiring:
                 domain=_DOMAIN,
                 authz=_AUTHZ,
                 query_source="sales",
+                rate_limit_key=_OwnerKey(),
                 on_error=errors.append,
             )
             attach_kohaku_to_mcp_server(
@@ -617,7 +847,7 @@ class TestCancellationWiring:
                     client, "kohaku_compose", {"question": "Monthly revenue trend"}
                 )
                 for _attempt in range(100):
-                    final = _store_of(server).get(created["taskId"])
+                    final = _store_of(server).get(created["taskId"], _OWNER)
                     if final is not None and final["status"] != "working":
                         break
                     await asyncio.sleep(0.01)

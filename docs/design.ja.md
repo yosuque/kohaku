@@ -884,6 +884,13 @@ Tasks 拡張は、時間のかかるツール呼び出しを JSON-RPC のやり�
   かは未検証。この確認と、SDK をアップグレードするたびに `tasks/get`/`tasks/cancel` の到達可能性を再検証すること
   は、ユーザー側の作業として残っている。
 
+- **タスクは作成者に束縛される**: `TaskStore.create` は `owner` を取り、`get` / `requestCancel` は別の owner に
+  対しては未知の ID と全く同じ応答を返す(漏れたタスク ID だけでは、タスクの存在も、完了結果〈`_meta` に bearer
+  の書き込み capability を含む〉も、キャンセルもできない)。owner は、その呼び出しでレートリミッタが使うキー
+  (`rateLimitKey`、なければ解決済み principal の id、なければセッション id、なければ `"anonymous"`)なので、
+  束縛の強さはそのキー次第である。`resolvePrincipal` / `rateLimitKey` が無ければ、同じ接続を共有する呼び出し側
+  (TS のステートレス HTTP と stdio では全員)が owner を共有する。`ttlMs` が切れた実行中のタスクは purge 時に
+  abort され、未知タスクのエラーに載せる ID は 128 文字に切り詰める。Python 版でも同一。
 - **Python 版**(`kohaku.host_mcp.tasks`。配線は `host_mcp/server.py`): 設計は同じで、`AttachOptions.tasks_enabled`
   (既定 `False`。キルスイッチの意味も同じ)、同じ定数(`ttlMs` 600 000、`pollIntervalMs` 2 000)、同じ固定
   クライアント向け失敗メッセージ(`_client_failure_message` が `clientFailureMessage` に対応)を持つ。インストール

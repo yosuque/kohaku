@@ -79,8 +79,10 @@ class CreatedTask:
 
 
 class TaskStore(Protocol):
-    def create(self, *, ttl_ms: int, poll_interval_ms: int | None = None) -> CreatedTask:
-        """Creates a new task in "working" status."""
+    def create(
+        self, *, owner: str, ttl_ms: int, poll_interval_ms: int | None = None
+    ) -> CreatedTask:
+        """Creates a new task in "working" status, bound to `owner` (see `create_task_store`)."""
         ...
 
     def complete(self, task_id: str, result: dict[str, Any]) -> None:
@@ -98,16 +100,18 @@ class TaskStore(Protocol):
         unknown, expired, or already terminal."""
         ...
 
-    def get(self, task_id: str) -> TaskSnapshot | None:
-        """Looks up a task by id. Lazily purges expired entries first, so this returns `None` for both an
-        unknown id and one whose `ttlMs` has elapsed."""
+    def get(self, task_id: str, owner: str) -> TaskSnapshot | None:
+        """Looks up a task by id on behalf of `owner`. Lazily purges expired entries first, so this returns
+        `None` for an unknown id, one whose `ttlMs` has elapsed, and — indistinguishably — one that belongs to a
+        different owner (an id alone must not reveal that a task exists)."""
         ...
 
-    def request_cancel(self, task_id: str) -> bool:
-        """Requests cancellation (spec: non-blocking, non-guaranteed — this only *asks*). Fires the task's abort
-        controller when it is still "working" (idempotent). Returns `False` only for an unknown/expired id — an
-        already-terminal task still acks `True` (a late cancel of a task that already finished is not an error
-        per the spec's non-blocking framing). TS returns `{ok: boolean}`; Python returns the bool directly."""
+    def request_cancel(self, task_id: str, owner: str) -> bool:
+        """Requests cancellation on behalf of `owner` (spec: non-blocking, non-guaranteed — this only *asks*).
+        Fires the task's abort controller when it is still "working" (idempotent). Returns `False` only for an
+        unknown/expired id or one owned by someone else (indistinguishable, as in `get`) — an already-terminal
+        task still acks `True` (a late cancel of a task that already finished is not an error per the spec's
+        non-blocking framing). TS returns `{ok: boolean}`; Python returns the bool directly."""
         ...
 
 
@@ -117,6 +121,7 @@ class _TaskRecord:
     abort: AbortController
     created_at_ms: float
     ttl_ms: float
+    owner: str
 
 
 def create_task_store(now: Callable[[], float] = _now_ms) -> TaskStore:
@@ -130,7 +135,15 @@ def create_task_store(now: Callable[[], float] = _now_ms) -> TaskStore:
 
     Expiry: **no timer**. Every public entry point (`create` / `get` / `request_cancel`) first purges any record
     whose `ttlMs` has elapsed (lazy, on-access expiry). Memory is bounded because tasks are short-lived (bounded by
-    `COMPOSE_TASK_TTL_MS`) and created only by explicit task-capable tool calls, not by a background process.
+    `COMPOSE_TASK_TTL_MS`) and created only by explicit task-capable tool calls, not by a background process. A
+    still-working task that expires is also aborted (its body must not keep running unobservably).
+
+    Ownership: every task is bound to an `owner` string (server.py derives it from the same key the rate limiter
+    uses: `rate_limit_key`, else the resolved principal's id, else the connection id). `get` / `request_cancel`
+    answer exactly like an unknown id when the caller's owner differs, so a leaked task id alone neither reveals
+    that the task exists, nor lets its holder read the completed result (which carries the bearer write
+    capability in `_meta`), nor cancel it. The binding is only as strong as that key: with no `resolve_principal`
+    / `rate_limit_key` wired, callers sharing a connection id (or the degraded anonymous fallback) share an owner.
 
     `now` returns epoch milliseconds (injectable for tests).
     """
@@ -143,7 +156,9 @@ def create_task_store(now: Callable[[], float] = _now_ms) -> TaskStore:
             for task_id, record in records.items()
             if now_ms - record.created_at_ms > record.ttl_ms
         ]:
-            del records[task_id]
+            expired = records.pop(task_id)
+            if expired.task["status"] == "working":
+                expired.abort.abort(RuntimeError("task expired"))
 
     def transition_if_working(task_id: str, patch: dict[str, Any]) -> None:
         record = records.get(task_id)
@@ -162,7 +177,9 @@ def create_task_store(now: Callable[[], float] = _now_ms) -> TaskStore:
         record.task = settled
 
     class _Store:
-        def create(self, *, ttl_ms: int, poll_interval_ms: int | None = None) -> CreatedTask:
+        def create(
+            self, *, owner: str, ttl_ms: int, poll_interval_ms: int | None = None
+        ) -> CreatedTask:
             purge_expired()
             task_id = str(uuid.uuid4())
             now_ms = now()
@@ -176,7 +193,7 @@ def create_task_store(now: Callable[[], float] = _now_ms) -> TaskStore:
                 **({"pollIntervalMs": poll_interval_ms} if poll_interval_ms is not None else {}),
             }
             records[task_id] = _TaskRecord(
-                task=task, abort=abort, created_at_ms=now_ms, ttl_ms=ttl_ms
+                task=task, abort=abort, created_at_ms=now_ms, ttl_ms=ttl_ms, owner=owner
             )
             return CreatedTask(task_id=task_id, abort=abort, task=task)
 
@@ -189,15 +206,15 @@ def create_task_store(now: Callable[[], float] = _now_ms) -> TaskStore:
         def cancelled(self, task_id: str) -> None:
             transition_if_working(task_id, {"status": "cancelled"})
 
-        def get(self, task_id: str) -> TaskSnapshot | None:
+        def get(self, task_id: str, owner: str) -> TaskSnapshot | None:
             purge_expired()
             record = records.get(task_id)
-            return record.task if record is not None else None
+            return record.task if record is not None and record.owner == owner else None
 
-        def request_cancel(self, task_id: str) -> bool:
+        def request_cancel(self, task_id: str, owner: str) -> bool:
             purge_expired()
             record = records.get(task_id)
-            if record is None:
+            if record is None or record.owner != owner:
                 return False
             if record.task["status"] == "working":
                 record.abort.abort(RuntimeError("cancelled via tasks/cancel"))
