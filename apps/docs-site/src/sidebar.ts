@@ -53,6 +53,21 @@ export const SIDEBAR_EN: SidebarGroup[] = [
       { text: "Release", link: "/docs/runbooks/release" },
     ],
   },
+  {
+    text: "Decisions (ADR)",
+    items: [
+      { text: "ADR template", link: "/docs/adr/0000-template" },
+      { text: "0001. Record architecture decisions", link: "/docs/adr/0001-record-architecture-decisions" },
+      {
+        text: "0002. Lockfile-only dependency updates",
+        link: "/docs/adr/0002-update-dependencies-lockfile-only-with-cooldown",
+      },
+      {
+        text: "0003. No sampling parameters (Python claude)",
+        link: "/docs/adr/0003-python-claude-adapter-sends-no-sampling-parameters",
+      },
+    ],
+  },
 ];
 
 export const SIDEBAR_JA: SidebarGroup[] = [
@@ -82,6 +97,21 @@ export const SIDEBAR_JA: SidebarGroup[] = [
   {
     text: "Runbooks",
     items: [{ text: "リリース", link: "/ja/docs/runbooks/release" }],
+  },
+  {
+    text: "設計判断の記録 (ADR)",
+    items: [
+      { text: "ADR テンプレート", link: "/ja/docs/adr/0000-template" },
+      { text: "0001. 判断を ADR として記録する", link: "/ja/docs/adr/0001-record-architecture-decisions" },
+      {
+        text: "0002. 依存の更新は lockfile のみ",
+        link: "/ja/docs/adr/0002-update-dependencies-lockfile-only-with-cooldown",
+      },
+      {
+        text: "0003. sampling parameter を送らない(Python claude)",
+        link: "/ja/docs/adr/0003-python-claude-adapter-sends-no-sampling-parameters",
+      },
+    ],
   },
 ];
 
