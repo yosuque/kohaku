@@ -475,7 +475,11 @@ describe("cross-language golden (composer, L1 filter injection)", () => {
   });
 
   it("every injected Spec in the fixture is accepted by parseSpec", () => {
-    for (const c of fixture.l1Filters.inject) parseSpec(JSON.parse(JSON.stringify(c.expected.spec)));
+    // Only a Spec the injection produced is checked: an unchanged input may be deliberately invalid (a case
+    // that carries a reserved `_` query param in its ref, to prove the descriptor is skipped).
+    const injected = fixture.l1Filters.inject.filter((c) => c.expected.injected.length > 0);
+    expect(injected.length).toBeGreaterThan(0);
+    for (const c of injected) parseSpec(JSON.parse(JSON.stringify(c.expected.spec)));
   });
 
   it("policyFingerprint reproduces the fixture (l1Filters folds in only when true)", async () => {

@@ -7415,6 +7415,162 @@
         }
       },
       {
+        "name": "a reserved _-prefixed queryParam is skipped",
+        "spec": {
+          "kohaku": "0.2",
+          "intent": {
+            "canonical": "sales.summary",
+            "params": {
+              "groupBy": "region"
+            },
+            "hash": "sha256:abababababababababababababababababababababababababababababababab"
+          },
+          "dataVersion": "sales@v1",
+          "components": [
+            {
+              "id": "root",
+              "type": "layout.stack",
+              "props": {},
+              "children": [
+                "title1",
+                "chart1",
+                "table1"
+              ]
+            },
+            {
+              "id": "title1",
+              "type": "text.heading",
+              "props": {
+                "text": "Sales",
+                "level": 2
+              }
+            },
+            {
+              "id": "chart1",
+              "type": "presentChart",
+              "props": {
+                "kind": "bar"
+              },
+              "data": {
+                "$ref": "query://sales/summary?_limit=europe"
+              }
+            },
+            {
+              "id": "table1",
+              "type": "presentSpreadsheet",
+              "props": {},
+              "data": {
+                "$ref": "query://sales/summary?_limit=europe"
+              }
+            }
+          ],
+          "events": [
+            {
+              "on": "table1.rowClick",
+              "emit": "intent.patch",
+              "payload": {
+                "drilldown": "$row.region"
+              }
+            }
+          ],
+          "provenance": {
+            "tier": "L1",
+            "composedBy": "composer",
+            "cache": "miss"
+          }
+        },
+        "descriptors": [
+          {
+            "param": "region",
+            "queryParam": "_limit",
+            "paths": [
+              "summary"
+            ],
+            "label": "Region",
+            "options": [
+              {
+                "value": "japan",
+                "label": "Japan"
+              },
+              {
+                "value": "europe",
+                "label": "Europe"
+              },
+              {
+                "value": "apac",
+                "label": "APAC"
+              }
+            ]
+          }
+        ],
+        "expected": {
+          "spec": {
+            "kohaku": "0.2",
+            "intent": {
+              "canonical": "sales.summary",
+              "params": {
+                "groupBy": "region"
+              },
+              "hash": "sha256:abababababababababababababababababababababababababababababababab"
+            },
+            "dataVersion": "sales@v1",
+            "components": [
+              {
+                "id": "root",
+                "type": "layout.stack",
+                "props": {},
+                "children": [
+                  "title1",
+                  "chart1",
+                  "table1"
+                ]
+              },
+              {
+                "id": "title1",
+                "type": "text.heading",
+                "props": {
+                  "text": "Sales",
+                  "level": 2
+                }
+              },
+              {
+                "id": "chart1",
+                "type": "presentChart",
+                "props": {
+                  "kind": "bar"
+                },
+                "data": {
+                  "$ref": "query://sales/summary?_limit=europe"
+                }
+              },
+              {
+                "id": "table1",
+                "type": "presentSpreadsheet",
+                "props": {},
+                "data": {
+                  "$ref": "query://sales/summary?_limit=europe"
+                }
+              }
+            ],
+            "events": [
+              {
+                "on": "table1.rowClick",
+                "emit": "intent.patch",
+                "payload": {
+                  "drilldown": "$row.region"
+                }
+              }
+            ],
+            "provenance": {
+              "tier": "L1",
+              "composedBy": "composer",
+              "cache": "miss"
+            }
+          },
+          "injected": []
+        }
+      },
+      {
         "name": "duplicate option values are de-duplicated, first wins",
         "spec": {
           "kohaku": "0.2",
@@ -8027,6 +8183,372 @@
           },
           "injected": [],
           "skipped": "invalid"
+        }
+      },
+      {
+        "name": "idempotency: a second pass over an already-injected Spec injects nothing",
+        "spec": {
+          "kohaku": "0.2",
+          "intent": {
+            "canonical": "sales.summary",
+            "params": {
+              "groupBy": "region"
+            },
+            "hash": "sha256:abababababababababababababababababababababababababababababababab"
+          },
+          "dataVersion": "sales@v1",
+          "components": [
+            {
+              "id": "root",
+              "type": "layout.stack",
+              "props": {},
+              "children": [
+                "filter-region",
+                "filter-groupBy",
+                "title1",
+                "chart1",
+                "table1"
+              ]
+            },
+            {
+              "id": "filter-region",
+              "type": "control.select",
+              "props": {
+                "label": "Region",
+                "value": "europe",
+                "options": [
+                  {
+                    "value": "japan",
+                    "label": "Japan"
+                  },
+                  {
+                    "value": "europe",
+                    "label": "Europe"
+                  },
+                  {
+                    "value": "apac",
+                    "label": "APAC"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "filter-groupBy",
+              "type": "control.select",
+              "props": {
+                "label": "Group by",
+                "value": "region",
+                "options": [
+                  {
+                    "value": "region",
+                    "label": "By region"
+                  },
+                  {
+                    "value": "product",
+                    "label": "By product"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "title1",
+              "type": "text.heading",
+              "props": {
+                "text": "Sales",
+                "level": 2
+              }
+            },
+            {
+              "id": "chart1",
+              "type": "presentChart",
+              "props": {
+                "kind": "bar"
+              },
+              "data": {
+                "$ref": "query://sales/summary?geo=europe&groupBy=region",
+                "bind": {
+                  "geo": {
+                    "$state": "region",
+                    "values": [
+                      "japan",
+                      "europe",
+                      "apac"
+                    ]
+                  },
+                  "groupBy": {
+                    "$state": "groupBy",
+                    "values": [
+                      "region",
+                      "product"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "id": "table1",
+              "type": "presentSpreadsheet",
+              "props": {},
+              "data": {
+                "$ref": "query://sales/summary?geo=europe&groupBy=region",
+                "bind": {
+                  "geo": {
+                    "$state": "region",
+                    "values": [
+                      "japan",
+                      "europe",
+                      "apac"
+                    ]
+                  },
+                  "groupBy": {
+                    "$state": "groupBy",
+                    "values": [
+                      "region",
+                      "product"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "events": [
+            {
+              "on": "table1.rowClick",
+              "emit": "intent.patch",
+              "payload": {
+                "drilldown": "$row.region"
+              }
+            },
+            {
+              "on": "filter-region.change",
+              "emit": "state.set",
+              "payload": {
+                "key": "region",
+                "value": "$value"
+              }
+            },
+            {
+              "on": "filter-groupBy.change",
+              "emit": "state.set",
+              "payload": {
+                "key": "groupBy",
+                "value": "$value"
+              }
+            }
+          ],
+          "provenance": {
+            "tier": "L1",
+            "composedBy": "composer",
+            "cache": "miss"
+          },
+          "state": {
+            "region": "europe",
+            "groupBy": "region"
+          }
+        },
+        "descriptors": [
+          {
+            "param": "region",
+            "queryParam": "geo",
+            "paths": [
+              "summary"
+            ],
+            "label": "Region",
+            "options": [
+              {
+                "value": "japan",
+                "label": "Japan"
+              },
+              {
+                "value": "europe",
+                "label": "Europe"
+              },
+              {
+                "value": "apac",
+                "label": "APAC"
+              }
+            ]
+          },
+          {
+            "param": "groupBy",
+            "queryParam": "groupBy",
+            "paths": [
+              "summary"
+            ],
+            "label": "Group by",
+            "options": [
+              {
+                "value": "region",
+                "label": "By region"
+              },
+              {
+                "value": "product",
+                "label": "By product"
+              }
+            ]
+          }
+        ],
+        "expected": {
+          "spec": {
+            "kohaku": "0.2",
+            "intent": {
+              "canonical": "sales.summary",
+              "params": {
+                "groupBy": "region"
+              },
+              "hash": "sha256:abababababababababababababababababababababababababababababababab"
+            },
+            "dataVersion": "sales@v1",
+            "components": [
+              {
+                "id": "root",
+                "type": "layout.stack",
+                "props": {},
+                "children": [
+                  "filter-region",
+                  "filter-groupBy",
+                  "title1",
+                  "chart1",
+                  "table1"
+                ]
+              },
+              {
+                "id": "filter-region",
+                "type": "control.select",
+                "props": {
+                  "label": "Region",
+                  "value": "europe",
+                  "options": [
+                    {
+                      "value": "japan",
+                      "label": "Japan"
+                    },
+                    {
+                      "value": "europe",
+                      "label": "Europe"
+                    },
+                    {
+                      "value": "apac",
+                      "label": "APAC"
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "filter-groupBy",
+                "type": "control.select",
+                "props": {
+                  "label": "Group by",
+                  "value": "region",
+                  "options": [
+                    {
+                      "value": "region",
+                      "label": "By region"
+                    },
+                    {
+                      "value": "product",
+                      "label": "By product"
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "title1",
+                "type": "text.heading",
+                "props": {
+                  "text": "Sales",
+                  "level": 2
+                }
+              },
+              {
+                "id": "chart1",
+                "type": "presentChart",
+                "props": {
+                  "kind": "bar"
+                },
+                "data": {
+                  "$ref": "query://sales/summary?geo=europe&groupBy=region",
+                  "bind": {
+                    "geo": {
+                      "$state": "region",
+                      "values": [
+                        "japan",
+                        "europe",
+                        "apac"
+                      ]
+                    },
+                    "groupBy": {
+                      "$state": "groupBy",
+                      "values": [
+                        "region",
+                        "product"
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "id": "table1",
+                "type": "presentSpreadsheet",
+                "props": {},
+                "data": {
+                  "$ref": "query://sales/summary?geo=europe&groupBy=region",
+                  "bind": {
+                    "geo": {
+                      "$state": "region",
+                      "values": [
+                        "japan",
+                        "europe",
+                        "apac"
+                      ]
+                    },
+                    "groupBy": {
+                      "$state": "groupBy",
+                      "values": [
+                        "region",
+                        "product"
+                      ]
+                    }
+                  }
+                }
+              }
+            ],
+            "events": [
+              {
+                "on": "table1.rowClick",
+                "emit": "intent.patch",
+                "payload": {
+                  "drilldown": "$row.region"
+                }
+              },
+              {
+                "on": "filter-region.change",
+                "emit": "state.set",
+                "payload": {
+                  "key": "region",
+                  "value": "$value"
+                }
+              },
+              {
+                "on": "filter-groupBy.change",
+                "emit": "state.set",
+                "payload": {
+                  "key": "groupBy",
+                  "value": "$value"
+                }
+              }
+            ],
+            "provenance": {
+              "tier": "L1",
+              "composedBy": "composer",
+              "cache": "miss"
+            },
+            "state": {
+              "region": "europe",
+              "groupBy": "region"
+            }
+          },
+          "injected": []
         }
       },
       {

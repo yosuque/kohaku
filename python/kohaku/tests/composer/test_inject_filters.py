@@ -255,7 +255,7 @@ def test_skips_a_descriptor_whose_query_param_is_in_the_reserved_namespace() -> 
     from dataclasses import replace
 
     reserved = replace(REGION, queryParam="_limit")
-    spec = l1_spec("query://sales/summary?geo=europe")
+    spec = l1_spec("query://sales/summary?_limit=europe")
     assert inject_filters(spec, [reserved]).injected == []
 
 

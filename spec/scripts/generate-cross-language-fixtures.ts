@@ -58,7 +58,7 @@ import {
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
 // Relative, same reasoning: inject-filters.ts imports only spec-core; policy-fingerprint.ts imports only
-// spec-core at runtime (its llm / context imports are type-only and erased).
+// spec-core and inject-filters.ts at runtime (its llm / context imports are type-only and erased).
 import { filterDescriptorsHash, policyFingerprint } from "../../packages/composer/src/policy-fingerprint.js";
 import { injectFilters } from "../../packages/composer/src/post/inject-filters.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";

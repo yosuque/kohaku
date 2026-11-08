@@ -1,4 +1,6 @@
 import { type FilterDescriptor, SPEC_VERSION, type UISpec } from "@kohaku-ui/spec-core";
+// Relative (not "@kohaku-ui/composer"), same reasoning as cross-language.test.ts: spec does not declare composer.
+import { injectFilters } from "../../packages/composer/src/post/inject-filters.js";
 
 /**
  * Inputs for the cross-language golden of composer's `injectFilters` and `policyFingerprint` (the L1 filter
@@ -153,6 +155,11 @@ export const INJECT_FILTERS_CASES: InjectFiltersCase[] = [
     descriptors: [REGION],
   },
   {
+    name: "a reserved _-prefixed queryParam is skipped",
+    spec: l1Spec("query://sales/summary?_limit=europe"),
+    descriptors: [{ ...REGION, queryParam: "_limit" }],
+  },
+  {
     name: "duplicate option values are de-duplicated, first wins",
     spec: l1Spec(REF),
     descriptors: [REGION_DUP_OPTIONS],
@@ -166,6 +173,11 @@ export const INJECT_FILTERS_CASES: InjectFiltersCase[] = [
     name: "a Spec that cannot carry state / bind (kohaku 0.1) fails validation",
     spec: { ...l1Spec(REF), kohaku: "0.1" },
     descriptors: [REGION],
+  },
+  {
+    name: "idempotency: a second pass over an already-injected Spec injects nothing",
+    spec: injectFilters(l1Spec(REF), [REGION, GROUP_BY]).spec,
+    descriptors: [REGION, GROUP_BY],
   },
   { name: "64 variants fit the default cap", spec: l1Spec(REF), descriptors: [regionWithOptions(32)] },
   { name: "66 variants exceed the default cap", spec: l1Spec(REF), descriptors: [regionWithOptions(33)] },
