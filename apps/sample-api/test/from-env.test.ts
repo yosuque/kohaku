@@ -131,6 +131,34 @@ describe("createAuthzFromEnv", () => {
     ).resolves.toMatchObject({ principal: { id: "u" } });
   });
 
+  it("requireCapabilityTenant (REST host opt-in) rejects a tenant-less capability, unless KOHAKU_JWT_REQUIRE_TENANT=0", async () => {
+    const env = { KOHAKU_AUTHZ: "jwt", KOHAKU_JWT_SECRET: SECRET, KOHAKU_CAPABILITY_SECRET: CAP_SECRET };
+    const scopes = [{ kind: "read" as const, ref: "query://s/x" }];
+    const req = { kind: "read" as const, ref: "query://s/x" };
+
+    // Off by default: sample-mcp never resolves a tenant, so its capabilities carry none.
+    const lenient = createAuthzFromEnv(env);
+    expect(
+      (await lenient.authz.verify(await lenient.authz.issueCapability({ id: "u" }, scopes), req)).ok,
+    ).toBe(true);
+
+    const strict = createAuthzFromEnv(env, { requireCapabilityTenant: true });
+    expect((await strict.authz.verify(await strict.authz.issueCapability({ id: "u" }, scopes), req)).ok).toBe(
+      false,
+    );
+    const bound = await strict.authz.issueCapability({ id: "u" }, scopes, { tenant: "acme" });
+    expect(await strict.authz.verify(bound, req)).toMatchObject({ ok: true, tenant: "acme" });
+
+    // A deployment that opted out of tenant-bearing JWTs gets no capability tenant requirement either.
+    const optedOut = createAuthzFromEnv(
+      { ...env, KOHAKU_JWT_REQUIRE_TENANT: "0" },
+      { requireCapabilityTenant: true },
+    );
+    expect(
+      (await optedOut.authz.verify(await optedOut.authz.issueCapability({ id: "u" }, scopes), req)).ok,
+    ).toBe(true);
+  });
+
   it("refuses the fixed dev secret once storage leaves file/memory, or once authz is jwt (#11)", () => {
     // hmac + file/memory: the fixed fallback is fine (the demo default this package documents).
     expect(() => createAuthzFromEnv({})).not.toThrow();

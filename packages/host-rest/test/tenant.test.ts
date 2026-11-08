@@ -313,3 +313,44 @@ describe("View Lineage audit-plane tenant filtering (GET /lineage)", () => {
     expect(body.events).toHaveLength(2);
   });
 });
+
+describe("capability issuance binds the resolved tenant (SPEC CAP-TEN-001)", () => {
+  function issuingAuthz(): { authz: AuthzPort; issued: { tenant?: string }[] } {
+    const issued: { tenant?: string }[] = [];
+    return {
+      issued,
+      authz: {
+        async issueCapability(_principal, _scopes, opts) {
+          issued.push({ ...(opts?.tenant != null ? { tenant: opts.tenant } : {}) });
+          return "cap";
+        },
+        async verify() {
+          return { ok: true, principal: { id: "u", roles: ["user"] } };
+        },
+      },
+    };
+  }
+
+  it("/compose issues the capability with the tenant deps.tenant resolved (never one the body declares)", async () => {
+    const { authz, issued } = issuingAuthz();
+    const app = createKohakuRoutes(makeDeps({ authz }));
+    expect((await app.request("/compose", composeReq("acme"))).status).toBe(200);
+    expect(issued).toEqual([{ tenant: "acme" }]);
+  });
+
+  it("/compose/stream issues the capability with the resolved tenant too", async () => {
+    const { authz, issued } = issuingAuthz();
+    const app = createKohakuRoutes(makeDeps({ authz }));
+    const res = await app.request("/compose/stream", composeReq("acme"));
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(issued).toEqual([{ tenant: "acme" }]);
+  });
+
+  it("without a resolved tenant the issue options carry none (the legacy shape)", async () => {
+    const { authz, issued } = issuingAuthz();
+    const app = createKohakuRoutes(makeDeps({ authz }));
+    expect((await app.request("/compose", composeReq())).status).toBe(200);
+    expect(issued).toEqual([{}]);
+  });
+});

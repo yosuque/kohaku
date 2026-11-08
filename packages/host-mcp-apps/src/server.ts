@@ -308,6 +308,8 @@ async function composeForDelivery(
   // hallucinated/injected action.invoke action name becoming a bearer write scope), symmetric with the
   // REST profile's issueSpecCapability wrapper. If listOperations rejects, issueSpecCapabilitySafely falls
   // back to an empty allowed set (fail-closed for writes; delivery proceeds) and reports the rejection.
+  // No tenant is passed: the MCP profile never resolves one (design.md #63), so this capability binds none
+  // (SPEC CAP-TEN-001 is a REST data-plane rule).
   const capability = await hostCore.issueSpecCapabilitySafely(
     ctx.deps.authz,
     ctx.principal,

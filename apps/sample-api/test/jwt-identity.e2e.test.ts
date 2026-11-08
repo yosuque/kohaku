@@ -193,13 +193,19 @@ describe("sample-api with KOHAKU_AUTHZ=jwt wiring", () => {
 
       const first = await invoke();
       expect(first.status).toBe(403);
-      const { error } = (await first.json()) as { error: { code: string; approval: { payloadHash: string } } };
+      const { error } = (await first.json()) as {
+        error: { code: string; approval: { payloadHash: string } };
+      };
       expect(error.code).toBe("APPROVAL_REQUIRED");
 
       const minted = await app.request("/api/kohaku/approvals", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${approver}` },
-        body: JSON.stringify({ action: "publish", payloadHash: error.approval.payloadHash, requesterId: "req" }),
+        body: JSON.stringify({
+          action: "publish",
+          payloadHash: error.approval.payloadHash,
+          requesterId: "req",
+        }),
       });
       expect(minted.status).toBe(200);
       const { approval } = (await minted.json()) as { approval: string };

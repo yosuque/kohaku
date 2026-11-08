@@ -730,12 +730,16 @@ describe("promotions status filter / changes_requested recovery", () => {
 
 describe("promotions preview (POST /promotions/:id/preview)", () => {
   /** A fake AuthzPort that records issueCapability calls. */
-  function spyAuthz(): AuthzPort & { issued: { scopes: unknown; ttl?: number }[] } {
-    const issued: { scopes: unknown; ttl?: number }[] = [];
+  function spyAuthz(): AuthzPort & { issued: { scopes: unknown; ttl?: number; tenant?: string }[] } {
+    const issued: { scopes: unknown; ttl?: number; tenant?: string }[] = [];
     return {
       issued,
       async issueCapability(_principal, scopes, opts) {
-        issued.push({ scopes, ...(opts?.ttlSeconds != null ? { ttl: opts.ttlSeconds } : {}) });
+        issued.push({
+          scopes,
+          ...(opts?.ttlSeconds != null ? { ttl: opts.ttlSeconds } : {}),
+          ...(opts?.tenant != null ? { tenant: opts.tenant } : {}),
+        });
         return "cap-preview-token";
       },
       async verify() {
@@ -784,6 +788,21 @@ describe("promotions preview (POST /promotions/:id/preview)", () => {
     // The capability is only the read scope of the single generation-time ref (does not include write).
     expect(authz.issued).toHaveLength(1);
     expect(authz.issued[0]!.scopes).toEqual([{ kind: "read", ref: "query://sales/trend?metric=revenue" }]);
+  });
+
+  it("binds the request's resolved tenant into the preview capability (SPEC CAP-TEN-001)", async () => {
+    const authz = spyAuthz();
+    const app = createKohakuRoutes({
+      ...deps(previewPromotions()),
+      authz,
+      tenant: (c) => c.req.header("x-kohaku-tenant") || undefined,
+    });
+    const res = await app.request("/promotions/full/preview", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-kohaku-tenant": "acme" },
+    });
+    expect(res.status).toBe(200);
+    expect(authz.issued[0]!.tenant).toBe("acme");
   });
 
   it("a candidate with no recorded ref returns html/sha256 only and does not issue a capability", async () => {

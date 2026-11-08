@@ -20,6 +20,7 @@ import {
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
+import { takeRateLimit } from "./rate-limit.js";
 import { ActionBodySchema } from "./schemas.js";
 import {
   ANONYMOUS,
@@ -92,25 +93,66 @@ function resolvePrincipal(deps: KohakuHostDeps, c: Context, verdict: VerifyResul
   return c.json(errorBody("CAPABILITY_DENIED", "capability verified without a principal"), 403);
 }
 
+/** Client message when the tenant bound into a capability and the request's resolved tenant disagree. */
+const CAPABILITY_TENANT_MISMATCH_MESSAGE = "capability tenant does not match the request tenant";
+
+/**
+ * The tenant a verified capability runs under (SPEC CAP-TEN-001). The tenant signed into the capability is
+ * authoritative: when the host also resolves a tenant for this request (`deps.tenant`) and it differs, the
+ * request is denied (fail-closed) rather than silently preferring either side. A capability that binds no
+ * tenant (issued by a host that never resolved one, or before tenants were signed) falls back to the host's
+ * own resolution, which keeps pre-upgrade tokens working. Returns the Response to return as-is on a mismatch.
+ */
+async function effectiveTenant(
+  deps: KohakuHostDeps,
+  c: Context,
+  verdict: VerifyResult,
+): Promise<Response | string | undefined> {
+  const resolved = await resolveTenant(c, deps);
+  const bound = verdict.tenant;
+  if (bound == null || bound === "") return resolved;
+  if (resolved != null && resolved !== bound) {
+    return c.json(errorBody("CAPABILITY_DENIED", CAPABILITY_TENANT_MISMATCH_MESSAGE), 403);
+  }
+  return bound;
+}
+
+/** What `authorizeCapability` hands a capability-gated handler: who acts, and under which tenant. */
+interface AuthorizedCapability {
+  principal: Principal;
+  tenant: string | undefined;
+}
+
 /**
  * The shared authorization prologue of the capability-gated routes: verify the bearer token against
  * `request` (a thrown `verify` is the 503 of `verifyCapability`), deny a `!ok` verdict with 403
- * CAPABILITY_DENIED (carrying the verdict's own reason), then resolve the principal to act as
- * (`resolvePrincipal`). Returns the Response to return as-is on any denial, or the resolved Principal.
+ * CAPABILITY_DENIED (carrying the verdict's own reason), resolve the principal to act as
+ * (`resolvePrincipal`), settle the tenant (`effectiveTenant`), and finally take the route's rate-limit token
+ * keyed by that verified (tenant, principal, routeClass) -- after verification, so the key is never taken
+ * from unauthenticated request headers. Returns the Response to return as-is on any denial, or the resolved
+ * principal and tenant.
  */
 async function authorizeCapability(
-  deps: KohakuHostDeps,
+  ctx: RouteContext,
   c: Context,
   endpoint: string,
   token: string,
   request: VerifyRequest,
-): Promise<Response | Principal> {
+  routeClass: "action" | "resolve",
+): Promise<Response | AuthorizedCapability> {
+  const { deps } = ctx;
   const verdict = await verifyCapability(deps, c, endpoint, token, request);
   if (verdict instanceof Response) return verdict;
   if (!verdict.ok) {
     return c.json(errorBody("CAPABILITY_DENIED", verdict.reason ?? "capability denied"), 403);
   }
-  return resolvePrincipal(deps, c, verdict);
+  const principal = resolvePrincipal(deps, c, verdict);
+  if (principal instanceof Response) return principal;
+  const tenant = await effectiveTenant(deps, c, verdict);
+  if (tenant instanceof Response) return tenant;
+  const limited = await takeRateLimit(ctx, c, { tenant, principal: principal.id, routeClass });
+  if (limited != null) return limited;
+  return { principal, tenant };
 }
 
 /** Reference-passing data resolution / write-through path (/binding/resolve, /binding/action). capability required. */
@@ -151,16 +193,25 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     }
     const { base, params } = parsed.ref;
 
-    const principal = await authorizeCapability(deps, c, "binding/resolve", token, {
-      kind: "read",
-      ref: base.raw,
-    });
-    if (principal instanceof Response) return principal;
+    const authorized = await authorizeCapability(
+      ctx,
+      c,
+      "binding/resolve",
+      token,
+      { kind: "read", ref: base.raw },
+      "resolve",
+    );
+    if (authorized instanceof Response) return authorized;
+    const { principal, tenant } = authorized;
 
     try {
       // Reserved params (_cursor/_limit/_sort/_dir) are already merged into params by parseInvokableRef
       // (the `_` namespace convention — DomainPort signature unchanged).
-      const data = await deps.domain.invoke(base.path, params, { principal, capability: token });
+      const data = await deps.domain.invoke(base.path, params, {
+        principal,
+        capability: token,
+        ...(tenant != null ? { tenant } : {}),
+      });
       return c.json(data as object);
     } catch (e) {
       // Downstream (DomainPort) failures are also placed on the observability hook (symmetric with the other
@@ -183,15 +234,21 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     if (token == null) {
       return c.json(errorBody("CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required"), 401);
     }
-    const principal = await authorizeCapability(deps, c, "binding/action", token, {
-      kind: "write",
-      ref: body.action,
-    });
-    if (principal instanceof Response) return principal;
+    const authorized = await authorizeCapability(
+      ctx,
+      c,
+      "binding/action",
+      token,
+      { kind: "write", ref: body.action },
+      "action",
+    );
+    if (authorized instanceof Response) return authorized;
+    // The tenant is the capability's signed one (SPEC CAP-TEN-001), not the request header's: it scopes the
+    // approval token binding below, the audit record and the domain invocation alike.
+    const { principal, tenant } = authorized;
     // body.payload is already a validated JsonObject | undefined (ActionBodySchema); no cast needed.
     const payload = body.payload ?? {};
     const requestId = requestIdOf(c, deps);
-    const tenant = await resolveTenant(c, deps);
 
     // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
     // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
@@ -254,7 +311,11 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
 
     let result: unknown;
     try {
-      result = await deps.domain.invoke(body.action, payload, { principal, capability: token });
+      result = await deps.domain.invoke(body.action, payload, {
+        principal,
+        capability: token,
+        ...(tenant != null ? { tenant } : {}),
+      });
     } catch (e) {
       // Failure of the write itself (domain.invoke) is 404. Place the downstream failure on the
       // observability hook, then map it. The raw error message never reaches the client (see REF_NOT_FOUND_MESSAGE).
