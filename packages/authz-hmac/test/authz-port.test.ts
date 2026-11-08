@@ -178,3 +178,45 @@ describe("createHmacAuthzPort verify: scope evaluated before the revocation stor
     );
   });
 });
+
+describe("createHmacAuthzPort tenant claim (SPEC CAP-TEN-001)", () => {
+  const principal = { id: "u", roles: ["user"] };
+  const scopes = [{ kind: "read" as const, ref: "query://s/x" }];
+  const req = { kind: "read" as const, ref: "query://s/x" };
+
+  it("signs opts.tenant into the token and returns it from verify", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability(principal, scopes, { tenant: "acme" });
+    expect(await authz.verify(cap, req)).toEqual({ ok: true, principal: { id: "u" }, tenant: "acme" });
+  });
+
+  it("never signs an empty tenant (it is no tenant)", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability(principal, scopes, { tenant: "" });
+    expect(await authz.verify(cap, req)).toEqual({ ok: true, principal: { id: "u" } });
+  });
+
+  it("treats a tenant-less (pre-upgrade) token as valid with no tenant by default", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = issueJtiLessToken("test-secret", "u", Math.floor(Date.now() / 1000) + 60);
+    expect(await authz.verify(cap, req)).toEqual({ ok: true, principal: { id: "u" } });
+  });
+
+  it("requireTenant rejects a token without a tenant claim and accepts one with it", async () => {
+    const authz = createHmacAuthzPort("test-secret", { requireTenant: true });
+    const without = await authz.issueCapability(principal, scopes);
+    expect(await authz.verify(without, req)).toEqual({ ok: false, reason: "capability lacks tenant" });
+    const withTenant = await authz.issueCapability(principal, scopes, { tenant: "acme" });
+    expect((await authz.verify(withTenant, req)).ok).toBe(true);
+  });
+
+  it("rejects a token whose payload was edited to carry another tenant (signature covers the claim)", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability(principal, scopes, { tenant: "acme" });
+    const [payload, signature] = cap.split(".") as [string, string];
+    const edited = Buffer.from(
+      JSON.stringify({ ...JSON.parse(Buffer.from(payload, "base64url").toString("utf8")), tenant: "evil" }),
+    ).toString("base64url");
+    expect((await authz.verify(`${edited}.${signature}`, req)).ok).toBe(false);
+  });
+});

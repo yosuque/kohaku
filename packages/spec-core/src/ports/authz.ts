@@ -21,6 +21,12 @@ export interface VerifyRequest {
 export interface VerifyResult {
   ok: boolean;
   principal?: Principal;
+  /**
+   * The tenant the capability was issued for (SPEC CAP-TEN-001), when the token binds one. Absent for a token
+   * issued without a tenant (a pre-upgrade token, or a host that never resolves a tenant). A data-plane host
+   * treats this signed value as authoritative over any tenant the request itself claims.
+   */
+  tenant?: string;
   reason?: string;
 }
 
@@ -36,7 +42,15 @@ export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
  * below); that extension is not part of the `AuthzPort` contract itself.
  */
 export interface AuthzPort {
-  issueCapability(principal: Principal, scopes: Scope[], opts?: { ttlSeconds?: number }): Promise<string>;
+  /**
+   * Issues a capability token. `opts.tenant`, when given, is bound into the signed token and echoed back as
+   * `VerifyResult.tenant` by `verify` (SPEC CAP-TEN-001). A port that cannot carry a tenant MAY ignore it.
+   */
+  issueCapability(
+    principal: Principal,
+    scopes: Scope[],
+    opts?: { ttlSeconds?: number; tenant?: string },
+  ): Promise<string>;
   /**
    * Verifies a capability token against a requested scope. A denial is a normal, expected outcome and MUST
    * be reported as `{ ok: false, reason }`, never thrown. `verify` MUST throw only on an infrastructure

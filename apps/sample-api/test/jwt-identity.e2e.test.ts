@@ -1,6 +1,7 @@
+import { createHmacApprovalPort, createMemoryApprovalStore } from "@kohaku-ui/authz-hmac";
 import { createJwtAuthzPort } from "@kohaku-ui/authz-jwt";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
-import type { UISpec } from "@kohaku-ui/spec-core";
+import type { KohakuPolicyFile, LineageEventRecord, UISpec } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
@@ -16,8 +17,19 @@ async function jwt(claims: Record<string, unknown>) {
     .sign(new TextEncoder().encode(SECRET));
 }
 
-async function makeApp(opts: { demoAdminRoutes?: boolean } = {}) {
-  const authz = createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap" });
+async function makeApp(
+  opts: {
+    demoAdminRoutes?: boolean;
+    approvals?: boolean;
+    policyFile?: KohakuPolicyFile;
+    requireCapabilityTenant?: boolean;
+  } = {},
+) {
+  const authz = createJwtAuthzPort({
+    key: { secret: SECRET },
+    capabilitySecret: "cap",
+    ...(opts.requireCapabilityTenant === true ? { requireCapabilityTenant: true } : {}),
+  });
   const storage = createMemoryStoragePort();
   const { app } = await createApp({
     llm: new FakeLlm(),
@@ -25,6 +37,10 @@ async function makeApp(opts: { demoAdminRoutes?: boolean } = {}) {
     authz,
     identity: createJwtRequestIdentity(authz.identity),
     ...(opts.demoAdminRoutes != null ? { demoAdminRoutes: opts.demoAdminRoutes } : {}),
+    ...(opts.approvals === true
+      ? { approvals: createHmacApprovalPort("cap", { store: createMemoryApprovalStore() }) }
+      : {}),
+    ...(opts.policyFile != null ? { policyFile: opts.policyFile } : {}),
   });
   return { app, storage };
 }
@@ -144,6 +160,84 @@ describe("sample-api with KOHAKU_AUTHZ=jwt wiring", () => {
       });
       expect(res.status).toBe(200);
       expect(typeof ((await res.json()) as { dataVersion: string }).dataVersion).toBe("string");
+    });
+  });
+
+  describe("the data plane under JWT: the capability carries the tenant (SPEC CAP-TEN-001)", () => {
+    const RECORDS_GUI = {
+      input: { kind: "gui", action: "view.select", params: { intent: "sales.records" } },
+    };
+
+    async function composeAs(app: Awaited<ReturnType<typeof makeApp>>["app"], token: string) {
+      const res = await app.request("/api/kohaku/compose", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(RECORDS_GUI),
+      });
+      expect(res.status).toBe(200);
+      return (await res.json()) as { spec: UISpec; capability: string };
+    }
+
+    it("an approve-tier Action runs end to end: tenant-T requester composes, the approver approves, the token is accepted", async () => {
+      const { app } = await makeApp({ approvals: true });
+      const requester = await jwt({ sub: "req", roles: ["viewer"], tenant: "acme" });
+      const approver = await jwt({ sub: "apr", roles: ["approver"], tenant: "acme" });
+      const { capability } = await composeAs(app, requester);
+      const payload = { action: "publish" };
+      const invoke = (approval?: string) =>
+        app.request("/api/kohaku/binding/action", {
+          method: "POST",
+          headers: { authorization: `Bearer ${capability}`, "content-type": "application/json" },
+          body: JSON.stringify({ action: "publish", payload, ...(approval != null ? { approval } : {}) }),
+        });
+
+      const first = await invoke();
+      expect(first.status).toBe(403);
+      const { error } = (await first.json()) as { error: { code: string; approval: { payloadHash: string } } };
+      expect(error.code).toBe("APPROVAL_REQUIRED");
+
+      const minted = await app.request("/api/kohaku/approvals", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${approver}` },
+        body: JSON.stringify({ action: "publish", payloadHash: error.approval.payloadHash, requesterId: "req" }),
+      });
+      expect(minted.status).toBe(200);
+      const { approval } = (await minted.json()) as { approval: string };
+
+      const approved = await invoke(approval);
+      expect(approved.status).toBe(200);
+    });
+
+    it("keys the /binding/action rate limit by the capability's tenant and sub, not the demo principal", async () => {
+      const policyFile: KohakuPolicyFile = {
+        version: 1,
+        defaults: {},
+        tenants: { acme: { rateLimits: { action: { capacity: 1, refillPerSecond: 0.001 } } } },
+      };
+      const { app } = await makeApp({ approvals: true, policyFile });
+      const first = await composeAs(app, await jwt({ sub: "u1", roles: ["viewer"], tenant: "acme" }));
+      const second = await composeAs(app, await jwt({ sub: "u2", roles: ["viewer"], tenant: "acme" }));
+      const act = (capability: string) =>
+        app.request("/api/kohaku/binding/action", {
+          method: "POST",
+          headers: { authorization: `Bearer ${capability}`, "content-type": "application/json" },
+          body: JSON.stringify({ action: "publish", payload: { action: "publish" } }),
+        });
+
+      expect((await act(first.capability)).status).toBe(403); // APPROVAL_REQUIRED, but past the limiter
+      expect((await act(first.capability)).status).toBe(429); // u1's bucket (tenant acme, class action) is spent
+      expect((await act(second.capability)).status).toBe(403); // u2 has its own bucket
+    });
+
+    it("requireCapabilityTenant: a compose with a tenant-less JWT yields a capability the data plane refuses", async () => {
+      const { app } = await makeApp({ requireCapabilityTenant: true });
+      const { spec, capability } = await composeAs(app, await jwt({ sub: "u", roles: ["viewer"] }));
+      const ref = spec.components.find((c) => c.data != null)!.data!.$ref;
+      const res = await app.request(`/api/kohaku/binding/resolve?ref=${encodeURIComponent(ref)}`, {
+        headers: { authorization: `Bearer ${capability}` },
+      });
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_DENIED");
     });
   });
 });

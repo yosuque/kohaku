@@ -17,6 +17,8 @@ interface PlaygroundClaims {
   scopes: Scope[];
   /** Epoch seconds. */
   exp: number;
+  /** Absent on a token issued without a tenant (SPEC CAP-TEN-001). */
+  tenant?: string;
 }
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -81,7 +83,7 @@ export interface PlaygroundAuthzOptions {
 
 /**
  * A homegrown HMAC-SHA256 capability token, WebCrypto-backed: base64url(payload).base64url(hmac), payload =
- * { sub, scopes: [{kind, ref}], exp } (no `jti` — this playground has no revocation store, so there is
+ * { sub, scopes: [{kind, ref}], exp, tenant? } (no `jti` — this playground has no revocation store, so there is
  * nothing to revoke by; every token simply expires on its own).
  */
 export function createPlaygroundAuthzPort(secret: string, options: PlaygroundAuthzOptions = {}): AuthzPort {
@@ -102,6 +104,7 @@ export function createPlaygroundAuthzPort(secret: string, options: PlaygroundAut
         sub: principal.id,
         scopes,
         exp: nowSeconds() + (opts.ttlSeconds ?? defaultTtl),
+        ...(opts.tenant != null && opts.tenant !== "" ? { tenant: opts.tenant } : {}),
       };
       const payload = utf8ToBase64Url(JSON.stringify(claims));
       return `${payload}.${await sign(payload)}`;
@@ -132,7 +135,8 @@ export function createPlaygroundAuthzPort(secret: string, options: PlaygroundAut
       if (!granted) {
         return { ok: false, reason: `scope does not cover ${req.kind}:${req.ref}` };
       }
-      return { ok: true, principal: { id: claims.sub } };
+      const tenant = typeof claims.tenant === "string" && claims.tenant !== "" ? claims.tenant : undefined;
+      return { ok: true, principal: { id: claims.sub }, ...(tenant != null ? { tenant } : {}) };
     },
   };
 }

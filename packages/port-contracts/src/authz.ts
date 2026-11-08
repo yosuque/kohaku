@@ -18,6 +18,12 @@ export interface AuthzContractOptions {
    * the test at call time rather than being silently skipped).
    */
   revocation?: boolean;
+  /**
+   * Opts into the tenant round-trip cases (SPEC CAP-TEN-001): a capability issued with `opts.tenant` verifies
+   * with `VerifyResult.tenant` set to it, and one issued without a tenant verifies with no `tenant`. Explicit
+   * (not feature-detected) for the same reason as `revocation`; a port that cannot carry a tenant omits it.
+   */
+  tenant?: boolean;
 }
 
 /**
@@ -89,6 +95,32 @@ export function describeAuthzPortContract<P extends AuthzPort = AuthzPort>(
       else await new Promise((resolve) => setTimeout(resolve, 1100));
       expect((await authz.verify(cap, { kind: "read", ref: "query://s/x" })).ok).toBe(false);
     });
+
+    if (options.tenant) {
+      it("round-trips the tenant bound at issuance into the verify result", async () => {
+        const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
+          tenant: "acme",
+        });
+        const result = await authz.verify(cap, { kind: "read", ref: "query://s/x" });
+        expect(result.ok).toBe(true);
+        expect(result.tenant).toBe("acme");
+      });
+
+      it("reports no tenant for a capability issued without one", async () => {
+        const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }]);
+        const result = await authz.verify(cap, { kind: "read", ref: "query://s/x" });
+        expect(result.ok).toBe(true);
+        expect(result.tenant).toBeUndefined();
+      });
+
+      it("keeps the tenant out of reach of tampering (a modified token is rejected)", async () => {
+        const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
+          tenant: "acme",
+        });
+        const tampered = `${cap.slice(0, -2)}${cap.endsWith("AA") ? "BB" : "AA"}`;
+        expect((await authz.verify(tampered, { kind: "read", ref: "query://s/x" })).ok).toBe(false);
+      });
+    }
 
     if (options.revocation) {
       it("reports ok:false once a verified capability has been revoked", async () => {

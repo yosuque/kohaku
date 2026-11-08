@@ -13,6 +13,14 @@ export interface JwtAuthzOptions extends JwtIdentityOptions {
    * in-memory store; a multi-instance deployment should inject a shared store instead.
    */
   revocations?: CapabilityRevocationStore;
+  /**
+   * When true, a capability token that binds no tenant is rejected by `verify` (passed straight through to
+   * `@kohaku-ui/authz-hmac`'s `HmacAuthzOptions.requireTenant`; SPEC CAP-TEN-001). Distinct from the
+   * inherited `requireTenant`, which governs the bearer JWT's own `tenant` claim. Default false. Enable it
+   * only when every capability issuer passes the resolved tenant: a profile that never resolves a tenant
+   * (the MCP host) issues tenant-less capabilities, which this setting would then refuse.
+   */
+  requireCapabilityTenant?: boolean;
 }
 
 export interface JwtAuthzPort extends AuthzPort {
@@ -33,10 +41,12 @@ export interface JwtAuthzPort extends AuthzPort {
  * JWT and a JWT is never a capability.
  */
 export function createJwtAuthzPort(options: JwtAuthzOptions): JwtAuthzPort {
-  const { capabilitySecret, capabilityTtlSeconds, revocations, ...identityOptions } = options;
+  const { capabilitySecret, capabilityTtlSeconds, revocations, requireCapabilityTenant, ...identityOptions } =
+    options;
   const capabilities = createHmacAuthzPort(capabilitySecret, {
     ...(capabilityTtlSeconds != null ? { ttlSeconds: capabilityTtlSeconds } : {}),
     ...(revocations != null ? { revocations } : {}),
+    ...(requireCapabilityTenant != null ? { requireTenant: requireCapabilityTenant } : {}),
   });
   const identity = createJwtIdentityResolver(identityOptions);
   return {
