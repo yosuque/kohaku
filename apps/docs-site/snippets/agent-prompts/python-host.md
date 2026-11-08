@@ -24,8 +24,8 @@ STEPS
 1. DomainPort (kohaku.spec): list_operations() and invoke(op, args, ctx) wrap EXISTING data access.
 2. The Python library has no one-call facade, so write the other Ports by hand, following
    https://github.com/yosuque/kohaku/tree/main/python/examples/sales-api/src/sales_api/ :
-   authz_port.py (HmacAuthzPort: fail when the secret is unset, do not copy its dev
-   fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
+   __main__.py (kohaku.authz_hmac.create_hmac_authz_port(secret): fail when the secret is unset,
+   do not copy its dev fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
    (define_intent from kohaku.intents), fixed_specs.py (L0 Specs: no model, no key).
    Storage: kohaku.storage.FileStoragePort.
 3. Compose context: ComposeContext(catalog=resolve_catalog(core_catalog()), semantic=...,

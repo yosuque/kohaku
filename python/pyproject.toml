@@ -89,12 +89,14 @@ containers = ["kohaku"]
 # relationship renderer-core has with renderer-react/renderer-wc on the TS side. host_rest / host_mcp /
 # evals are at the top. semantic_llm (the default SemanticPort, TS: semantic-llm) is an independent sibling of
 # composer: it depends on spec + intents + llm only, and nothing in the framework depends on it (it is a
-# starting point a product wires in, e.g. the sales sample).
+# starting point a product wires in, e.g. the sales sample). authz_hmac (the HMAC AuthzPort / ApprovalPort
+# reference adapters, TS: authz-hmac) sits in the middle layer beside storage: like TS it depends on spec only,
+# which the dedicated forbidden contract below makes explicit.
 layers = [
     "host_rest | host_mcp | evals",
     "host_core",
     "composer | semantic_llm | domain_mcp",
-    "registry | intents | lineage | storage",
+    "registry | intents | lineage | storage | authz_hmac",
     "data_binding",
     "llm | spec",
 ]
@@ -122,7 +124,30 @@ source_modules = [
     "kohaku.lineage",
     "kohaku.storage",
     "kohaku.domain_mcp",
+    "kohaku.authz_hmac",
 ]
 forbidden_modules = [
     "kohaku.llm",
+]
+
+[[tool.importlinter.contracts]]
+name = "authz_hmac depends on spec only (TS: authz-hmac is a leaf on spec-core; a Port reference adapter never pulls a host or composer in)"
+type = "forbidden"
+source_modules = [
+    "kohaku.authz_hmac",
+]
+forbidden_modules = [
+    "kohaku.llm",
+    "kohaku.data_binding",
+    "kohaku.registry",
+    "kohaku.intents",
+    "kohaku.lineage",
+    "kohaku.storage",
+    "kohaku.composer",
+    "kohaku.semantic_llm",
+    "kohaku.domain_mcp",
+    "kohaku.host_core",
+    "kohaku.host_rest",
+    "kohaku.host_mcp",
+    "kohaku.evals",
 ]

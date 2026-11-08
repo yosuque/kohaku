@@ -10,11 +10,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from kohaku.authz_hmac import create_hmac_authz_port
 from kohaku.lineage import ComponentDraft, QueryTemplate
 from kohaku.spec import Principal
 from kohaku.storage import FileStoragePort
 from sales_api.app import SalesApp, create_app
-from sales_api.authz_port import create_hmac_authz_port
 from sales_api.fake_llm import create_deterministic_fake_llm
 
 _ARTIFACT_ID = "art-heatmap"

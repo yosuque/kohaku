@@ -237,6 +237,44 @@ class AuthzPort(Protocol):
     async def verify(self, token: str, req: VerifyRequest) -> VerifyResult: ...
 
 
+DEFAULT_CAPABILITY_TTL_SECONDS: int = 600
+"""Default lifetime (seconds) of a capability token when the issuer is given no explicit TTL. Shared by every
+AuthzPort implementation and by host_core's issuance helpers. Port of TS ports/authz.ts's
+DEFAULT_CAPABILITY_TTL_SECONDS."""
+
+
+class CapabilityRevocationStore(Protocol):
+    """Persistence for pre-expiry capability revocation. Not part of `AuthzPort` itself -- revocation is
+    exposed as an extension method on a concrete port (e.g. `HmacAuthzPort.revoke_capability`), the same way
+    a StoragePort exposes backend-specific helpers alongside the contract. A port's `verify` consults a store
+    like this one, keyed by the `jti` carried in its own token payload. Port of TS ports/authz.ts's
+    CapabilityRevocationStore (the optional `close?()` is not declared here: `typing.Protocol` cannot express
+    an optional method, and a store that holds a connection simply offers its own `close`)."""
+
+    async def revoke(self, jti: str, expires_at: int) -> None:
+        """Records `jti` as revoked until `expires_at` (epoch seconds); the store may drop the entry after that."""
+        ...
+
+    async def is_revoked(self, jti: str) -> bool:
+        """Whether `jti` is currently revoked. Behavior after its `expires_at` has passed is unspecified (the
+        entry may or may not have been dropped)."""
+        ...
+
+
+@dataclass(frozen=True)
+class RevokeCapabilityResult:
+    """The result of revoking a capability (a concrete port's `revoke_capability` extension method).
+    `code` lets a caller branch on the failure kind without parsing `reason`; `already_expired`
+    distinguishes "nothing to revoke, the token had already expired" from a genuine no-op success. Port of TS
+    ports/authz.ts's RevokeCapabilityResult union (`{ok: true, alreadyExpired?: true}` or `{ok: false, code,
+    reason}`)."""
+
+    ok: bool
+    code: Literal["MALFORMED", "INVALID_SIGNATURE", "NO_JTI", "STORE_ERROR"] | None = None
+    reason: str | None = None
+    already_expired: bool = False
+
+
 DEFAULT_APPROVAL_TTL_SECONDS: int = 300
 """Default lifetime (seconds) of an approval token when the issuer is given no explicit TTL
 (design.md #63). Deliberately much shorter than host_core's DEFAULT_CAPABILITY_TTL_SECONDS: an approval
