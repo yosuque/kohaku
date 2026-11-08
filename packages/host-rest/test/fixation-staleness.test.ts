@@ -257,6 +257,73 @@ describe("staleness detection of fixation (host-rest /compose)", () => {
     expect(spy.refresh).toHaveLength(0);
   });
 
+  it("an L1 pin with injected binds whose describeFilters throws: no invalidate, not delivered, reported as fixation.check", async () => {
+    const spy = spyFixations();
+    const pinned: UISpec = {
+      ...validPinned(),
+      components: [
+        { id: "root", type: "layout.stack", props: {}, children: ["t"] },
+        {
+          id: "t",
+          type: "presentSpreadsheet",
+          props: {},
+          data: { $ref: REF, bind: { groupBy: { $state: "groupBy", values: ["region", "product"] } } },
+        },
+      ],
+      state: { groupBy: "region" },
+      provenance: { tier: "L1", composedBy: "fixture", cache: "miss" },
+    };
+    const fixation = await makeFixation(pinned, catalog.fingerprint);
+    const errors: { endpoint: string }[] = [];
+    const base = deps(fixation, spy.api);
+    const boom = new Error("describeFilters down");
+    const hostDeps: KohakuHostDeps = {
+      ...base,
+      compose: {
+        ...base.compose,
+        semantic: {
+          ...stubSemantic(),
+          async describeFilters() {
+            throw boom;
+          },
+        },
+      },
+      onError: (info) => {
+        errors.push({ endpoint: info.endpoint });
+      },
+    };
+    const body = await postCompose(hostDeps);
+    // This request falls back to normal compose; the approved fixation is NOT destroyed and its binds were not signed.
+    expect(body.spec.provenance.cache).not.toBe("fixated");
+    expect(spy.invalidate).toHaveLength(0);
+    expect(errors.map((e) => e.endpoint)).toContain("fixation.check");
+  });
+
+  it("/fixations/approve answers 409 CONFLICT when lineage refuses to pin a fixation delivery whose fixation vanished", async () => {
+    const spy = spyFixations();
+    const gone = Object.assign(new Error("a fixation delivery cannot be fixated again"), {
+      name: "FixationNotAllowedError",
+      reason: "fixated-delivery",
+    });
+    const fixations: FixationsApi = {
+      ...spy.api,
+      async fixate() {
+        throw gone;
+      },
+    };
+    const app = createKohakuRoutes({
+      ...deps(await makeFixation(validPinned()), fixations),
+      fixationLookup: async () => null,
+    });
+    const res = await app.request("/fixations/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ intent: { canonical: "sales.trend", params: {} } }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CONFLICT");
+  });
+
   it("drift-stale (resolved-URI set drifts even with a fingerprint match) calls invalidate('stale') and falls back to normal compose", async () => {
     const spy = spyFixations();
     // At fixation time 2 refs were resolved (REF + an old URI), but the stub's resolveQuery returns only the current REF.

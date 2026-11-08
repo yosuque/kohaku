@@ -38,7 +38,7 @@ function pinnedSpec(): UISpec {
       },
     ],
     events: [],
-    provenance: { tier: "L0", composedBy: "fixture", cache: "fixated" },
+    provenance: { tier: "L0", composedBy: "fixture", cache: "miss" },
   };
 }
 

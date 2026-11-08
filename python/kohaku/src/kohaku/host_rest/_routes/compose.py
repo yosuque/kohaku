@@ -267,6 +267,8 @@ def _fixation_host(deps: KohakuHostDeps, request_id: str | None) -> FixationDeli
         endpoint = (
             "fixation.refresh_fingerprint"
             if kind == "refresh_fingerprint"
+            else "fixation.check"
+            if kind == "check"
             else "fixation.invalidate"
         )
         await _run_fixation_selfheal(

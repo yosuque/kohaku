@@ -77,3 +77,30 @@ describe("Fixations.fixate rejects a Spec that must not become the L0 fast path"
     expect(fixed.get(record.intentHash)).toBeDefined();
   });
 });
+
+describe("Fixations.fixate never pins a fixation delivery (provenance.cache === 'fixated')", () => {
+  const delivery = () => spec({ tier: "L0", composedBy: "fixture", cache: "fixated" });
+
+  it("is idempotent: returns the existing record unchanged, with no write and no audit event", async () => {
+    const { fixed, events, fixations } = harness();
+    const first = await fixations.fixate({
+      pinnedSpec: spec({ tier: "L1", composedBy: "fixture", cache: "miss" }),
+      approver,
+    });
+    const eventsAfterFirst = [...events];
+    const again = await fixations.fixate({ pinnedSpec: delivery(), approver: { id: "someone-else" } });
+    expect(again).toEqual(first);
+    expect(fixed.get(first.intentHash)).toBe(first);
+    expect(fixed.get(first.intentHash)!.pinnedSpec.provenance.tier).toBe("L1");
+    expect(events).toEqual(eventsAfterFirst);
+  });
+
+  it("throws FixationNotAllowedError('fixated-delivery') when the fixation it came from is gone", async () => {
+    const { fixed, events, fixations } = harness();
+    const err = await fixations.fixate({ pinnedSpec: delivery(), approver }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FixationNotAllowedError);
+    expect((err as FixationNotAllowedError).reason).toBe("fixated-delivery");
+    expect(fixed.size).toBe(0);
+    expect(events).toEqual([]);
+  });
+});

@@ -278,6 +278,119 @@ describe("ComposePolicy.l1Filters", () => {
     });
   });
 
+  describe("shape guard: a filter whose options rename the result's columns is dropped", () => {
+    const REGION_SHAPE = {
+      columns: [
+        { name: "region", type: "string" as const, role: "dimension" as const },
+        { name: "revenue", type: "number" as const, role: "measure" as const },
+      ],
+    };
+    const PRODUCT_SHAPE = {
+      columns: [
+        { name: "product", type: "string" as const, role: "dimension" as const },
+        { name: "revenue", type: "number" as const, role: "measure" as const },
+      ],
+    };
+    /** describeShape keyed by the ref's groupBy value: region keeps `region`, any other value renames the dimension. */
+    function shapeByGroupBy(seen?: string[]): SemanticPort["describeShape"] {
+      return async (handle) => {
+        seen?.push(handle.uri);
+        return new URL(handle.uri.replace("query://", "http://")).searchParams.get("groupBy") === "region"
+          ? REGION_SHAPE
+          : PRODUCT_SHAPE;
+      };
+    }
+    const ctxWith = (describeShape: SemanticPort["describeShape"] | undefined): ComposeContext => {
+      const semantic = { ...semanticWith(async () => [GROUP_BY]) };
+      if (describeShape != null) semantic.describeShape = describeShape;
+      else delete semantic.describeShape;
+      return makeCtx({ l1Filters: true }, semantic);
+    };
+
+    it("drops a descriptor whose variants change the column set (the Spec is delivered as generated)", async () => {
+      const seen: string[] = [];
+      const { spec, trace } = await compose(GUI_INPUT, ctxWith(shapeByGroupBy(seen)));
+      expect(spec.provenance.tier).toBe("L1");
+      expect(trace.filters).toBeUndefined();
+      expect(spec.state).toBeUndefined();
+      expect(spec.components.some((c) => c.type === "control.select")).toBe(false);
+      expect(spec.components.some((c) => c.data?.bind != null)).toBe(false);
+      // The first renaming variant (product) settled it; the current one (region) was not asked a second time.
+      expect(seen.filter((u) => u.includes("groupBy=product"))).toHaveLength(1);
+    });
+
+    it("keeps a descriptor whose variants keep the column set", async () => {
+      const { spec, trace } = await compose(
+        GUI_INPUT,
+        ctxWith(async () => REGION_SHAPE),
+      );
+      expect(trace.filters).toEqual({ injected: ["groupBy"] });
+      expect(spec.components.some((c) => c.type === "control.select")).toBe(true);
+    });
+
+    it("column order is not a shape change", async () => {
+      const reordered = { columns: [...REGION_SHAPE.columns].reverse() };
+      const { trace } = await compose(
+        GUI_INPUT,
+        ctxWith(async (h) => (h.uri.includes("groupBy=region") ? REGION_SHAPE : reordered)),
+      );
+      expect(trace.filters).toEqual({ injected: ["groupBy"] });
+    });
+
+    it("drops a descriptor when a variant's shape cannot be described", async () => {
+      const { trace } = await compose(
+        GUI_INPUT,
+        ctxWith(async (h) => {
+          if (h.uri.includes("groupBy=channel")) throw new Error("unknown query path");
+          return REGION_SHAPE;
+        }),
+      );
+      expect(trace.filters).toBeUndefined();
+    });
+
+    it("leaves the descriptor alone when there is nothing to compare against (no describeShape, or the base shape is unknown)", async () => {
+      const without = await compose(GUI_INPUT, ctxWith(undefined));
+      expect(without.trace.filters).toEqual({ injected: ["groupBy"] });
+      // The initial handle's own shape fails: the guard has no baseline, so it keeps today's behaviour.
+      const noBase = await compose(
+        GUI_INPUT,
+        ctxWith(async (h) => {
+          if (h.uri.includes("groupBy=region")) throw new Error("no shape");
+          return PRODUCT_SHAPE;
+        }),
+      );
+      expect(noBase.trace.filters).toEqual({ injected: ["groupBy"] });
+    });
+
+    it("does not describe the variants of a descriptor with more options than l1FiltersMaxVariants (the injection is abandoned anyway)", async () => {
+      const many: FilterDescriptor = {
+        ...GROUP_BY,
+        options: [
+          { value: "region", label: "region" },
+          ...Array.from({ length: 200 }, (_, i) => ({ value: `v${i}`, label: `v${i}` })),
+        ],
+      };
+      const seen: string[] = [];
+      const semantic = {
+        ...semanticWith(async () => [many]),
+        describeShape: shapeByGroupBy(seen),
+      };
+      const { trace } = await compose(GUI_INPUT, makeCtx({ l1Filters: true }, semantic));
+      // Only the initial handles were described (by resolveRefs); no variant ref was.
+      expect(seen.filter((u) => u.includes("groupBy=v"))).toEqual([]);
+      expect(trace.filters).toEqual({ injected: [], skipped: "variant-limit" });
+    });
+
+    it("a dropped descriptor changes the cache key (the hash covers the descriptors actually used)", async () => {
+      const kept = await compose(
+        GUI_INPUT,
+        ctxWith(async () => REGION_SHAPE),
+      );
+      const dropped = await compose(GUI_INPUT, ctxWith(shapeByGroupBy()));
+      expect(dropped.trace.cacheKey).not.toBe(kept.trace.cacheKey);
+    });
+  });
+
   it("records skipped: invalid at compose level when the generated root cannot host controls", async () => {
     // A single-component screen: the root is the chart itself (no children), so there is nowhere to put a control.
     const leafRootDraft = {

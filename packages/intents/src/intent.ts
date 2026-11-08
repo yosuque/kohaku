@@ -58,6 +58,16 @@ export interface FacetSpec {
   emptyLabel?: string;
   /** Locale overlays for emptyLabel. Meaningful only together with emptyLabel. */
   emptyLabels?: Record<string, string>;
+  /**
+   * Whether this facet may also become an injected L1 filter (`IntentDef.filters`, `ComposePolicy.l1Filters`).
+   * Default true. Declare `false` for a facet whose value changes the SHAPE of the result (its column names:
+   * a `metric` that renames the measure column, a `granularity` that renames the time column, a `groupBy`
+   * that renames the dimension column): an injected filter only swaps the bound query parameter, so the
+   * generated component's `x` / `y` / `columns` props would keep naming columns the new variant no longer
+   * returns. It still appears in `toFacetView()` (the GUI facet, which re-composes the Intent) -- the flag
+   * only keeps it out of the in-place filters.
+   */
+  filterable?: boolean;
 }
 
 export interface IntentSpec {
@@ -136,13 +146,18 @@ function buildToQueries(spec: IntentSpec): (p: JsonObject) => QueryHandle[] {
  * A filter is excluded entirely when its `queryParam` would not have one meaning across the Intent's refs
  * (FilterDescriptor's contract): it is also a `fixedParams` key of any template (the ref's value is fixed, not
  * the param's), or another Intent param maps to the same query parameter on one of the filter's paths.
+ * A facet declared `filterable: false` (one that changes the result's column names) is never a filter.
  * undefined for a callback `queries` (nothing to read a `paramMap` from).
  */
 function buildFilters(spec: IntentSpec): IntentDef["filters"] | undefined {
   const queries = spec.queries;
   if (typeof queries === "function") return undefined;
   const entries: { entry: FacetViewEntry; queryParam: string; paths: string[] }[] = [];
+  const notFilterable = new Set(
+    (spec.facets ?? []).filter((f) => f.filterable === false).map((f) => f.param),
+  );
   for (const entry of buildFacetView(spec).facets) {
+    if (notFilterable.has(entry.key)) continue;
     if (entry.control !== "select" || entry.valueType !== "string" || entry.options.length === 0) continue;
     const mapped = new Set<string>();
     const paths: string[] = [];

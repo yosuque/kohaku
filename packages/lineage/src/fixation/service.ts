@@ -34,12 +34,14 @@ export class FixationUnsupportedError extends Error {
  * Raised by `fixate` when the Spec it is asked to pin must not become the permanent L0 fast path (SPEC.md §8):
  * a Spec carrying `provenance.fallback` (a generation failure or a capability-negotiation downgrade, not the
  * intended structure) or a tier-`L2` result (free-form, sandbox-only generation that the promotion pipeline,
- * not fixation, governs). Enforced here rather than only at the REST route so every caller of `fixate`
- * (an ingest pipeline, a CLI, a product's own code) is covered by the same rule.
+ * not fixation, governs), or a fixation DELIVERY (`provenance.cache === "fixated"`, `reason: "fixated-delivery"`:
+ * re-pinning one would launder an L1 pin into an L0 pin; see `fixate`). Enforced here rather than only at the
+ * REST route so every caller of `fixate` (an ingest pipeline, a CLI, a product's own code) is covered by the
+ * same rule.
  */
 export class FixationNotAllowedError extends Error {
   constructor(
-    readonly reason: "fallback" | "l2-tier",
+    readonly reason: "fallback" | "l2-tier" | "fixated-delivery",
     message: string,
   ) {
     super(message);
@@ -157,6 +159,14 @@ export interface Fixations {
    * Human-approved fixation. The structure of pinnedSpec is thereafter served as L0.
    * Passing tenant stamps it into record.tenant, and the StoragePort key-separates by (tenant, intentHash).
    * Throws {@link FixationNotAllowedError} for a Spec carrying `provenance.fallback` or a tier-`L2` Spec (SPEC.md §8).
+   *
+   * A fixation DELIVERY (`provenance.cache === "fixated"`, which `materializeFixation` stamps `tier: "L0"`) is
+   * never pinned: re-approving an already-fixated Intent composes to exactly that delivery, and pinning it
+   * would launder an L1 pin (whose injected `data.bind` the composer re-checks) into an L0 pin that is never
+   * checked again. Idempotent instead: the existing record is returned unchanged, with no write and no audit
+   * event (re-approval to refresh a pin is `unfixate` + `fixate`). If the record vanished in between (an
+   * unfixate landing after the compose), there is nothing to return and a pin must not be made from the
+   * delivery, so it throws `FixationNotAllowedError("fixated-delivery")`, which both REST hosts answer with 409.
    */
   fixate(args: { pinnedSpec: UISpec; approver: Principal; tenant?: string }): Promise<FixationRecord>;
   unfixate(intentHash: string, approver: Principal, scope?: TenantScope): Promise<void>;
@@ -431,6 +441,14 @@ export function createFixations(opts: {
         throw new FixationNotAllowedError(
           "l2-tier",
           "an L2 free-form Spec cannot be fixated; L2 results are governed by the promotion pipeline (L2->L1)",
+        );
+      }
+      if (pinnedSpec.provenance.cache === "fixated") {
+        const existing = await getValidatedFixation(pinnedSpec.intent.hash, tenant);
+        if (existing != null) return existing;
+        throw new FixationNotAllowedError(
+          "fixated-delivery",
+          "a fixation delivery cannot be fixated again, and the fixation it came from is gone",
         );
       }
       const record: FixationRecord = {

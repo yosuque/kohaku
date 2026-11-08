@@ -47,8 +47,11 @@ export interface FixationSelfHealApi {
   ): Promise<void>;
 }
 
-/** The two self-healing calls settleFixation may fire, named for the observability hook. */
-export type FixationSelfHealEndpoint = "fixation.refreshFingerprint" | "fixation.invalidate";
+/** The calls settleFixation may fire or report, named for the observability hook (`fixation.check`: the pin's filter check could not run). */
+export type FixationSelfHealEndpoint =
+  | "fixation.refreshFingerprint"
+  | "fixation.invalidate"
+  | "fixation.check";
 
 /**
  * The host-supplied surface settleFixation / resolveFixatedResult / composeWithFixation need: the fixation
@@ -154,6 +157,9 @@ async function runUnserialized<T>(
  * - stale: invalidate the fixation and return null = the caller falls back to normal compose. Even if
  *   invalidate throws (e.g. deleteFixation is unimplemented), delivery continues (the fixation remains and
  *   runs degraded: revalidation fails every time -> fallback).
+ * - unavailable: the pin's filter check could not run (descriptor source threw). Return null so THIS request
+ *   falls back to normal compose, but do NOT invalidate (the approved fixation may be fine) and do not deliver
+ *   the pinned binds unchecked; the failure is reported through onSelfHealError("fixation.check").
  */
 export function settleFixation(
   materialized: { result: ComposeResult | null; check: FixationCheck },
@@ -193,6 +199,11 @@ export function settleFixation(
       });
     }
     return result;
+  }
+
+  if (check.kind === "unavailable") {
+    host.onSelfHealError("fixation.check", check.cause ?? new Error(check.issues.join("; ")), requestId);
+    return null;
   }
 
   // stale: not deliverable. Invalidate the fixation as self-healing (delivery continues via fallback).

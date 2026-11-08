@@ -128,6 +128,47 @@ def test_fixate_rejects_a_tier_l2_spec(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def _delivery() -> UISpec:
+    """The fixation DELIVERY materialize_fixation produces: tier L0, cache "fixated"."""
+    wire = l1_spec().model_dump(mode="json", by_alias=True, exclude_none=True)
+    wire["provenance"] = {**wire["provenance"], "tier": "L0", "cache": "fixated"}
+    return UISpec.model_validate(wire)
+
+
+def test_fixate_never_pins_a_fixation_delivery_it_returns_the_existing_record(
+    tmp_path: Path,
+) -> None:
+    """Pinning the delivery would launder an L1 pin into an unchecked L0 pin: idempotent, no write, no audit."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
+        first = await fixations.fixate(pinned_spec=l1_spec(), approver=APPROVER)
+        events_after_first = len(await storage.list_lineage())
+
+        again = await fixations.fixate(pinned_spec=_delivery(), approver=Principal(id="other"))
+        assert again == first
+        stored = await storage.list_fixations()
+        assert [r.pinnedSpec.provenance.tier for r in stored] == ["L1"]
+        assert stored[0].revision == first.revision
+        assert len(await storage.list_lineage()) == events_after_first
+
+    asyncio.run(run())
+
+
+def test_fixate_of_a_fixation_delivery_raises_when_the_fixation_is_gone(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
+        with pytest.raises(FixationNotAllowedError) as info:
+            await fixations.fixate(pinned_spec=_delivery(), approver=APPROVER)
+        assert info.value.reason == "fixated-delivery"
+        assert await storage.list_fixations() == []
+        assert await storage.list_lineage() == []
+
+    asyncio.run(run())
+
+
 # --- Fixation staleness detection ---
 
 

@@ -223,3 +223,25 @@ def test_collects_every_template_path_and_excludes_filters_whose_query_param_is_
     # groupBy governs a and b; region/other both map "geo" on path a (two params, one queryParam => both
     # excluded); fixedClash's queryParam is a fixed parameter of path b (excluded).
     assert [(f.param, f.paths) for f in filters()] == [("groupBy", ["a", "b"])]
+
+
+def test_a_facet_declared_not_filterable_is_skipped_but_stays_in_the_facet_view() -> None:
+    facets = [
+        FacetSpec(param="groupBy", label="Group by", options=group_by, filterable=False),
+        FacetSpec(param="region", label="Region", options=region, emptyLabel="All regions"),
+    ]
+    definition = _summary(facets)
+    filters = definition.to_intent_def().filters
+    assert filters is not None
+    assert [f.param for f in filters()] == ["region"]
+    assert [f.key for f in definition.to_facet_view().facets] == ["groupBy", "region"]
+    # filterable defaults to True, and an explicit True behaves the same.
+    explicit = _summary(
+        [
+            FacetSpec(param="groupBy", label="Group by", options=group_by, filterable=True),
+            FacetSpec(param="region", label="Region", options=region, emptyLabel="All regions"),
+        ]
+    )
+    explicit_filters = explicit.to_intent_def().filters
+    assert explicit_filters is not None
+    assert [f.param for f in explicit_filters()] == ["groupBy", "region"]

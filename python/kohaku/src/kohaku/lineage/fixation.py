@@ -90,12 +90,15 @@ class FixationNotAllowedError(Exception):
     """Raised by `Fixations.fixate` when the Spec must not become the permanent L0 fast path (SPEC.md §8).
 
     Either it carries `provenance.fallback` (a generation failure or a capability-negotiation downgrade, not the
-    intended structure) or it is a tier-`L2` result (free-form, sandbox-only generation that the promotion
-    pipeline, not fixation, governs). Enforced in the service so every caller is covered, not only the REST route.
-    `reason` is `"fallback"` or `"l2-tier"`.
+    intended structure), it is a tier-`L2` result (free-form, sandbox-only generation that the promotion
+    pipeline, not fixation, governs), or it is a fixation DELIVERY (`provenance.cache == "fixated"`: re-pinning
+    one would launder an L1 pin into an L0 pin; see `fixate`). Enforced in the service so every caller is
+    covered, not only the REST route. `reason` is `"fallback"`, `"l2-tier"` or `"fixated-delivery"`.
     """
 
-    def __init__(self, reason: Literal["fallback", "l2-tier"], message: str) -> None:
+    def __init__(
+        self, reason: Literal["fallback", "l2-tier", "fixated-delivery"], message: str
+    ) -> None:
         super().__init__(message)
         self.name = "FixationNotAllowedError"
         self.reason = reason
@@ -263,6 +266,15 @@ class Fixations:
         """Human-approved fixation. The structure of pinned_spec is thereafter served as L0.
 
         Raises FixationNotAllowedError for a Spec carrying `provenance.fallback` or a tier-`L2` Spec (SPEC.md §8).
+
+        A fixation DELIVERY (`provenance.cache == "fixated"`, which `materialize_fixation` stamps `tier="L0"`) is
+        never pinned: re-approving an already-fixated Intent composes to exactly that delivery, and pinning it
+        would launder an L1 pin (whose injected `data.bind` the composer re-checks) into an L0 pin that is never
+        checked again. Idempotent instead: the existing record is returned unchanged, with no write and no audit
+        event (re-approval to refresh a pin is `unfixate` + `fixate`). If the record vanished in between (an
+        unfixate landing after the compose), there is nothing to return and a pin must not be made from the
+        delivery, so it raises `FixationNotAllowedError("fixated-delivery")`, which both REST hosts answer with
+        409.
         """
         fallback = pinned_spec.provenance.fallback
         if fallback is not None:
@@ -274,6 +286,14 @@ class Fixations:
             raise FixationNotAllowedError(
                 "l2-tier",
                 "an L2 free-form Spec cannot be fixated; L2 results are governed by the promotion pipeline (L2->L1)",
+            )
+        if pinned_spec.provenance.cache == "fixated":
+            existing = await self._get_validated_fixation(pinned_spec.intent.hash, tenant)
+            if existing is not None:
+                return existing
+            raise FixationNotAllowedError(
+                "fixated-delivery",
+                "a fixation delivery cannot be fixated again, and the fixation it came from is gone",
             )
         record = FixationRecord(
             intentHash=pinned_spec.intent.hash,

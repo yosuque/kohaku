@@ -126,7 +126,9 @@ export const INTENT_DEFINITIONS: IntentBuilder[] = [
     facets: [
       fiscalYearFacet(),
       quarterFacet(),
-      { param: "groupBy", label: "Group by", labels: { ja: "集計軸" }, options: groupBy },
+      // groupBy renames the result's dimension column (region -> product), so it is a GUI facet only: an
+      // injected L1 filter would leave the chart / table props naming the old column (filterable: false).
+      { param: "groupBy", label: "Group by", labels: { ja: "集計軸" }, options: groupBy, filterable: false },
       regionFacet(),
     ],
     queries: [
@@ -171,8 +173,16 @@ export const INTENT_DEFINITIONS: IntentBuilder[] = [
     facets: [
       fiscalYearFacet({ empty: true }),
       regionFacet(),
-      { param: "metric", label: "Metric", labels: { ja: "指標" }, options: metric },
-      { param: "granularity", label: "Granularity", labels: { ja: "粒度" }, options: granularity },
+      // metric (revenue -> units) and granularity (month -> quarter) rename the result's measure / time
+      // columns, so they are GUI facets only -- never injected L1 filters (filterable: false).
+      { param: "metric", label: "Metric", labels: { ja: "指標" }, options: metric, filterable: false },
+      {
+        param: "granularity",
+        label: "Granularity",
+        labels: { ja: "粒度" },
+        options: granularity,
+        filterable: false,
+      },
     ],
     queries: [
       {

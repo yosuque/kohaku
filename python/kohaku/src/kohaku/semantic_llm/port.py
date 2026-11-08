@@ -33,6 +33,7 @@ from kohaku.spec import (
 )
 
 from .catalog import IntentCatalogLike
+from .filters import DEFAULT_MAX_FILTER_VARIANTS, params_check_for, vet_filters
 from .gui import normalize_gui_action
 from .nl import normalize_nl_query
 
@@ -96,6 +97,7 @@ class LlmSemanticPort:
         output_locale: Callable[[str | None], str] | None = None,
         max_question_chars: int | None = None,
         on_normalized: Callable[[NormalizedInfo], None] | None = None,
+        max_filter_variants: int | None = None,
     ) -> None:
         self._llm = llm
         self._catalog = catalog
@@ -106,6 +108,9 @@ class LlmSemanticPort:
         self._output_locale = output_locale
         self._max_question_chars = max_question_chars
         self._on_normalized = on_normalized
+        self._max_filter_variants = (
+            max_filter_variants if max_filter_variants is not None else DEFAULT_MAX_FILTER_VARIANTS
+        )
 
     def _catalog_for(self, tenant: str | None) -> IntentCatalogLike:
         if callable(self._catalog):
@@ -176,13 +181,24 @@ class LlmSemanticPort:
         self, intent: Intent, *, tenant: str | None = None, locale: str | None = None
     ) -> list[FilterDescriptor]:
         """The GUI filters of the Intent (`kohaku.spec.ports.SupportsDescribeFilters`): delegates to the Intent
-        definition's `filters` derivation, using the per-tenant catalog. An unknown Intent has no filters
+        definition's `filters` derivation, using the per-tenant catalog, then vets it against the Intent's params
+        schema (`vet_filters`: options the schema rejects are dropped; a forbidden combination, or a product past
+        `max_filter_variants`, yields no filters). An unknown Intent has no filters
         (resolve_query is what reports it), nor does an Intent defined without facets or on the callback path
         (no `filters` derivation) -- the same "no filters" answer."""
-        def_ = self._catalog_for(tenant).get(intent.canonical)
+        catalog = self._catalog_for(tenant)
+        def_ = catalog.get(intent.canonical)
         if def_ is None or def_.filters is None:
             return []
-        return def_.filters(locale)
+        filters = def_.filters(locale)
+        if len(filters) == 0:
+            return []
+        # The Intent's params validation (the catalog's own validator, the one compose enforces) is the
+        # authority: options it rejects are dropped, and a product containing a forbidden combination yields
+        # no filters at all (the composer signs the whole product of the filters it injects).
+        return vet_filters(
+            def_, intent, filters, self._max_filter_variants, params_check_for(catalog, def_)
+        )
 
     async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput:
         """Validates and normalizes a directly-specified Intent (backs `kohaku.host_core.intent.resolve_intent`'s
@@ -219,6 +235,7 @@ def create_llm_semantic_port(
     output_locale: Callable[[str | None], str] | None = None,
     max_question_chars: int | None = None,
     on_normalized: Callable[[NormalizedInfo], None] | None = None,
+    max_filter_variants: int | None = None,
 ) -> LlmSemanticPort:
     """The default SemanticPort. Options (keyword-only, one-to-one with TS's `LlmSemanticPortOptions`):
 
@@ -236,6 +253,10 @@ def create_llm_semantic_port(
       (default 2000).
     - on_normalized: observation hook called after every successful NL normalization (both the matched-Intent
       and the fallback outcomes; never before a raise). Fail-open: an exception from the hook is swallowed.
+    - max_filter_variants: the budget of `describe_filters`' product check: the number of filter-option
+      combinations validated against the Intent's params schema (a combination it forbids makes the Intent
+      expose NO filters). More combinations than this are not provable and also yield no filters. Default: 64,
+      the composer's default `l1FiltersMaxVariants` -- raise both together.
     """
     return LlmSemanticPort(
         llm=llm,
@@ -247,4 +268,5 @@ def create_llm_semantic_port(
         output_locale=output_locale,
         max_question_chars=max_question_chars,
         on_normalized=on_normalized,
+        max_filter_variants=max_filter_variants,
     )

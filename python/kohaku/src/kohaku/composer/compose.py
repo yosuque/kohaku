@@ -19,6 +19,7 @@ from typing import Any, Literal
 from kohaku.llm import AbortController, AbortSignal, LlmError
 from kohaku.registry import negotiate
 from kohaku.spec import (
+    MAX_BIND_VARIANTS,
     SPEC_VERSION,
     CacheKeyParts,
     DataShape,
@@ -59,7 +60,8 @@ from .context import (
 )
 from .errors import ComposeError
 from .fallback import build_fallback_spec
-from .inject_filters import InjectFiltersResult
+from .filter_shape_guard import drop_shape_changing_filters
+from .inject_filters import DEFAULT_L1_FILTERS_MAX_VARIANTS, InjectFiltersResult
 from .l1_generate import L1Result, generate_l1
 from .l2_generate import generate_l2
 from .post import FilterInjection, PostProcessContext, post_process
@@ -1242,8 +1244,19 @@ async def _resolve_refs(
     describe_filters = getattr(ctx.semantic, "describe_filters", None)
     if ctx.policy is not None and ctx.policy.l1Filters is True and describe_filters is not None:
         try:
-            described = await describe_filters(intent, tenant=tenant, locale=locale)
-            descriptors = list(described) if len(described) > 0 else None
+            described = list(await describe_filters(intent, tenant=tenant, locale=locale))
+            # Defence in depth (design.md #78): a filter whose options rename the result's columns would blank
+            # the generated chart / table, so it is dropped. The cache key hashes the descriptors actually used.
+            max_variants = min(
+                ctx.policy.l1FiltersMaxVariants
+                if ctx.policy.l1FiltersMaxVariants is not None
+                else DEFAULT_L1_FILTERS_MAX_VARIANTS,
+                MAX_BIND_VARIANTS,
+            )
+            described = await drop_shape_changing_filters(
+                described, handles, shapes_by_ref, ctx.semantic.describe_shape, max_variants
+            )
+            descriptors = described if len(described) > 0 else None
         except Exception:  # noqa: BLE001,S110
             descriptors = None
 

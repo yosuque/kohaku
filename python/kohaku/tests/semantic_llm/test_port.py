@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 import pytest
 
@@ -11,6 +13,11 @@ from kohaku.intents import (
     FacetSpec,
     IntentDef,
     IntentSpec,
+    ObjectSchema,
+    ParamField,
+    ParamFieldIssue,
+    ParamParseResult,
+    ParamValidateResult,
     QueryTemplate,
     define_intent,
     object_schema,
@@ -19,6 +26,7 @@ from kohaku.llm import FakeLlm
 from kohaku.semantic_llm import (
     IntentCatalogLike,
     NormalizedInfo,
+    ParamsValidation,
     UnknownIntentError,
     create_intent_catalog,
     create_llm_semantic_port,
@@ -31,7 +39,9 @@ from kohaku.spec import (
     Intent,
     IntentInput,
     IntentValidationError,
+    IntentValidationIssue,
     JsonObject,
+    JsonValue,
     NLQuery,
     QueryHandle,
     QueryRef,
@@ -439,3 +449,291 @@ class TestDescribeFilters:
     def test_returns_empty_for_an_intent_without_facets_or_an_unknown_intent(self) -> None:
         assert asyncio.run(self.port.describe_filters(self._intent("sales.plain"))) == []
         assert asyncio.run(self.port.describe_filters(self._intent("sales.bogus"))) == []
+
+
+@dataclass(frozen=True)
+class _RefinedSchema(ObjectSchema):
+    """An ObjectSchema with a cross-field constraint (zod's `.refine`): (vis=private, level=detail) is forbidden.
+
+    The params DSL has no `refine`, so the constraint is expressed by overriding `safe_parse` (what the catalog's
+    `normalize_params` uses) and `validate` (what its strict `validate_params` uses)."""
+
+    def safe_parse(self, raw: Mapping[str, JsonValue]) -> ParamParseResult:
+        result = super().safe_parse(raw)
+        if result.success and result.data is not None:
+            if result.data.get("vis") == "private" and result.data.get("level") == "detail":
+                return ParamParseResult(
+                    success=False, data=None, error="private/detail is forbidden"
+                )
+        return result
+
+    def validate(self, raw: Mapping[str, JsonValue]) -> ParamValidateResult:
+        result = super().validate(raw)
+        if result.success and result.data is not None:
+            if result.data.get("vis") == "private" and result.data.get("level") == "detail":
+                return ParamValidateResult(
+                    success=False,
+                    data=None,
+                    issues=[ParamFieldIssue(path="level", message="private/detail is forbidden")],
+                )
+        return result
+
+
+def _docs_def(refined: bool = True) -> IntentDef:
+    shape: dict[str, ParamField] = {
+        "vis": EnumField(values=("public", "private")).default("public"),
+        "level": EnumField(values=("summary", "detail")).default("summary"),
+    }
+    return define_intent(
+        IntentSpec(
+            canonical="x.docs",
+            description="Docs",
+            source="src",
+            params=_RefinedSchema(shape=dict(shape)) if refined else object_schema(shape),
+            examples=[],
+            facets=[
+                FacetSpec(param="vis", label="Visibility"),
+                FacetSpec(param="level", label="Level"),
+            ],
+            queries=[QueryTemplate(path="docs", paramMap={"vis": "vis", "level": "level"})],
+        )
+    ).to_intent_def()
+
+
+def _at(canonical: str, params: JsonObject) -> Intent:
+    return Intent(canonical=canonical, params=params, hash=f"sha256:{'ab' * 32}")
+
+
+class TestDescribeFiltersVetting:
+    """describe_filters never widens what the Intent's params allow (mirror of the TS describeFilters vetting suite)."""
+
+    @staticmethod
+    def _port(defs: list[IntentDef], max_filter_variants: int | None = None):  # type: ignore[no-untyped-def]
+        return create_llm_semantic_port(
+            llm=FakeLlm(),
+            catalog=create_intent_catalog(defs),
+            data_version=lambda _h: "v",
+            max_filter_variants=max_filter_variants,
+        )
+
+    def test_returns_no_filters_when_a_combination_of_the_remaining_filters_violates_the_params(
+        self,
+    ) -> None:
+        port = self._port([_docs_def()])
+        out = asyncio.run(
+            port.describe_filters(_at("x.docs", {"vis": "public", "level": "summary"}))
+        )
+        assert out == []
+
+    def test_an_option_invalid_against_the_current_params_is_dropped_before_the_product_check(
+        self,
+    ) -> None:
+        port = self._port([_docs_def()])
+        out = asyncio.run(
+            port.describe_filters(_at("x.docs", {"vis": "public", "level": "detail"}))
+        )
+        assert [f.param for f in out] == ["level"]
+
+    def test_drops_an_option_the_params_reject_on_their_own_and_a_filter_left_with_fewer_than_two(
+        self,
+    ) -> None:
+        narrowed = define_intent(
+            IntentSpec(
+                canonical="x.narrow",
+                description="Narrow",
+                source="src",
+                params=object_schema(
+                    {
+                        "flavor": EnumField(values=("a", "b")).default("a"),
+                        "size": EnumField(values=("s", "m", "l")).default("s"),
+                    }
+                ),
+                examples=[],
+                facets=[
+                    FacetSpec(
+                        param="flavor",
+                        label="Flavor",
+                        options=[
+                            {"value": "a", "label": "A"},
+                            {"value": "b", "label": "B"},
+                            {"value": "forbidden", "label": "Forbidden"},
+                        ],
+                    ),
+                    FacetSpec(
+                        param="size",
+                        label="Size",
+                        options=[{"value": "s", "label": "S"}, {"value": "nope", "label": "Nope"}],
+                    ),
+                ],
+                queries=[QueryTemplate(path="p", paramMap={"flavor": "flavor", "size": "size"})],
+            )
+        ).to_intent_def()
+        out = asyncio.run(
+            self._port([narrowed]).describe_filters(_at("x.narrow", {"flavor": "a", "size": "s"}))
+        )
+        assert [(f.param, [o.value for o in f.options]) for f in out] == [("flavor", ["a", "b"])]
+
+    def test_keeps_the_filters_when_every_combination_is_valid(self) -> None:
+        port = self._port([_docs_def(refined=False)])
+        out = asyncio.run(
+            port.describe_filters(_at("x.docs", {"vis": "public", "level": "summary"}))
+        )
+        assert [f.param for f in out] == ["vis", "level"]
+
+    def test_bounds_the_product_check_by_max_filter_variants(self) -> None:
+        values = tuple(f"v{i}" for i in range(9))
+        wide = define_intent(
+            IntentSpec(
+                canonical="x.wide",
+                description="Wide",
+                source="src",
+                params=object_schema(
+                    {
+                        "a": EnumField(values=values).default("v0"),
+                        "b": EnumField(values=values).default("v0"),
+                    }
+                ),
+                examples=[],
+                facets=[FacetSpec(param="a", label="A"), FacetSpec(param="b", label="B")],
+                queries=[QueryTemplate(path="p", paramMap={"a": "a", "b": "b"})],
+            )
+        ).to_intent_def()
+        intent = _at("x.wide", {"a": "v0", "b": "v0"})
+        # 9 x 9 = 81 > 64: not provable within the budget, so nothing is offered...
+        assert asyncio.run(self._port([wide]).describe_filters(intent)) == []
+        # ...and a product that raises the composer's l1FiltersMaxVariants raises this budget with it.
+        roomy = asyncio.run(self._port([wide], 81).describe_filters(intent))
+        assert [f.param for f in roomy] == ["a", "b"]
+
+    def test_an_unknown_intent_is_unaffected(self) -> None:
+        port = self._port([_docs_def()])
+        assert asyncio.run(port.describe_filters(_at("x.bogus", {}))) == []
+
+    def test_does_not_vet_a_product_over_a_filter_the_composer_would_not_inject(self) -> None:
+        """region is optional and absent from the ref, so inject_filters skips its filter and the signed product
+        holds region at "absent". The constraint forbids (private, detail) exactly there: the vis x level
+        product must be validated with region absent, not with region ranging over its options."""
+
+        @dataclass(frozen=True)
+        class _Regional(ObjectSchema):
+            def safe_parse(self, raw: Mapping[str, JsonValue]) -> ParamParseResult:
+                result = super().safe_parse(raw)
+                if result.success and result.data is not None:
+                    d = result.data
+                    if (
+                        d.get("vis") == "private"
+                        and d.get("level") == "detail"
+                        and "region" not in d
+                    ):
+                        return ParamParseResult(success=False, data=None, error="forbidden")
+                return result
+
+            def validate(self, raw: Mapping[str, JsonValue]) -> ParamValidateResult:
+                result = super().validate(raw)
+                if result.success and result.data is not None:
+                    d = result.data
+                    if (
+                        d.get("vis") == "private"
+                        and d.get("level") == "detail"
+                        and "region" not in d
+                    ):
+                        return ParamValidateResult(
+                            success=False,
+                            data=None,
+                            issues=[ParamFieldIssue(path="level", message="forbidden")],
+                        )
+                return result
+
+        regional = define_intent(
+            IntentSpec(
+                canonical="x.regional",
+                description="Regional",
+                source="src",
+                params=_Regional(
+                    shape={
+                        "vis": EnumField(values=("public", "private")).default("public"),
+                        "level": EnumField(values=("summary", "detail")).default("summary"),
+                        "region": EnumField(values=("a", "b")).optional(),
+                    }
+                ),
+                examples=[],
+                facets=[
+                    FacetSpec(param="vis", label="V"),
+                    FacetSpec(param="level", label="L"),
+                    FacetSpec(param="region", label="R", emptyLabel="All"),
+                ],
+                queries=[
+                    QueryTemplate(
+                        path="docs", paramMap={"vis": "vis", "level": "level", "region": "region"}
+                    )
+                ],
+            )
+        ).to_intent_def()
+        port = self._port([regional])
+        out = asyncio.run(
+            port.describe_filters(_at("x.regional", {"vis": "public", "level": "summary"}))
+        )
+        assert out == []
+        # With region present in the ref it is injected and vetted; all three filters survive.
+        with_region = asyncio.run(
+            port.describe_filters(
+                _at("x.regional", {"vis": "public", "level": "summary", "region": "a"})
+            )
+        )
+        assert [f.param for f in with_region] == ["vis", "level", "region"]
+
+    def test_validates_through_the_catalogs_own_validator_when_it_has_one(self) -> None:
+        free = _docs_def(refined=False)
+        inner = create_intent_catalog([free])
+
+        class _Strict:
+            """A product catalog layering a cross-field rule on top of the (constraint-free) schema."""
+
+            def get(self, name: str) -> IntentDef | None:
+                return inner.get(name)
+
+            def list_defs(self) -> list[IntentDef]:
+                return inner.list_defs()
+
+            def names(self) -> list[str]:
+                return inner.names()
+
+            def normalize_params(self, name: str, params: JsonObject) -> JsonObject | None:
+                return inner.normalize_params(name, params)
+
+            def validate_params(self, name: str, params: JsonObject) -> ParamsValidation:
+                base = inner.validate_params(name, params)
+                if (
+                    base.ok
+                    and base.params is not None
+                    and base.params.get("vis") == "private"
+                    and base.params.get("level") == "detail"
+                ):
+                    return ParamsValidation(
+                        ok=False,
+                        issues=[
+                            IntentValidationIssue(path="", message="private/detail is forbidden")
+                        ],
+                    )
+                return base
+
+        class _StrictNormalizeOnly(_Strict):
+            validate_params = None  # type: ignore[assignment]
+
+            def normalize_params(self, name: str, params: JsonObject) -> JsonObject | None:
+                if params.get("vis") == "private" and params.get("level") == "detail":
+                    return None
+                return inner.normalize_params(name, params)
+
+        intent = _at("x.docs", {"vis": "public", "level": "summary"})
+
+        def run(catalog: IntentCatalogLike) -> list[str]:
+            port = create_llm_semantic_port(
+                llm=FakeLlm(), catalog=catalog, data_version=lambda _h: "v"
+            )
+            return [f.param for f in asyncio.run(port.describe_filters(intent))]
+
+        assert run(_Strict()) == []
+        assert run(inner) == ["vis", "level"]
+        # Without validate_params the catalog's normalize_params is the validator.
+        assert run(_StrictNormalizeOnly()) == []
