@@ -1,5 +1,0 @@
----
-"@kohaku-ui/semantic-llm": patch
----
-
-Security: the default `outputLocale` of `createLlmSemanticPort` no longer interpolates the client-supplied `NLQuery.locale` verbatim into the normalizer's user prompt. The tag is rendered in the `## User question (<locale>)` heading, outside the `USER_QUESTION` delimiter block, so a crafted locale could inject text next to the instructions. Anything that is not a BCP-47-like tag (ASCII letters, digits and hyphens, at most 35 characters) is now replaced by `"und"`; an absent tag is still `"en"`. The new `defaultOutputLocale` export is the function the port uses by default. A custom `outputLocale` option replaces it and remains responsible for its own sanitization. The Python port (`kohaku.semantic_llm`, `kohaku-ui` on PyPI) gets the identical `default_output_locale`, pinned against TypeScript by the cross-language golden (`semanticLocale`); its `max_question_chars` now counts UTF-16 code units like TypeScript's `text.length` instead of code points.

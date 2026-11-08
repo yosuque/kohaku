@@ -1,5 +1,15 @@
 # @kohaku-ui/registry
 
+## 0.6.0
+
+### Patch Changes
+
+- [#132](https://github.com/yosuque/kohaku/pull/132) [`05f2c6d`](https://github.com/yosuque/kohaku/commit/05f2c6d6f51a86e237a285a8e83e353571733a92) Thanks [@yosuque](https://github.com/yosuque)! - `planCatalogMigration` now passes a private deep copy of a node's props to a component's `migrateProps` hook (`structuredClone`). The memory and file storage ports return live records, so a hook that mutated its argument used to rewrite the stored fixation during planning, even when the plan ended up blocked or the hook threw. The hook contract (`ComponentDefinition.migrateProps`) now states that it must not mutate its argument and returns the new props. Python mirror: `migrate_props` receives `copy.deepcopy(node.props)`.
+
+- [#117](https://github.com/yosuque/kohaku/pull/117) [`e4ae97d`](https://github.com/yosuque/kohaku/commit/e4ae97d43bc90c75370da22ec5f13ed83ce22a0a) Thanks [@yosuque](https://github.com/yosuque)! - Python port (`kohaku-ui` on PyPI): `ComponentDefinition` gains `migrate_props` (the counterpart of TypeScript's `migrateProps`), and `host_core.plan_catalog_migration` now reshapes a deprecated node's props with it before revalidating against the replacement's schema. Previously the Python planner rewrote only `type` / `version`, so a rewrite that needed its props reshaped always landed in `blocked`. A core part's hook is hand-ported into `kohaku.registry.core._MIGRATE_PROPS` (empty today: no core part declares `migrateProps`); `export-core-catalog` now emits a `hasMigrateProps: true` marker so a missing or stale port fails when the Python core catalog loads. The TypeScript `@kohaku-ui/registry` has no behavior change beyond that marker (never emitted today) and is listed only because a changeset must name an npm package, and the fixed group moves npm and PyPI to the same version. See `python/README.md`.
+- Updated dependencies [[`a6d485e`](https://github.com/yosuque/kohaku/commit/a6d485ef80f441f12ff6340748c8965bb6e578d2), [`0aad4eb`](https://github.com/yosuque/kohaku/commit/0aad4ebd9645542e65da006fabc6fb7cbf850bee), [`0d7d372`](https://github.com/yosuque/kohaku/commit/0d7d372a05ab7307d455dd0020fecd25e028fc9f), [`ad4ee22`](https://github.com/yosuque/kohaku/commit/ad4ee22db5d73dcaee0527dc037740325504be85), [`8d50be6`](https://github.com/yosuque/kohaku/commit/8d50be647b2cc19d7fce639803c31169f4a6a49d), [`687d437`](https://github.com/yosuque/kohaku/commit/687d437df3117305fc9c69bc33142ff1ad4ff55a)]:
+  - @kohaku-ui/spec-core@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes
