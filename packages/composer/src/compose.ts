@@ -32,7 +32,11 @@ import { resolveEntryContext } from "./context.js";
 import { ComposeError } from "./errors.js";
 import { buildFallbackSpec } from "./fallback.js";
 import { fireObserverHook, reportComposeError } from "./observer.js";
-import { policyFingerprint, tierLlmFingerprintMaterial } from "./policy-fingerprint.js";
+import {
+  filterDescriptorsHash,
+  policyFingerprint,
+  tierLlmFingerprintMaterial,
+} from "./policy-fingerprint.js";
 import type { ResolvedRefs } from "./refs.js";
 import { resolveRefs } from "./refs.js";
 import { runGeneration } from "./single-flight.js";
@@ -227,12 +231,16 @@ export async function prepareCompose(
   }
 
   // 2. Deterministic query resolution (reference-passing handles) + dataVersion synthesis. tenant is used to resolve per-tenant promoted Intents.
-  const refs = await resolveRefs(intent, ctx, opts.session?.tenant);
+  const refs = await resolveRefs(intent, ctx, opts.session?.tenant, opts.session?.locale);
 
   // 3. Cache key (generatorVersion is added as the trailing component only when specified; policyFingerprint
   // is a derived 7th component — see policy-fingerprint.ts's policyFingerprint doc — that is likewise omitted (empty
   // string) whenever the policy touches none of its fingerprinted fields, keeping the key unchanged).
-  const pf = await policyFingerprint(policy, tierLlmFingerprintMaterial(ctx));
+  const pf = await policyFingerprint(
+    policy,
+    tierLlmFingerprintMaterial(ctx),
+    await filterDescriptorsHash(refs.descriptors),
+  );
   const keyParts: CacheKeyParts = {
     intentHash: intent.hash,
     dataVersion: refs.dataVersion,
@@ -367,9 +375,9 @@ export async function generateSpec(
   // 6-7. L1 constrained generation → L2 free generation → deterministic fallback (the branching is consolidated in runTierGeneration).
   const attempts: ComposeAttempt[] = [];
   const outcome = await runTierGeneration(prepared, ctx, attempts, onDraftPartial);
-  const spec = buildSpecFromOutcome(prepared, ctx, outcome);
+  const { spec, filters } = buildSpecFromOutcome(prepared, ctx, outcome);
   // 9-10. Cache store + leader trace assembly.
-  return persistAndTrace(prepared, ctx, spec, outcome, attempts);
+  return persistAndTrace(prepared, ctx, spec, outcome, attempts, filters);
 }
 
 /**
@@ -394,7 +402,7 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
     // Carry the fixed template's state over to the delivered Spec (preserve visibleWhen's initial state).
     ...(template.state != null ? { state: template.state } : {}),
   };
-  const spec = buildSpecFromOutcome(prepared, ctx, outcome);
+  const { spec } = buildSpecFromOutcome(prepared, ctx, outcome);
   return persistAndTrace(prepared, ctx, spec, outcome, []);
 }
 
@@ -402,7 +410,11 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
  * Builds the delivered Spec from a TierOutcome. If ok, assemble + post-processing; if fallback, returns
  * the deterministic fallback Spec and fires the observation hook exactly once (the once-per-generation contract is fixed here).
  */
-function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, outcome: TierOutcome): UISpec {
+function buildSpecFromOutcome(
+  prepared: PreparedCompose,
+  ctx: ComposeContext,
+  outcome: TierOutcome,
+): { spec: UISpec; filters?: ComposeTrace["filters"] } {
   const { intent, refs, cacheMode, traceBase } = prepared;
   const cacheLabel = cacheLabelOf(cacheMode);
 
@@ -418,7 +430,28 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       ...provenanceStampsOf(ctx.policy),
       ...(outcome.state != null ? { state: outcome.state } : {}),
     });
-    return postAndValidate(assembled, refs, ctx);
+    // ComposePolicy.l1Filters: Intent-declared filters are injected into a freshly generated L1 Spec only
+    // (never L0 -- a hand-written template owns its own controls -- nor L2 nor the fallback Spec).
+    let filters: ComposeTrace["filters"] | undefined;
+    const descriptors =
+      outcome.tier === "L1" && prepared.policy.l1Filters === true ? refs.descriptors : undefined;
+    const spec = postAndValidate(
+      assembled,
+      refs,
+      ctx,
+      descriptors != null
+        ? {
+            descriptors,
+            ...(prepared.policy.l1FiltersMaxVariants != null
+              ? { maxVariants: prepared.policy.l1FiltersMaxVariants }
+              : {}),
+            report: (r) => {
+              filters = { injected: r.injected, ...(r.skipped != null ? { skipped: r.skipped } : {}) };
+            },
+          }
+        : undefined,
+    );
+    return { spec, ...(filters != null ? { filters } : {}) };
   }
 
   const spec = buildFallbackSpec({
@@ -451,7 +484,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
     },
     outcome.error,
   );
-  return spec;
+  return { spec };
 }
 
 /**
@@ -464,6 +497,7 @@ async function persistAndTrace(
   spec: UISpec,
   outcome: TierOutcome,
   attempts: ComposeAttempt[],
+  filters?: ComposeTrace["filters"],
 ): Promise<GenerateOutcome> {
   const { cacheMode } = prepared;
   const cacheLabel = cacheLabelOf(cacheMode);
@@ -489,6 +523,7 @@ async function persistAndTrace(
     ...(outcome.kind === "fallback" && outcome.cancelled === true ? { cancelled: true } : {}),
     ...(outcome.kind === "ok" && outcome.model != null ? { model: outcome.model } : {}),
     ...(usage != null ? { usage } : {}),
+    ...(filters != null ? { filters } : {}),
   });
   return { spec, trace };
 }

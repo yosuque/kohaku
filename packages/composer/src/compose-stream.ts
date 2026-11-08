@@ -42,11 +42,14 @@ const PROVISIONAL_PATCH_THROTTLE_MS = 60;
  *   built from the LLM's partial output) continue 0 or more times, converging at the end with a patch to
  *   the final form. spec is the form with the patch already applied (removes the need for the host to
  *   re-apply). The result of applyPatch in reception order is always a structurally validated Spec (REST-STR-002).
+ *   `converged: true` marks the last patch, the convergence to the finalized Spec (set on exactly one patch per
+ *   stream and only after generation has completed), so a host can attach what only the finalized Spec
+ *   determines -- e.g. a capability covering the bind variants of injected L1 filters -- exactly once.
  * - `done`: the terminal. result is the same ComposeResult as a non-stream compose.
  */
 export type ComposeStreamInternalEvent =
   | { kind: "spec"; spec: UISpec; final: boolean; refs: string[] }
-  | { kind: "patch"; patch: SpecPatch; spec: UISpec }
+  | { kind: "patch"; patch: SpecPatch; spec: UISpec; converged?: true }
   | { kind: "done"; result: ComposeResult };
 
 /**
@@ -192,7 +195,7 @@ export async function* composeStream(
     const { spec, trace } = await genPromise;
     const result = finish(spec, trace, ctx);
     const patch = diffSpec(lastSpec, result.spec);
-    yield { kind: "patch", patch, spec: result.spec };
+    yield { kind: "patch", patch, spec: result.spec, converged: true };
     yield { kind: "done", result };
   } catch (e) {
     // Notify the observation hook of a hard failure (whether before or after skeleton emission) and re-throw.

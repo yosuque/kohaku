@@ -406,11 +406,13 @@ async function streamGenerated(
   // issued and /binding/action would always 403 for a stream-delivered final Spec.
   //
   // final:false (the skeleton) has no $ref yet, so it is issued read-only from composeStream's resolved
-  // refs instead (host-core's issueCapabilityForRefs). bind (two-way binding, [Draft]) is declared only
-  // on the final Spec and is not opened up to L1/L2 generation (generation:excluded), so a skeleton never
-  // needs bind variants; consequently an L1/L2-generated Spec delivered via patches after this skeleton
-  // carries no write scope either (documented limitation — only a single-event final:true response can
-  // carry action.invoke over the stream).
+  // refs instead (host-core's issueCapabilityForRefs). bind (two-way binding, [Draft]) is not opened up to
+  // the model (generation:excluded), so a skeleton never needs bind variants. The one way an L1 Spec gains
+  // bind is ComposePolicy.l1Filters (composer-injected, after generation): in that case the final
+  // convergence patch (composeStream's `final: true`) carries a replacement `capability` issued from the
+  // finalized Spec (below). A generated Spec without bind still keeps the skeleton's read-only capability
+  // (documented limitation — only a final:true spec event, or a bind-bearing final patch, carries
+  // action.invoke write scopes over the stream).
   let capability: string | undefined;
   let final: ComposeResult | undefined;
   for await (const ev of composeStream({ kind: "intent", intent }, deps.compose, {
@@ -440,7 +442,28 @@ async function streamGenerated(
         }),
       });
     } else if (ev.kind === "patch") {
-      await stream.writeSSE({ event: "patch", data: JSON.stringify({ patch: ev.patch }) });
+      // The convergence patch to the finalized Spec (composeStream marks it `converged`) is where what only the
+      // finalized Spec determines can be delivered. The skeleton's refs-based capability cannot cover the
+      // bind variants an L1 Spec gains from ComposePolicy.l1Filters (the filters are injected after generation),
+      // so a replacement capability is issued from the finalized Spec itself -- the same rule as the
+      // final:true fast path, hence it also carries every write scope a non-stream /compose of that Spec would
+      // (intersected with DomainPort.listOperations()) -- and rides this patch, together with the Governed
+      // Actions `actions` manifest of the finalized Spec (the non-stream response carries both, and the
+      // skeleton's manifest is empty). Only when the Spec declares data.bind: any other stream keeps its
+      // single, skeleton-time capability and manifest (no behavior change).
+      const replace = ev.converged === true && ev.spec.components.some((c) => c.data?.bind != null);
+      const replacement = replace
+        ? await issueSpecCapability(ev.spec, principal, ctx, call, session.tenant)
+        : undefined;
+      const replacementActions = replace ? await actionsFor(ctx, ev.spec, call) : undefined;
+      await stream.writeSSE({
+        event: "patch",
+        data: JSON.stringify({
+          patch: ev.patch,
+          ...(replacement != null ? { capability: replacement } : {}),
+          ...(replacementActions != null ? { actions: replacementActions } : {}),
+        }),
+      });
     } else {
       final = ev.result;
     }

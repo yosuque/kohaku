@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
-from kohaku.spec import JsonObject, QueryHandle
+from kohaku.spec import FilterDescriptor, FilterOption, JsonObject, QueryHandle
 
 from .facet_view import FacetView, FacetViewEntry
 from .param_schema import ObjectSchema, ParamField
@@ -36,6 +36,12 @@ DrilldownFn = Callable[[JsonObject, JsonObject], DrilldownResult]
 QueriesFn = Callable[[JsonObject], list[QueryHandle]]
 
 
+class FiltersFn(Protocol):
+    """(locale?) → the GUI filters the Intent exposes (see spec-level FilterDescriptor)."""
+
+    def __call__(self, locale: str | None = None, /) -> list[FilterDescriptor]: ...
+
+
 @dataclass(frozen=True)
 class IntentDef:
     """(a) The SemanticPort IntentDef.
@@ -52,6 +58,11 @@ class IntentDef:
     to_queries: QueriesFn
     drilldown: DrilldownFn | None = None
     """None if unspecified (corresponds to `"drilldown" in def` being false in TS)."""
+    filters: FiltersFn | None = None
+    """The GUI filters this Intent exposes, derived from the `facets` declaration. Present only for a
+    declarative-template Intent: a callback `queries` has no `paramMap` to read the query param name from.
+    `locale` (a BCP-47-like tag such as "ja" or "ja-JP") selects the label overlays -- exact tag first, then its
+    primary subtag -- falling back to the canonical label."""
 
 
 @dataclass(frozen=True)
@@ -130,6 +141,7 @@ class IntentDefinition:
             examples=spec.examples,
             to_queries=self._to_queries,
             drilldown=spec.drilldown,
+            filters=_build_filters(spec),
         )
 
     def to_facet_view(self) -> FacetView:
@@ -168,6 +180,84 @@ def _build_to_queries(spec: IntentSpec) -> QueriesFn:
         return [compile_query_template(source_str, template, p) for template in templates]
 
     return run
+
+
+def _build_filters(spec: IntentSpec) -> FiltersFn | None:
+    """Derive IntentDef.filters from the facet declarations (port of intent.ts's buildFilters).
+
+    Uses the same resolution as to_facet_view, so the two never disagree. A facet becomes a filter when it is
+    a discrete string-valued select: `control` is "select" (the default), the param is not numeric (a numeric
+    facet is a range/curation, not an enumeration), and it has at least one option. The query param comes from
+    the templates' `paramMap`; a param mapped to different query params by different templates is ambiguous
+    and is skipped, as is a param no template maps. `paths` are the template paths that map the param.
+
+    A filter is excluded entirely when its `queryParam` would not have one meaning across the Intent's refs
+    (FilterDescriptor's contract): it is also a `fixedParams` key of any template (the ref's value is fixed,
+    not the param's), or another Intent param maps to the same query parameter on one of the filter's paths.
+    None for a callback `queries`.
+    """
+    queries = spec.queries
+    if callable(queries):
+        return None
+    templates = queries
+    entries: list[tuple[FacetViewEntry, str, list[str]]] = []
+    for entry in _build_facet_view(spec).facets:
+        if entry.control != "select" or entry.valueType != "string" or len(entry.options) == 0:
+            continue
+        mapped: list[str] = []
+        paths: list[str] = []
+        for template in templates:
+            query_param = (template.paramMap or {}).get(entry.key)
+            if query_param is None:
+                continue
+            if query_param not in mapped:
+                mapped.append(query_param)
+            if template.path not in paths:
+                paths.append(template.path)
+        if len(mapped) != 1:
+            continue
+        query_param = mapped[0]
+        if any(query_param in (t.fixedParams or {}) for t in templates):
+            continue
+        shared = any(
+            t.path in paths
+            and any(
+                qp == query_param and param != entry.key for param, qp in (t.paramMap or {}).items()
+            )
+            for t in templates
+        )
+        if shared:
+            continue
+        entries.append((entry, query_param, paths))
+
+    def filters(locale: str | None = None, /) -> list[FilterDescriptor]:
+        return [
+            FilterDescriptor(
+                param=entry.key,
+                queryParam=query_param,
+                paths=list(paths),
+                label=_localized(entry.labels, locale, entry.label),
+                options=[
+                    FilterOption(
+                        value=opt["value"],
+                        label=_localized(opt.get("labels"), locale, opt["label"]),
+                    )
+                    for opt in entry.options
+                ],
+            )
+            for entry, query_param, paths in entries
+        ]
+
+    return filters
+
+
+def _localized(labels: dict[str, str] | None, locale: str | None, canonical: str) -> str:
+    """The locale overlay for `locale` (exact tag, then its primary subtag: "ja-JP" -> "ja"), else the canonical label."""
+    if locale is None or labels is None:
+        return canonical
+    if locale in labels:
+        return labels[locale]
+    return labels.get(locale.split("-")[0], canonical)
 
 
 def _build_facet_view(spec: IntentSpec) -> FacetView:

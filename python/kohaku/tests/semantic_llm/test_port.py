@@ -8,6 +8,7 @@ import pytest
 
 from kohaku.intents import (
     EnumField,
+    FacetSpec,
     IntentDef,
     IntentSpec,
     QueryTemplate,
@@ -24,7 +25,10 @@ from kohaku.semantic_llm import (
 )
 from kohaku.spec import (
     DataShape,
+    FilterDescriptor,
+    FilterOption,
     GuiAction,
+    Intent,
     IntentInput,
     IntentValidationError,
     JsonObject,
@@ -363,3 +367,75 @@ class TestValidateIntent:
                 WEB,
             )
         ) == IntentInput(canonical="sales.summary", params={"groupBy": "region"})
+
+
+class TestDescribeFilters:
+    """Port of port.test.ts's `createLlmSemanticPort describeFilters` describe block."""
+
+    filtered = create_intent_catalog(
+        [
+            define_intent(
+                IntentSpec(
+                    canonical="sales.filtered",
+                    description="Filtered",
+                    source="sales",
+                    params=object_schema(
+                        {"groupBy": EnumField(values=("region", "product")).default("region")}
+                    ),
+                    examples=[],
+                    facets=[FacetSpec(param="groupBy", label="Group by", labels={"ja": "集計軸"})],
+                    queries=[QueryTemplate(path="summary", paramMap={"groupBy": "by"})],
+                )
+            ).to_intent_def(),
+            # No facets declared: the Intent exposes no filters.
+            define_intent(
+                IntentSpec(
+                    canonical="sales.plain",
+                    description="Plain",
+                    source="sales",
+                    params=object_schema(
+                        {"groupBy": EnumField(values=("region", "product")).default("region")}
+                    ),
+                    examples=[],
+                    queries=[QueryTemplate(path="summary", paramMap={"groupBy": "by"})],
+                )
+            ).to_intent_def(),
+        ]
+    )
+    port = create_llm_semantic_port(
+        llm=FakeLlm(),
+        catalog=lambda tenant: (
+            create_intent_catalog([]) if tenant == "t2" else TestDescribeFilters.filtered
+        ),
+        data_version=lambda _h: "v",
+    )
+
+    @staticmethod
+    def _intent(canonical: str) -> Intent:
+        return Intent(canonical=canonical, params={"groupBy": "region"}, hash=f"sha256:{'ab' * 32}")
+
+    def test_delegates_to_the_intent_definitions_filters(self) -> None:
+        out = asyncio.run(self.port.describe_filters(self._intent("sales.filtered")))
+        assert out == [
+            FilterDescriptor(
+                param="groupBy",
+                queryParam="by",
+                paths=["summary"],
+                label="Group by",
+                options=[FilterOption("region", "region"), FilterOption("product", "product")],
+            )
+        ]
+
+    def test_forwards_the_locale_and_selects_the_per_tenant_catalog(self) -> None:
+        localized = asyncio.run(
+            self.port.describe_filters(self._intent("sales.filtered"), locale="ja")
+        )
+        assert localized[0].label == "集計軸"
+        assert (
+            asyncio.run(self.port.describe_filters(self._intent("sales.filtered"), tenant="t2"))
+            == []
+        )
+
+    def test_returns_empty_for_an_intent_without_facets_or_an_unknown_intent(self) -> None:
+        assert asyncio.run(self.port.describe_filters(self._intent("sales.plain"))) == []
+        assert asyncio.run(self.port.describe_filters(self._intent("sales.bogus"))) == []

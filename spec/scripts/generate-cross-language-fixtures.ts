@@ -57,6 +57,10 @@ import {
   designKitPromptFragment,
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
+// Relative, same reasoning: inject-filters.ts imports only spec-core; policy-fingerprint.ts imports only
+// spec-core and inject-filters.ts at runtime (its llm / context imports are type-only and erased).
+import { filterDescriptorsHash, policyFingerprint } from "../../packages/composer/src/policy-fingerprint.js";
+import { injectFilters } from "../../packages/composer/src/post/inject-filters.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
 // Relative rather than "@kohaku-ui/lineage": spec does not declare a dependency on lineage either
 // (same reasoning as the composer / registry imports below). Everything reached here (build.ts,
@@ -87,6 +91,7 @@ import {
   defaultOutputLocale,
   normalizeGuiAction,
 } from "../../packages/semantic-llm/src/index.js";
+import { INJECT_FILTERS_CASES, POLICY_FINGERPRINT_CASES } from "../test/l1-filters-cases.js";
 import {
   createSemanticGuiCatalog,
   SEMANTIC_GUI_CASES,
@@ -456,6 +461,35 @@ async function main(): Promise<void> {
     tag,
     label: defaultOutputLocale(tag ?? undefined),
   }));
+
+  // ComposePolicy.l1Filters: composer's deterministic filter injection and the policyFingerprint bytes it
+  // contributes to the cache key. Inputs live in test/l1-filters-cases.ts (shared with the TS test); the Python
+  // port reads them back out of this fixture and must reproduce the outputs exactly.
+  const injectFiltersCases = INJECT_FILTERS_CASES.map(({ name, spec: input, descriptors, maxVariants }) => {
+    const out = injectFilters(input, descriptors, maxVariants != null ? { maxVariants } : {});
+    return {
+      name,
+      spec: input,
+      descriptors,
+      ...(maxVariants != null ? { maxVariants } : {}),
+      expected: {
+        spec: out.spec,
+        injected: out.injected,
+        ...(out.skipped != null ? { skipped: out.skipped } : {}),
+      },
+    };
+  });
+  const policyFingerprintCases = await Promise.all(
+    POLICY_FINGERPRINT_CASES.map(async ({ name, policy, descriptors }) => {
+      const descriptorsHash = await filterDescriptorsHash(descriptors);
+      return {
+        name,
+        policy,
+        ...(descriptors != null ? { descriptors, descriptorsHash: descriptorsHash ?? null } : {}),
+        fingerprint: await policyFingerprint(policy, undefined, descriptorsHash),
+      };
+    }),
+  );
 
   const exampleSpec = parseSpec(
     JSON.parse(readFileSync(join(OUT_DIR, "../../examples/quarterly-sales.spec.json"), "utf8")),
@@ -1008,6 +1042,7 @@ async function main(): Promise<void> {
         semanticPrompts: semanticPromptCases,
         semanticLocale: semanticLocaleCases,
         llmBaseUrl,
+        l1Filters: { inject: injectFiltersCases, policyFingerprint: policyFingerprintCases },
         authzHmac,
       },
       null,
@@ -1015,7 +1050,7 @@ async function main(): Promise<void> {
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, domainMcp=${domainMcp.schemaProjection.length}+${domainMcp.argumentCoercion.length}+${domainMcp.tabular.length}+${domainMcp.shape.length}, authzHmac=${authzHmac.capabilities.length}+${authzHmac.approvals.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, domainMcp=${domainMcp.schemaProjection.length}+${domainMcp.argumentCoercion.length}+${domainMcp.tabular.length}+${domainMcp.shape.length}, authzHmac=${authzHmac.capabilities.length}+${authzHmac.approvals.length}, injectFilters=${injectFiltersCases.length}, policyFingerprint=${policyFingerprintCases.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

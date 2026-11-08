@@ -176,6 +176,34 @@ export interface ComposeL1Policy {
    * actually sent to the LLM, which can change the generated output for the same Intent.
    */
   refConstraint?: "schema" | "validate";
+  /**
+   * Opt in (default false) to deterministic filter injection into L1-generated Specs. When true, the
+   * composer asks `SemanticPort.describeFilters` for the Intent's filters (derived from its facet
+   * declarations, never from the model) and, after a successful L1 generation, adds a `control.select` +
+   * `state` + `state.set` event + `data.bind` per filter whose query param appears in the `$ref` of a generated
+   * component reading one of the filter's paths (`post/inject-filters.ts`). Changing a filter then
+   * re-resolves the data with no recompose and no model call. Skipped (the Spec is delivered as generated)
+   * when the Intent has no filters, the SemanticPort does not implement `describeFilters`, the bind variants
+   * would exceed `l1FiltersMaxVariants`, or the injected Spec would not validate; the reason is recorded in
+   * `ComposeTrace.filters`.
+   *
+   * Limits: a selected value cannot be cleared back to "all" (`data.bind.values` has no empty value, same as
+   * the L0 cross-filter), and an Intent whose current value for a filter is empty gets no control for it.
+   *
+   * Included in `policyFingerprint` (only when `true`, as an absent key) together with a hash of the
+   * descriptors `describeFilters` returned (labels, options, paths): Specs whose authorized range or label
+   * language differ -- another locale (`session.locale` is passed through), a tenant-specific option list --
+   * are cached separately. The generation prompt is unchanged, so PROMPT_REVISION is not bumped.
+   */
+  l1Filters?: boolean;
+  /**
+   * The most bind variants (the sum over data components of the product of their bound params' value counts)
+   * one filter injection may create; exceeding it delivers the Spec as generated (`trace.filters.skipped:
+   * "variant-limit"`). Default 64: each variant is a read scope in the capability, and 256 scopes are about 35 KB,
+   * which exceeds Node's 16 KiB header limit (`/binding/resolve` would answer 431). Never above spec-core's
+   * MAX_BIND_VARIANTS (256). Included in `policyFingerprint` only when `l1Filters` is on and the value is not 64.
+   */
+  l1FiltersMaxVariants?: number;
 }
 
 /**

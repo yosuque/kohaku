@@ -250,3 +250,58 @@ describe("createLlmSemanticPort", () => {
     });
   });
 });
+
+describe("createLlmSemanticPort describeFilters", () => {
+  const filtered = createIntentCatalog([
+    defineIntent({
+      canonical: "sales.filtered",
+      description: "Filtered",
+      source: "sales",
+      params: z.object({ groupBy: z.enum(["region", "product"]).default("region") }),
+      examples: [],
+      facets: [{ param: "groupBy", label: "Group by", labels: { ja: "集計軸" } }],
+      queries: [{ path: "summary", paramMap: { groupBy: "by" } }],
+    }).toIntentDef(),
+    // No facets declared: the Intent exposes no filters.
+    defineIntent({
+      canonical: "sales.plain",
+      description: "Plain",
+      source: "sales",
+      params: z.object({ groupBy: z.enum(["region", "product"]).default("region") }),
+      examples: [],
+      queries: [{ path: "summary", paramMap: { groupBy: "by" } }],
+    }).toIntentDef(),
+  ]);
+  const p = createLlmSemanticPort({
+    llm: new FakeLlm(),
+    catalog: (tenant) => (tenant === "t2" ? createIntentCatalog([]) : filtered),
+    dataVersion: () => "v",
+  });
+  const intent = (canonical: string) => ({ canonical, params: { groupBy: "region" }, hash: "h" });
+
+  it("delegates to the Intent definition's filters()", async () => {
+    expect(await p.describeFilters!(intent("sales.filtered"))).toEqual([
+      {
+        param: "groupBy",
+        queryParam: "by",
+        paths: ["summary"],
+        label: "Group by",
+        options: [
+          { value: "region", label: "region" },
+          { value: "product", label: "product" },
+        ],
+      },
+    ]);
+  });
+
+  it("forwards the locale and selects the per-tenant catalog", async () => {
+    const localized = await p.describeFilters!(intent("sales.filtered"), { locale: "ja" });
+    expect(localized[0]?.label).toBe("集計軸");
+    expect(await p.describeFilters!(intent("sales.filtered"), { tenant: "t2" })).toEqual([]);
+  });
+
+  it("returns [] for an Intent without facets or for an unknown Intent", async () => {
+    expect(await p.describeFilters!(intent("sales.plain"))).toEqual([]);
+    expect(await p.describeFilters!(intent("sales.bogus"))).toEqual([]);
+  });
+});
