@@ -8,6 +8,7 @@ import {
   type LineageFilter,
   normalizeTenant,
   type PromotionState,
+  StorageConflictError,
   type StoragePort,
   type UISpec,
 } from "@kohaku-ui/spec-core";
@@ -91,10 +92,23 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     promotion: qualifiedTable(schema, "kohaku_promotion_state"),
     fixation: qualifiedTable(schema, "kohaku_fixation"),
   };
-  const promotionStates = tenantKeyedTable<PromotionState>(pool, tables.promotion, "artifact_id", "state");
-  const fixations = tenantKeyedTable<FixationRecord>(pool, tables.fixation, "intent_hash", "record");
+  const promotionStates = tenantKeyedTable<PromotionState>(
+    pool,
+    tables.promotion,
+    "artifact_id",
+    "state",
+    "promotion",
+  );
+  const fixations = tenantKeyedTable<FixationRecord>(
+    pool,
+    tables.fixation,
+    "intent_hash",
+    "record",
+    "fixation",
+  );
 
   return {
+    supportsCompareAndSet: true,
     ready,
     async getSpecCache(key) {
       await ready();
@@ -184,9 +198,9 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       await ready();
       return promotionStates.get(tenant, artifactId);
     },
-    async putPromotionState(state) {
+    async putPromotionState(state, options) {
       await ready();
-      await promotionStates.put(state.tenant, state.artifactId, state);
+      await promotionStates.put(state.tenant, state.artifactId, state, options?.expectedRevision);
     },
     async putPromotionStates(states) {
       if (states.length === 0) return;
@@ -206,19 +220,22 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     },
     async putFixation(record, options) {
       await ready();
+      const expected = options?.expectedRevision;
       if (options?.ifPresent === true) {
-        await fixations.updateExisting(record.tenant, record.intentHash, record);
+        // "must exist" together with "must not exist" is contradictory: always a conflict.
+        if (expected === null) throw new StorageConflictError("fixation", record.intentHash);
+        await fixations.updateExisting(record.tenant, record.intentHash, record, expected);
         return;
       }
-      await fixations.put(record.tenant, record.intentHash, record);
+      await fixations.put(record.tenant, record.intentHash, record, expected);
     },
     async listFixations(tenant) {
       await ready();
       return fixations.list(tenant);
     },
-    async deleteFixation(intentHash, tenant) {
+    async deleteFixation(intentHash, tenant, options) {
       await ready();
-      await fixations.delete(tenant, intentHash);
+      await fixations.delete(tenant, intentHash, options?.expectedRevision);
     },
     close,
   };
