@@ -3,10 +3,12 @@ import {
   type LineageEventRecord,
   type PromotionState,
   PromotionStateSchema,
+  StorageConflictError,
   type StoragePort,
 } from "@kohaku-ui/spec-core";
 import { GENERATED_SCAN_WINDOW } from "../constants.js";
 import { notifyFailOpen } from "../fail-open.js";
+import { generateRevision } from "../revision.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import type { PromotionCandidate, PromotionOrigin, ScopedCandidate } from "./candidate.js";
 import type { PromotionErrorContext } from "./errors.js";
@@ -52,7 +54,21 @@ function originFromPayload(payload: Record<string, unknown> | undefined): Promot
  */
 export interface CandidateStore {
   load(artifactId: string, options?: LoadCandidateOptions): Promise<PromotionCandidate | null>;
+  /**
+   * Writes the candidate's snapshot with a fresh `revision`. On a `supportsCompareAndSet` port the write is
+   * conditional on the revision the candidate was loaded with (see `assertUnchanged`), so it throws
+   * `StorageConflictError` instead of overwriting a concurrent writer's state. A candidate that was not
+   * loaded through this store, or whose stored record predates `revision`, is written unconditionally.
+   */
   persist(candidate: PromotionCandidate, tenant?: string): Promise<void>;
+  /**
+   * The cheap pre-check `act` runs right before it records its audit event: re-reads the stored state and
+   * throws `StorageConflictError` when its revision differs from the one the candidate was loaded with, so a
+   * transition that is already doomed to lose its conditional `persist` does not leave an orphan audit event
+   * behind. A no-op on a port that does not declare `supportsCompareAndSet`, and for a candidate with no
+   * known loaded revision (never loaded, or loaded from a legacy record without one).
+   */
+  assertUnchanged(candidate: PromotionCandidate, tenant?: string): Promise<void>;
   /**
    * Batch counterpart of `persist`: persists several candidates in as few storage round trips as the
    * StoragePort allows. Uses `storage.putPromotionStates` when the port implements it (one read-modify-write for
@@ -100,6 +116,15 @@ export function createCandidateStore(opts: {
   const now = (): Date => opts.now?.() ?? new Date();
 
   /**
+   * The revision each loaded candidate was read with, for the optional StoragePort compare-and-set: `null` =
+   * no state was stored, a string = the stored `revision`, `undefined` (also: not in the map) = the stored
+   * record predates `revision` or was unreadable, so the next write is unconditional (and stamps one). Kept
+   * beside the candidate rather than on it: `PromotionCandidate` is what the REST API serializes, and the
+   * revision is storage bookkeeping, not part of that wire shape.
+   */
+  const loadedRevision = new WeakMap<PromotionCandidate, string | null | undefined>();
+
+  /**
    * Validates a promotion-state record read back from storage against PromotionStateSchema, treating a
    * validation failure exactly like a real absence (null): loadCandidate's existing
    * `state?.status ?? "in_use"` / `state?.data[...]` fallbacks already do the right thing with a null state,
@@ -144,11 +169,8 @@ export function createCandidateStore(opts: {
     // read only this tenant's state so status/verdict/draft do not get mixed. Fetched before the
     // component.generated lookup below because a self-contained published snapshot (persist's html/sha256/ref
     // copy, #9) can make the generated lookup unnecessary entirely.
-    const state = validatePromotionState(
-      await storage.getPromotionState(artifactId, tenant),
-      artifactId,
-      tenant,
-    );
+    const rawState = await storage.getPromotionState(artifactId, tenant);
+    const state = validatePromotionState(rawState, artifactId, tenant);
     const generated =
       generatedEvent != null
         ? [generatedEvent]
@@ -169,7 +191,7 @@ export function createCandidateStore(opts: {
     // persisted (state.data.origin) once the generated event ages out of GENERATED_SCAN_WINDOW — the
     // same pattern `request` above uses, so origin survives indefinitely once captured.
     const origin = originFromPayload(payload) ?? (state?.data["origin"] as PromotionOrigin | undefined);
-    return {
+    const candidate: PromotionCandidate = {
       artifactId,
       status: (state?.status as PromotionStatus | undefined) ?? "in_use",
       canonical: payload?.["canonical"] as string | undefined,
@@ -188,6 +210,10 @@ export function createCandidateStore(opts: {
       ...(origin != null ? { origin } : {}),
       updatedAt: state?.updatedAt ?? generated[0]?.ts ?? new Date(0).toISOString(),
     };
+    // A record that exists but failed validation is "absent" to the candidate, yet must not read back as
+    // `null` here: a conditional create would then conflict with that corrupt row forever instead of repairing it.
+    loadedRevision.set(candidate, rawState == null ? null : state?.revision);
+    return candidate;
   }
 
   /**
@@ -201,6 +227,9 @@ export function createCandidateStore(opts: {
       updatedAt: now().toISOString(),
       // Stamp the owning tenant. The StoragePort uses this value to key-separate state by (tenant, artifactId).
       ...tenantField(tenant),
+      // A fresh per-write token on every snapshot (also on a port that ignores it, so adopting a
+      // compare-and-set adapter later needs no data migration).
+      revision: generateRevision(),
       data: {
         ...(candidate.verdict != null ? { verdict: candidate.verdict } : {}),
         ...(candidate.draft != null ? { draft: candidate.draft } : {}),
@@ -237,7 +266,24 @@ export function createCandidateStore(opts: {
   }
 
   async function persist(candidate: PromotionCandidate, tenant?: string): Promise<void> {
-    await storage.putPromotionState(buildPromotionState(candidate, tenant));
+    const state = buildPromotionState(candidate, tenant);
+    const expected = loadedRevision.get(candidate);
+    if (storage.supportsCompareAndSet === true && expected !== undefined) {
+      await storage.putPromotionState(state, { expectedRevision: expected });
+    } else {
+      await storage.putPromotionState(state);
+    }
+    // A candidate persisted twice (it is mutated in place) must chain from what it just wrote.
+    loadedRevision.set(candidate, state.revision);
+  }
+
+  async function assertUnchanged(candidate: PromotionCandidate, tenant?: string): Promise<void> {
+    if (storage.supportsCompareAndSet !== true) return;
+    const expected = loadedRevision.get(candidate);
+    if (expected === undefined) return;
+    const current = await storage.getPromotionState(candidate.artifactId, tenant);
+    const currentRevision = current == null ? null : (current.revision ?? undefined);
+    if (currentRevision !== expected) throw new StorageConflictError("promotion", candidate.artifactId);
   }
 
   /**
@@ -377,6 +423,7 @@ export function createCandidateStore(opts: {
   return {
     load: loadCandidate,
     persist,
+    assertUnchanged,
     persistMany,
     scan: scanCandidates,
     scanWithTenant: scanCandidatesWithTenant,

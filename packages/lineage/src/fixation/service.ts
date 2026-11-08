@@ -12,6 +12,7 @@ import { FIXATION_PROPOSAL_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind } from "../events.js";
 import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
+import { generateRevision } from "../revision.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 
 /**
@@ -280,17 +281,6 @@ function toProposals(byIntent: Map<string, L1UsageAccumulator>, policy: Fixation
   return proposals;
 }
 
-/**
- * Generates a coarse ulid-like, per-write revision token: a base36 ms timestamp plus a random suffix. Not the
- * full `ulid` library (no cross-service sortability guarantee is needed here) — only "distinguishable from the
- * previous write even inside the same millisecond" matters, which `fixatedAt` (an ms-precision ISO timestamp)
- * cannot provide (an unfixate → fixate pair landing in the same ms would otherwise share a TOCTOU guard
- * token with the fixation it replaced).
- */
-function generateRevision(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 export function createFixations(opts: {
   lineage: Lineage;
   storage: StoragePort;
@@ -350,13 +340,39 @@ export function createFixations(opts: {
     tenant: string | undefined,
     payload: Record<string, unknown>,
     actor: ActorKind,
+    expectedRevision: string | undefined,
   ): Promise<void> {
     if (opts.storage.deleteFixation == null) {
       throw new FixationUnsupportedError();
     }
-    // Do the state change (deletion) first, and record the audit event only on success.
-    await opts.storage.deleteFixation(intentHash, tenant);
+    // Do the state change (deletion) first, and record the audit event only on success. On a compare-and-set
+    // port the delete is conditional on the revision the caller just read, so a fixation re-approved or replaced
+    // by another instance in between is not swept away (StorageConflictError; nothing is audited).
+    await opts.storage.deleteFixation(intentHash, tenant, deleteGuard(expectedRevision));
     await opts.lineage.record("intent.unfixated", payload, actor, tenant);
+  }
+
+  /**
+   * The `deleteFixation` options for a record read with `revision`: conditional on it when the port declares
+   * compare-and-set and the record carries one. Otherwise `undefined`, so the call keeps its pre-CAS shape (a
+   * legacy record with no revision is deleted unconditionally, as before).
+   */
+  function deleteGuard(revision: string | undefined): { expectedRevision: string } | undefined {
+    return opts.storage.supportsCompareAndSet === true && revision != null
+      ? { expectedRevision: revision }
+      : undefined;
+  }
+
+  /**
+   * The `putFixation` options of a read-modify-write over a record read with `revision` (refreshFingerprint,
+   * replace): always `ifPresent`, plus -- on a compare-and-set port, for a record that carries a revision --
+   * `expectedRevision`, so a stale in-memory copy can neither resurrect a deleted fixation nor overwrite a
+   * newer one (e.g. put an old pinnedSpec back over a concurrent replace).
+   */
+  function rewriteOptions(revision: string | undefined): { ifPresent: true; expectedRevision?: string } {
+    return opts.storage.supportsCompareAndSet === true && revision != null
+      ? { ifPresent: true, expectedRevision: revision }
+      : { ifPresent: true };
   }
 
   /**
@@ -422,6 +438,11 @@ export function createFixations(opts: {
         // Stamp the tenant (the basis on which the StoragePort key-separates by (tenant, intentHash)).
         ...tenantField(tenant),
       };
+      // Deliberately unconditional even on a compare-and-set port: fixate derives nothing from an earlier
+      // read (the record is built from the freshly composed Spec and a human approval), so it is an
+      // authoritative overwrite -- re-approving an intent must always be possible. It stamps a fresh revision,
+      // which is what makes a concurrent refreshFingerprint / replace / invalidate that read the old record
+      // fail their own conditional write instead of clobbering this one.
       await opts.storage.putFixation(record);
       await opts.lineage.record(
         "intent.fixated",
@@ -446,6 +467,7 @@ export function createFixations(opts: {
         tenant,
         { intentHash, approver: approver.id },
         { kind: "user", id: approver.id },
+        existing.revision,
       );
     },
 
@@ -463,6 +485,7 @@ export function createFixations(opts: {
         tenant,
         { intentHash, reason, ...(detail != null ? { detail } : {}) },
         { kind: "system" },
+        existing.revision,
       );
     },
 
@@ -477,7 +500,9 @@ export function createFixations(opts: {
       // resurrect it from this stale in-memory copy; ifPresent makes the write a no-op unless the fixation
       // still exists on disk (a StoragePort that ignores the option keeps the old unconditional-write
       // behavior, so this is a strict hardening, not a required contract change).
-      await opts.storage.putFixation({ ...existing, catalogFingerprint }, { ifPresent: true });
+      // On a compare-and-set port the write is also conditional on the revision just read (kept unchanged: a
+      // fingerprint re-stamp is not a governance decision), so it cannot overwrite a concurrent replace.
+      await opts.storage.putFixation({ ...existing, catalogFingerprint }, rewriteOptions(existing.revision));
     },
 
     async replace(intentHash, pinnedSpec, options) {
@@ -495,7 +520,7 @@ export function createFixations(opts: {
       };
       // ifPresent: true guards the same race refreshFingerprint's own write does (a concurrent unfixate
       // between this function's get and put must not resurrect the fixation from this stale in-memory copy).
-      await opts.storage.putFixation(record, { ifPresent: true });
+      await opts.storage.putFixation(record, rewriteOptions(existing.revision));
       await opts.lineage.record(
         "intent.migrated",
         {
