@@ -1291,5 +1291,127 @@
       "  - never leave browser-default styling on tables, buttons or inputs"
     ],
     "promptRevision": "13"
-  }
+  },
+  "llmBaseUrl": [
+    {
+      "provider": "claude",
+      "baseUrl": "",
+      "root": null,
+      "requestUrl": "https://api.anthropic.com/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "   ",
+      "root": null,
+      "requestUrl": "https://api.anthropic.com/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "https://gw.example",
+      "root": "https://gw.example",
+      "requestUrl": "https://gw.example/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "https://gw.example/",
+      "root": "https://gw.example",
+      "requestUrl": "https://gw.example/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "https://gw.example/v1",
+      "root": "https://gw.example",
+      "requestUrl": "https://gw.example/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "https://gw.example/v1/",
+      "root": "https://gw.example",
+      "requestUrl": "https://gw.example/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "https://gw.example/anthropic",
+      "root": "https://gw.example/anthropic",
+      "requestUrl": "https://gw.example/anthropic/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "https://gw.example/anthropic/v1",
+      "root": "https://gw.example/anthropic",
+      "requestUrl": "https://gw.example/anthropic/v1/messages"
+    },
+    {
+      "provider": "claude",
+      "baseUrl": "http://localhost:8080/v1",
+      "root": "http://localhost:8080",
+      "requestUrl": "http://localhost:8080/v1/messages"
+    },
+    {
+      "provider": "gemini",
+      "baseUrl": "",
+      "root": null,
+      "requestUrl": "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent"
+    },
+    {
+      "provider": "gemini",
+      "baseUrl": "https://gw.example",
+      "root": "https://gw.example",
+      "requestUrl": "https://gw.example/v1beta/models/m:generateContent"
+    },
+    {
+      "provider": "gemini",
+      "baseUrl": "https://gw.example/v1beta",
+      "root": "https://gw.example",
+      "requestUrl": "https://gw.example/v1beta/models/m:generateContent"
+    },
+    {
+      "provider": "gemini",
+      "baseUrl": "https://gw.example/v1beta/",
+      "root": "https://gw.example",
+      "requestUrl": "https://gw.example/v1beta/models/m:generateContent"
+    },
+    {
+      "provider": "gemini",
+      "baseUrl": "https://gw.example/google",
+      "root": "https://gw.example/google",
+      "requestUrl": "https://gw.example/google/v1beta/models/m:generateContent"
+    },
+    {
+      "provider": "gemini",
+      "baseUrl": "https://gw.example/google/v1beta",
+      "root": "https://gw.example/google",
+      "requestUrl": "https://gw.example/google/v1beta/models/m:generateContent"
+    },
+    {
+      "provider": "openai",
+      "baseUrl": "",
+      "root": null,
+      "requestUrl": null
+    },
+    {
+      "provider": "openai",
+      "baseUrl": "https://gw.example/v1",
+      "root": "https://gw.example/v1",
+      "requestUrl": null
+    },
+    {
+      "provider": "openai",
+      "baseUrl": "https://gw.example/v1/",
+      "root": "https://gw.example/v1/",
+      "requestUrl": null
+    },
+    {
+      "provider": "ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "root": "http://localhost:11434/v1",
+      "requestUrl": null
+    },
+    {
+      "provider": "llama",
+      "baseUrl": "http://llama.example:8080/v1",
+      "root": "http://llama.example:8080/v1",
+      "requestUrl": null
+    }
+  ]
 }

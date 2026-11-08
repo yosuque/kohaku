@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -222,12 +223,14 @@ def _text_response(_req: Any) -> Any:
     return httpx2.Response(200, json=_message([{"type": "text", "text": "hello"}], "end_turn"))
 
 
-def test_default_transport_authentication_headers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin how the real SDK authenticates when kohaku passes `api_key=`.
+def test_default_transport_without_base_url_carries_the_key_in_an_auth_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct api.anthropic.com: whichever scheme the installed SDK uses, the key must be on the wire.
 
-    anthropic SDK 2.x sends `Authorization: Bearer <key>` for `api_key=` (and for `auth_token=`); it does NOT
-    send `x-api-key` any more, and it always sends `anthropic-version`. Pinned so an SDK upgrade that changes
-    the scheme shows up here instead of as a production 401.
+    anthropic SDK 2.x sends `Authorization: Bearer <key>` for `api_key=`; 1.x sent `x-api-key`. pyproject allows
+    both majors, so the test accepts either, but a missing key (or both missing) fails. No extra `X-Api-Key` is
+    added by kohaku on this path: the direct path is left exactly as the SDK does it.
     """
     requests: list[Any] = []
     _install_mock(monkeypatch, _text_response, requests)
@@ -236,20 +239,19 @@ def test_default_transport_authentication_headers(monkeypatch: pytest.MonkeyPatc
 
     assert len(requests) == 1
     headers = requests[0].headers
-    assert headers["authorization"] == "Bearer k"
-    assert "x-api-key" not in headers
+    assert headers.get("authorization") == "Bearer k" or headers.get("x-api-key") == "k"
+    if headers.get("authorization") == "Bearer k":
+        assert "x-api-key" not in headers
     assert headers["anthropic-version"]
-    assert requests[0].url.host == "api.anthropic.com"
-    assert requests[0].url.path == "/v1/messages"
+    assert str(requests[0].url) == "https://api.anthropic.com/v1/messages"
 
 
-def test_default_transport_honours_base_url_with_the_same_auth_headers(
+def test_default_transport_with_base_url_also_sends_x_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A gateway in front of the API may read only `x-api-key`, so kohaku sends it next to the SDK's own auth."""
     requests: list[Any] = []
     _install_mock(monkeypatch, _text_response, requests)
-    # The Python SDK appends `/v1/messages` itself, so (unlike the TypeScript provider, whose baseURL already
-    # ends in `/v1`) the base URL given here has no `/v1` suffix.
     config = resolve_llm_env(
         {
             "KOHAKU_LLM_PROVIDER": "claude",
@@ -261,7 +263,44 @@ def test_default_transport_honours_base_url_with_the_same_auth_headers(
     _run_generate_text(config)
 
     assert len(requests) == 1
-    assert requests[0].url.host == "gw.example"
-    assert requests[0].url.path == "/v1/messages"
-    assert requests[0].headers["authorization"] == "Bearer k"
-    assert "x-api-key" not in requests[0].headers
+    headers = requests[0].headers
+    assert headers["x-api-key"] == "k"
+    assert (
+        headers.get("authorization", "Bearer k") == "Bearer k"
+    )  # SDK 2.x also sends its own Bearer
+    assert headers["anthropic-version"]
+
+
+def test_default_transport_without_a_key_adds_no_x_api_key_even_with_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[Any] = []
+    _install_mock(monkeypatch, _text_response, requests)
+    config = resolve_llm_env(
+        {"KOHAKU_LLM_PROVIDER": "claude", "KOHAKU_LLM_BASE_URL": "https://gw.example"}
+    )
+
+    _run_generate_text(config)
+
+    # kohaku adds no header of its own without a key (SDK 1.x would still send its placeholder itself).
+    assert requests[0].headers.get("x-api-key") in (None, "not-required")
+
+
+def test_default_transport_request_url_matches_the_cross_language_golden(
+    monkeypatch: pytest.MonkeyPatch, cross_language_fixture: dict[str, Any]
+) -> None:
+    """Every claude `KOHAKU_LLM_BASE_URL` spelling (with/without `/v1`, trailing slash, blank) hits the same final
+    URL as the TypeScript provider (packages/llm/test/ai-sdk-wire.test.ts reads the same fixture)."""
+    cases = [c for c in cross_language_fixture["llmBaseUrl"] if c["provider"] == "claude"]
+    assert any(c["baseUrl"].endswith("/v1") for c in cases)
+    assert any(c["baseUrl"] == "https://gw.example" for c in cases)
+    requests: list[Any] = []
+    _install_mock(monkeypatch, _text_response, requests)
+    base = resolve_llm_env({"KOHAKU_LLM_PROVIDER": "claude", "KOHAKU_LLM_API_KEY": "k"})
+    for case in cases:
+        requests.clear()
+
+        _run_generate_text(replace(base, base_url=case["baseUrl"]))
+
+        assert len(requests) == 1, case
+        assert str(requests[0].url) == case["requestUrl"], case

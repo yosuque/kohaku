@@ -274,6 +274,9 @@ def _build_httpx_transport(config: LlmConfig) -> ChatTransport:
     )
     if not base_url:
         raise LlmError("CONFIG", f'provider "{config.provider}" requires a base_url')
+    # With no key configured (a local ollama / llama.cpp), `Authorization: Bearer not-required` is still sent.
+    # This is deliberate and matches the TS port (@ai-sdk/openai-compatible gets the same placeholder): such
+    # servers ignore the header, and a gateway that insists on one gets a well-formed value.
     api_key = config.api_key or "not-required"
 
     async def transport(
@@ -340,7 +343,9 @@ def _build_httpx_stream_transport(config: LlmConfig) -> StreamingChatTransport:
     # A nested class's method does not inherit the outer scope's type narrowing, so bind it to a str-confirmed
     # local and capture that in the closure (base_url is str, not None).
     base_url: str = resolved
-    api_key = config.api_key or "not-required"
+    api_key = (
+        config.api_key or "not-required"
+    )  # same placeholder as the non-streaming transport above
 
     class _HttpxStreamTransport:
         async def stream(

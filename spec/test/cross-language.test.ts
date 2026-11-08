@@ -51,6 +51,9 @@ import {
   signManifest,
   verifyManifestSignature,
 } from "../../packages/lineage/src/index.js";
+// Relative (not "@kohaku-ui/llm") import, same reasoning as generate-cross-language-fixtures.ts's own llm import.
+import { normalizeVendorBaseUrl } from "../../packages/llm/src/base-url.js";
+import type { LlmProvider } from "../../packages/llm/src/env.js";
 
 /**
  * Cross-language golden (TS side). Pins that the TS implementation reproduces the fixture
@@ -84,6 +87,12 @@ interface Fixture {
     designBrief: string[];
     promptRevision: string;
   };
+  llmBaseUrl: {
+    provider: LlmProvider;
+    baseUrl: string;
+    root: string | null;
+    requestUrl: string | null;
+  }[];
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -185,6 +194,18 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     expect(exportDistillationDataset({ fixations: [record], golden: [spec] })).toBe(
       fixture.distillation.jsonl,
     );
+  });
+});
+
+describe("cross-language golden (KOHAKU_LLM_BASE_URL normalisation)", () => {
+  it("normalizeVendorBaseUrl reproduces the fixture (the real-SDK request URLs are asserted by packages/llm's wire test)", () => {
+    expect(fixture.llmBaseUrl.length).toBeGreaterThan(0);
+    for (const c of fixture.llmBaseUrl) {
+      expect(
+        normalizeVendorBaseUrl(c.provider, c.baseUrl) ?? null,
+        `${c.provider} ${JSON.stringify(c.baseUrl)}`,
+      ).toBe(c.root);
+    }
   });
 });
 

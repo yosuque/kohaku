@@ -72,6 +72,8 @@ pnpm dev                 # API :8787 + Web :5173
 | **Ollama(キー不要・ローカル)** | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b` 等(モデル未指定時の既定は `llama3.3`) |
 | llama.cpp / vLLM 等 | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL=http://…/v1` + `KOHAKU_LLM_MODEL=…` |
 
+`KOHAKU_LLM_BASE_URL` は、どのプロバイダでもゲートウェイやプロキシを指すのに使えます。値の書き方はプロバイダごとに違い、TypeScript と Python で同じです。**Claude** と **Gemini** は API バージョンのパスを含まないベンダーの根を指定します(`https://gw.example`。末尾の `/v1` や `/v1beta` が付いていても取り除きます)。**OpenAI・Ollama・llama.cpp**(OpenAI 互換)は `/v1` まで含めたベースを指定します(`http://…/v1`)。未設定ならベンダー自身のエンドポイントを使います。Ollama 用に残した値は Claude・OpenAI・Gemini のリクエストも向け先を変えてしまうので、プロバイダを切り替えるときは外してください。
+
 `@kohaku-ui/llm` と一緒にプロバイダの SDK をインストールしてください: Claude → `@ai-sdk/anthropic`、OpenAI → `@ai-sdk/openai`、Gemini → `@ai-sdk/google`、Ollama / llama.cpp → `@ai-sdk/openai-compatible`(任意の peer dependency。使わないプロバイダの分は何もインストールされません)。
 
 > **Ollama の注意**: 非思考(non-reasoning)のインストラクトモデルを推奨します。思考モデル(qwen3.5 等)は推論で出力トークンを使い切り、UI 合成が遅い・空になることがあります。また llama.cpp 系は大きなスキーマの構造化出力が不安定なことがありますが、既定の `KOHAKU_LLM_STRUCTURED_MODE=auto` が自動でプロンプト JSON 方式にフォールバックします。
