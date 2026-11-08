@@ -148,12 +148,19 @@ _LOADED_REVISION_ATTR = "_loaded_revision"
 
 def _loaded_revision(candidate: PromotionCandidate) -> ExpectedRevision:
     """The revision a loaded candidate was read with, for the optional StoragePort compare-and-set: `None` =
-    no state was stored, a str = the stored `revision`, `UNSET` (also: never loaded) = the stored record
-    predates `revision` or was unreadable, so the next write is unconditional (and stamps one). Kept as a
-    private instance attribute, not a dataclass field, because `PromotionCandidate` is what the REST API
+    no state was stored, `""` = a state exists but carries no `revision` (it predates the field), any other
+    str = the stored `revision`; `UNSET` (never loaded through `_load_candidate`) = the next write is
+    unconditional (and stamps one). Kept as a private instance attribute, not a dataclass field, because `PromotionCandidate` is what the REST API
     serializes (field by field) and the revision is storage bookkeeping, not part of that wire shape."""
     value: ExpectedRevision = getattr(candidate, _LOADED_REVISION_ATTR, UNSET)
     return value
+
+
+def _revision_token(revision: object) -> str:
+    """The `expected_revision` token for a stored record's `revision`: the revision itself, or `""` ("the
+    record exists but carries no revision") for a record that predates the field. An absent record is `None`,
+    which callers decide before they get here."""
+    return revision if isinstance(revision, str) else ""
 
 
 def _remember_revision(candidate: PromotionCandidate, revision: ExpectedRevision) -> None:
@@ -186,6 +193,16 @@ class PromotionCandidate:
     Port of TS's `PromotionCandidate.suggestion` (`kohaku.spec.SchemaSuggestion`), carried in its wire form (a
     plain dict) like `verdict` / `origin`, so a malformed persisted value reaches the approve path's fail-open
     handling instead of being rejected on load."""
+
+
+@dataclass
+class _PersistManyResult:
+    """Result of `_persist_many`. `persisted` are the candidates that are durably stored (in input order);
+    `error` is set exactly when the pass stopped on a non-conflict storage error (the failing candidate and every
+    one after it are not in `persisted`). Mirror of TS candidate-store.ts's `PersistManyResult`."""
+
+    persisted: list[PromotionCandidate]
+    error: Exception | None = None
 
 
 @dataclass(frozen=True)
@@ -514,16 +531,16 @@ class Promotions:
             origin=origin,
             updatedAt=state.updatedAt if state is not None else generated[0].ts,
         )
-        # A record that exists but failed validation is "absent" to the candidate, yet must not read back as
-        # None here: a conditional create would then conflict with that corrupt row forever instead of
-        # repairing it. A record with no revision (legacy) reads back as UNSET for the same reason.
+        # What the next write must be conditional on: None when no record exists, otherwise the stored revision,
+        # with "" meaning "exists but carries none" (a record that predates `revision`). That last state is
+        # guarded too (never left unconditional), or every instance that read the legacy record would write
+        # over whatever the first of them committed. A record that exists but failed validation is "absent" to
+        # the candidate, yet must not read back as None here: a conditional create would then conflict with
+        # that corrupt row forever instead of repairing it, so its raw revision (if any) is used the same way.
         if raw_state is None:
             _remember_revision(candidate, None)
         else:
-            _remember_revision(
-                candidate,
-                state.revision if state is not None and state.revision is not None else UNSET,
-            )
+            _remember_revision(candidate, _revision_token(raw_state.revision))
         return candidate
 
     def _build_promotion_state(
@@ -579,9 +596,9 @@ class Promotions:
     async def _persist(self, candidate: PromotionCandidate, tenant: str | None = None) -> None:
         """Writes the candidate's snapshot with a fresh revision. On a `supports_compare_and_set` port the
         write is conditional on the revision the candidate was loaded with (see `_assert_unchanged`), so it
-        raises StorageConflictError instead of overwriting a concurrent writer's state. A candidate that was
-        not loaded through `_load_candidate`, or whose stored record predates `revision`, is written
-        unconditionally."""
+        raises StorageConflictError instead of overwriting a concurrent writer's state; a stored record that
+        predates `revision` is guarded too (`expected_revision=""`). Only a candidate that was not loaded
+        through `_load_candidate` is written unconditionally."""
         state = self._build_promotion_state(candidate, tenant)
         expected = _loaded_revision(candidate)
         if supports_compare_and_set(self._storage) and expected is not UNSET:
@@ -598,7 +615,8 @@ class Promotions:
         and raises StorageConflictError when its revision differs from the one the candidate was loaded
         with, so a transition that is already doomed to lose its conditional `_persist` does not leave an
         orphan audit event behind. A no-op on a port that does not declare `supports_compare_and_set`, and
-        for a candidate with no known loaded revision (never loaded, or loaded from a legacy record)."""
+        for a candidate with no known loaded revision (never loaded through `_load_candidate`). A legacy
+        record without a `revision` is compared as `""`, like on the write."""
         if not supports_compare_and_set(self._storage):
             return
         expected = _loaded_revision(candidate)
@@ -609,13 +627,13 @@ class Promotions:
         if current is None:
             current_revision = None
         else:
-            current_revision = current.revision if current.revision is not None else UNSET
+            current_revision = _revision_token(current.revision)
         if current_revision != expected:
             raise StorageConflictError("promotion", candidate.artifactId)
 
     async def _persist_many(
         self, candidates: list[PromotionCandidate], tenant: str | None = None
-    ) -> list[PromotionCandidate]:
+    ) -> _PersistManyResult:
         """Batch counterpart of `_persist`: builds every PromotionState up front, then issues either one
         `StoragePort.put_promotion_states` call (when the storage implements
         `kohaku.spec.ports.SupportsBatchPromotionStates` -- see that Protocol's comment, and
@@ -631,27 +649,41 @@ class Promotions:
         each candidate is written on its own, conditional on the revision the scan loaded it with (None when
         no state existed), and a candidate that lost the race is SKIPPED: someone else changed it, so this
         pass must not nominate it. Chosen over adding a per-item expectation to `put_promotion_states`, which
-        would complicate every adapter's batch path for a pass that is cheap to repeat."""
+        would complicate every adapter's batch path for a pass that is cheap to repeat.
+
+        A non-conflict error (a transient storage failure) stops the pass, but the candidates already written
+        stay durable, so they are returned beside the error (`_PersistManyResult.error`) rather than lost to
+        the raise: the caller audits them before re-raising. Dropping them would leave candidates stored as
+        `candidate` that no retry ever audits, because the retry sees them as already nominated and skips
+        them. The batch call (`put_promotion_states`) is one write, so nothing is known to be durable when it
+        fails; the legacy per-state loop keeps the same partial-progress rule as the compare-and-set loop."""
         if not candidates:
-            return []
+            return _PersistManyResult(persisted=[])
+        persisted: list[PromotionCandidate] = []
         if supports_compare_and_set(self._storage):
-            persisted: list[PromotionCandidate] = []
             for candidate in candidates:
                 try:
                     await self._persist(candidate, tenant)
                 except Exception as e:
                     if not is_storage_conflict_error(e):
-                        raise
+                        return _PersistManyResult(persisted=persisted, error=e)
                 else:
                     persisted.append(candidate)
-            return persisted
+            return _PersistManyResult(persisted=persisted)
         states = [self._build_promotion_state(c, tenant) for c in candidates]
         if isinstance(self._storage, SupportsBatchPromotionStates):
-            await self._storage.put_promotion_states(states)
-        else:
-            for state in states:
+            try:
+                await self._storage.put_promotion_states(states)
+            except Exception as e:
+                return _PersistManyResult(persisted=[], error=e)
+            return _PersistManyResult(persisted=list(candidates))
+        for candidate, state in zip(candidates, states, strict=True):
+            try:
                 await self._storage.put_promotion_state(state)
-        return list(candidates)
+            except Exception as e:
+                return _PersistManyResult(persisted=persisted, error=e)
+            persisted.append(candidate)
+        return _PersistManyResult(persisted=persisted)
 
     async def _gather_candidates(
         self, auto_nominate: bool, tenant: str | None = None
@@ -760,7 +792,8 @@ class Promotions:
 
         # Every eligible candidate's status transition is now applied in memory; persist them all in a single
         # batch write (see _persist_many's doc for the SupportsBatchPromotionStates isinstance check / fallback).
-        persisted = await self._persist_many(to_persist, tenant)
+        persist_result = await self._persist_many(to_persist, tenant)
+        persisted = persist_result.persisted
         # A candidate a compare-and-set port refused (another instance changed it since the scan) was not
         # nominated by this pass: put its in-memory status back so the returned list does not claim a
         # transition that was not stored, and drop it from the audits below.
@@ -819,6 +852,10 @@ class Promotions:
                     ),
                     e,
                 )
+
+        # The pass stopped on a storage error: everything stored before it is audited above, so surface it now.
+        if persist_result.error is not None:
+            raise persist_result.error
 
         return sorted(candidates, key=lambda c: c.uses, reverse=True)
 
