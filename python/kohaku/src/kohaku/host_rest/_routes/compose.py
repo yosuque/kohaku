@@ -71,6 +71,7 @@ from .shared import (
     _read_json,
     _resolve_tenant,
     allowed_actions,
+    capability_tenant_for,
     check_rate_limit,
     operation_index,
     report_host_error,
@@ -112,8 +113,12 @@ async def issue_capability_for_spec(
     deps: KohakuHostDeps,
     endpoint: str,
     request_id: str,
+    tenant: str | None = None,
 ) -> str:
     """Issue a capability matching the Spec's declarations (read: $ref + bind variant / write: action).
+
+    `tenant` is the request's resolved tenant (`session.tenant`); it is bound into the capability so the data
+    plane can treat the signed value as authoritative (SPEC CAP-TEN-001).
 
     The issuance rule itself lives in kohaku.host_core.issue_capability_for_spec (which in turn consumes the
     spec-layer collect_capability_scopes, the single source of truth), shared with the MCP surface's
@@ -136,6 +141,7 @@ async def issue_capability_for_spec(
     # on_dropped_action (kohaku.host_core's contract) is synchronous, so dropped action names are collected
     # here and reported with a real await afterward, rather than firing an unawaited task per drop.
     dropped: list[str] = []
+    tenant = await capability_tenant_for(deps, tenant, request_id)
     token = await _host_core_issue_capability_for_spec(
         deps.authz,
         principal,
@@ -145,6 +151,7 @@ async def issue_capability_for_spec(
         else _DEFAULT_CAPABILITY_TTL,
         allowed_actions=allowed,
         on_dropped_action=dropped.append,
+        tenant=tenant,
     )
     for action in dropped:
         await report_host_error(deps, endpoint, request_id, _WriteScopeDroppedError(action))
@@ -152,18 +159,25 @@ async def issue_capability_for_spec(
 
 
 async def issue_capability_for_refs(
-    principal: Principal, refs: Sequence[str], deps: KohakuHostDeps
+    principal: Principal,
+    refs: Sequence[str],
+    deps: KohakuHostDeps,
+    tenant: str | None = None,
+    request_id: str = "",
 ) -> str:
-    """Issue a read capability covering the resolved QueryHandle URIs (for the streaming skeleton)."""
+    """Issue a read capability covering the resolved QueryHandle URIs (for the streaming skeleton). `tenant`
+    is bound into the capability when given (SPEC CAP-TEN-001); the keyword is omitted otherwise."""
+    tenant = await capability_tenant_for(deps, tenant, request_id)
     unique = list(dict.fromkeys(refs))
     scopes = [Scope(kind="read", ref=ref) for ref in unique]
-    return await deps.authz.issue_capability(
-        principal,
-        scopes,
-        ttl_seconds=deps.capability_ttl_seconds
+    ttl = (
+        deps.capability_ttl_seconds
         if deps.capability_ttl_seconds is not None
-        else _DEFAULT_CAPABILITY_TTL,
+        else _DEFAULT_CAPABILITY_TTL
     )
+    if tenant is None:
+        return await deps.authz.issue_capability(principal, scopes, ttl_seconds=ttl)
+    return await deps.authz.issue_capability(principal, scopes, ttl_seconds=ttl, tenant=tenant)
 
 
 async def _actions_for(
@@ -480,7 +494,7 @@ async def _compose_stream_body(
         result = await resolve_fixated_result(intent, session, deps, request_id)
         if result is not None:
             capability = await issue_capability_for_spec(
-                result.spec, principal, deps, "compose/stream", request_id
+                result.spec, principal, deps, "compose/stream", request_id, session.tenant
             )
             actions = await _actions_for(deps, result.spec, "compose/stream", request_id)
             spec_payload: dict[str, Any] = {
@@ -522,10 +536,12 @@ async def _compose_stream_body(
                 if capability_ref is None:
                     capability_ref = (
                         await issue_capability_for_spec(
-                            ev.spec, principal, deps, "compose/stream", request_id
+                            ev.spec, principal, deps, "compose/stream", request_id, session.tenant
                         )
                         if ev.final
-                        else await issue_capability_for_refs(principal, list(ev.refs), deps)
+                        else await issue_capability_for_refs(
+                            principal, list(ev.refs), deps, session.tenant, request_id
+                        )
                     )
                 ev_actions = await _actions_for(deps, ev.spec, "compose/stream", request_id)
                 ev_spec_payload: dict[str, Any] = {
@@ -606,7 +622,7 @@ async def _deliver_composed(
                 intent, session, deps, abort=abort, request_id=request_id
             )
             capability = await issue_capability_for_spec(
-                result.spec, principal, deps, endpoint, request_id
+                result.spec, principal, deps, endpoint, request_id, session.tenant
             )
 
             async def _rec() -> None:

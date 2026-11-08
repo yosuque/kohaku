@@ -51,6 +51,7 @@ from .binding_ref import (
 from .capability import (
     DEFAULT_CAPABILITY_TTL_SECONDS,
     WriteScopeDroppedError,
+    authz_accepts_tenant,
     issue_capability_for_spec,
 )
 from .catalog_impact import (
@@ -242,6 +243,7 @@ __all__ = [
     "get_lock",
     "is_llm_unavailable_error",
     "is_typed_host_error",
+    "authz_accepts_tenant",
     "issue_capability_for_spec",
     "load_policy_file",
     "notify_hook",

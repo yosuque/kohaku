@@ -26,6 +26,20 @@ export interface IssueCapabilityOptions {
   allowedActions?: ReadonlySet<string>;
   /** Called once per dropped write scope (fail-open: the capability is still issued, just without that scope). */
   onDroppedAction?: (action: string) => void;
+  /**
+   * The tenant to bind into the capability (SPEC CAP-TEN-001), when the host resolved one. Omitted from the
+   * `AuthzPort.issueCapability` options entirely when undefined, so a port that predates the tenant option
+   * sees exactly the call shape it always did.
+   */
+  tenant?: string;
+}
+
+/** The `issueCapability` options for a TTL plus an optional tenant (no `tenant` key when there is none). */
+function issueOptions(
+  ttlSeconds: number,
+  tenant: string | undefined,
+): { ttlSeconds: number; tenant?: string } {
+  return tenant != null ? { ttlSeconds, tenant } : { ttlSeconds };
 }
 
 /**
@@ -46,7 +60,7 @@ export async function issueCapabilityForSpec(
   options?: IssueCapabilityOptions,
 ): Promise<string> {
   const scopes = filterAllowedScopes(collectCapabilityScopes(spec), options);
-  return authz.issueCapability(principal, scopes, { ttlSeconds });
+  return authz.issueCapability(principal, scopes, issueOptions(ttlSeconds, options?.tenant));
 }
 
 /** Drops write scopes not covered by `options.allowedActions` (a no-op when it is undefined). */
@@ -77,6 +91,7 @@ export async function issueSpecCapabilitySafely(
   allowedActions: () => Promise<ReadonlySet<string>>,
   report: (error: unknown) => void | Promise<void>,
   ttlSeconds?: number,
+  options?: Pick<IssueCapabilityOptions, "tenant">,
 ): Promise<string> {
   let allowed: ReadonlySet<string>;
   try {
@@ -88,6 +103,7 @@ export async function issueSpecCapabilitySafely(
   return issueCapabilityForSpec(authz, principal, spec, ttlSeconds, {
     allowedActions: allowed,
     onDroppedAction: (action) => void report(new WriteScopeDroppedError(action)),
+    ...(options?.tenant != null ? { tenant: options.tenant } : {}),
   });
 }
 
@@ -144,7 +160,8 @@ export async function issueCapabilityForRefs(
   principal: Principal,
   refs: string[],
   ttlSeconds: number = DEFAULT_CAPABILITY_TTL_SECONDS,
+  options?: Pick<IssueCapabilityOptions, "tenant">,
 ): Promise<string> {
   const scopes = [...new Set(refs)].map((ref) => ({ kind: "read" as const, ref }));
-  return authz.issueCapability(principal, scopes, { ttlSeconds });
+  return authz.issueCapability(principal, scopes, issueOptions(ttlSeconds, options?.tenant));
 }

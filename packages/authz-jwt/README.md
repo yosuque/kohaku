@@ -64,3 +64,7 @@ The packages in this scope share a single version and are designed to be install
 - Source: https://github.com/yosuque/kohaku/tree/main/packages/authz-jwt
 
 Licensed under the Apache License, Version 2.0.
+
+## `requireCapabilityTenant` versus `requireTenant`
+
+Two options look alike and guard different tokens. The inherited **`requireTenant`** (identity resolution) rejects a *bearer JWT* with no `tenant` claim (`JwtIdentityError` code `MISSING_TENANT`). **`requireCapabilityTenant`** is passed straight through to `@kohaku-ui/authz-hmac`'s `requireTenant`: `verify` rejects a *capability token* that binds no tenant (reason `"capability lacks tenant"`), so a REST data plane (`/binding/*`) never accepts a tenant-less capability (SPEC CAP-TEN-001 / CAP-TEN-002). Turn it on only when every capability issuer passes the resolved tenant — the MCP host resolves none and issues tenant-less capabilities, so it must keep this off — and roll it out after every issuing host is upgraded, since older tokens are tenant-less for up to the capability TTL. `issueCapability(…, { tenant })` and `VerifyResult.tenant` need no option: they round-trip through the delegated HMAC port.

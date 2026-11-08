@@ -13,7 +13,7 @@ from pathlib import Path
 from starlette.requests import Request
 
 from kohaku.host_core import PolicyRateLimiter, PolicyRateLimiterTakeParams, RateLimitedInfo
-from kohaku.spec import Principal, RateLimitResult
+from kohaku.spec import Principal, RateLimitResult, Scope
 
 from .conftest import PREFIX, Harness, build_harness
 
@@ -70,14 +70,24 @@ def test_returns_429_without_retry_after_header_when_not_given(tmp_path: Path) -
 
 def test_denies_binding_action_with_route_class_action(tmp_path: Path) -> None:
     harness, limiter = _harness_with(tmp_path, RateLimitResult(allow=False, retryAfterMs=1000))
-    res = harness.client.post(_url("/binding/action"), json={"action": "annotate", "payload": {}})
+    cap = harness.issue([Scope(kind="write", ref="annotate")])
+    res = harness.client.post(
+        _url("/binding/action"),
+        json={"action": "annotate", "payload": {}},
+        headers={"Authorization": f"Bearer {cap}"},
+    )
     assert res.status_code == 429
     assert limiter.calls[0].routeClass == "action"
 
 
 def test_denies_binding_resolve_with_route_class_resolve(tmp_path: Path) -> None:
     harness, limiter = _harness_with(tmp_path, RateLimitResult(allow=False, retryAfterMs=1000))
-    res = harness.client.get(_url("/binding/resolve"), params={"ref": harness.ref})
+    cap = harness.issue([Scope(kind="read", ref=harness.ref)])
+    res = harness.client.get(
+        _url("/binding/resolve"),
+        params={"ref": harness.ref},
+        headers={"Authorization": f"Bearer {cap}"},
+    )
     assert res.status_code == 429
     assert limiter.calls[0].routeClass == "resolve"
 

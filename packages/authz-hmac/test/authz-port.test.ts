@@ -178,3 +178,132 @@ describe("createHmacAuthzPort verify: scope evaluated before the revocation stor
     );
   });
 });
+
+describe("createHmacAuthzPort tenant claim (SPEC CAP-TEN-001)", () => {
+  const principal = { id: "u", roles: ["user"] };
+  const scopes = [{ kind: "read" as const, ref: "query://s/x" }];
+  const req = { kind: "read" as const, ref: "query://s/x" };
+
+  it("signs opts.tenant into the token and returns it from verify", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability(principal, scopes, { tenant: "acme" });
+    expect(await authz.verify(cap, req)).toEqual({ ok: true, principal: { id: "u" }, tenant: "acme" });
+  });
+
+  it("never signs an empty tenant (it is no tenant)", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability(principal, scopes, { tenant: "" });
+    expect(await authz.verify(cap, req)).toEqual({ ok: true, principal: { id: "u" } });
+  });
+
+  it("treats a tenant-less (pre-upgrade) token as valid with no tenant by default", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = issueJtiLessToken("test-secret", "u", Math.floor(Date.now() / 1000) + 60);
+    expect(await authz.verify(cap, req)).toEqual({ ok: true, principal: { id: "u" } });
+  });
+
+  it("requireTenant rejects a token without a tenant claim and accepts one with it", async () => {
+    const authz = createHmacAuthzPort("test-secret", { requireTenant: true });
+    const without = await authz.issueCapability(principal, scopes);
+    expect(await authz.verify(without, req)).toEqual({ ok: false, reason: "capability lacks tenant" });
+    const withTenant = await authz.issueCapability(principal, scopes, { tenant: "acme" });
+    expect((await authz.verify(withTenant, req)).ok).toBe(true);
+  });
+
+  it("rejects a token whose payload was edited to carry another tenant (signature covers the claim)", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability(principal, scopes, { tenant: "acme" });
+    const [payload, signature] = cap.split(".") as [string, string];
+    const edited = Buffer.from(
+      JSON.stringify({ ...JSON.parse(Buffer.from(payload, "base64url").toString("utf8")), tenant: "evil" }),
+    ).toString("base64url");
+    expect((await authz.verify(`${edited}.${signature}`, req)).ok).toBe(false);
+  });
+});
+
+describe("createHmacAuthzPort cross-language wire token (SPEC CAP-TEN-001)", () => {
+  // The identical literal is verified by the Python test python/examples/sales-api/sales_api_tests/
+  // test_authz_port.py ("TS-issued wire token"): payload {sub, scopes, exp, jti, tenant}, HMAC-SHA256 over the
+  // payload string, secret "interop-secret".
+  const WIRE_TOKEN =
+    "eyJzdWIiOiJpbnRlcm9wLXVzZXIiLCJzY29wZXMiOlt7ImtpbmQiOiJyZWFkIiwicmVmIjoicXVlcnk6Ly9zYWxlcy9zdW1tYXJ5P2Z5PTIwMjYifV0sImV4cCI6NDEwMjQ0NDgwMCwianRpIjoiaW50ZXJvcC1qdGkiLCJ0ZW5hbnQiOiJhY21lIn0.pT4L2fW_JAjOiuJ-e6S_kuhepszrDrl7fJZwHhY6hj4";
+
+  it("verifies the shared wire token and reads its tenant", async () => {
+    const authz = createHmacAuthzPort("interop-secret");
+    expect(await authz.verify(WIRE_TOKEN, { kind: "read", ref: "query://sales/summary?fy=2026" })).toEqual({
+      ok: true,
+      principal: { id: "interop-user" },
+      tenant: "acme",
+    });
+  });
+
+  it("issues the claims in the documented order (sub, scopes, exp, jti, tenant)", async () => {
+    const authz = createHmacAuthzPort("interop-secret");
+    const cap = await authz.issueCapability({ id: "u" }, [{ kind: "read", ref: "query://s/x" }], {
+      tenant: "acme",
+    });
+    const claims = JSON.parse(Buffer.from(cap.split(".")[0]!, "base64url").toString("utf8")) as object;
+    expect(Object.keys(claims)).toEqual(["sub", "scopes", "exp", "jti", "tenant"]);
+  });
+});
+
+describe("createHmacAuthzPort tenant claim validation and the Python-issued wire token", () => {
+  const secret = "test-secret";
+  const req = { kind: "read" as const, ref: "query://s/x" };
+
+  /** A correctly signed token carrying exactly these claims (what a foreign issuer could mint). */
+  function signedWith(claims: Record<string, unknown>): string {
+    const payload = Buffer.from(
+      JSON.stringify({
+        sub: "u",
+        scopes: [{ kind: "read", ref: "query://s/x" }],
+        exp: 4102444800,
+        ...claims,
+      }),
+    ).toString("base64url");
+    return `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+  }
+
+  it("rejects an explicit null tenant claim as malformed (absent is fine)", async () => {
+    const authz = createHmacAuthzPort(secret);
+    expect(await authz.verify(signedWith({ tenant: null }), req)).toEqual({
+      ok: false,
+      reason: "malformed payload",
+    });
+    expect((await authz.verify(signedWith({}), req)).ok).toBe(true);
+  });
+
+  it("rejects an over-long or control-character tenant when verifying", async () => {
+    const authz = createHmacAuthzPort(secret);
+    expect((await authz.verify(signedWith({ tenant: "a".repeat(256) }), req)).ok).toBe(true);
+    for (const tenant of ["a".repeat(257), "ac\nme", "ac\u0000me", "ac\u007fme"]) {
+      expect(await authz.verify(signedWith({ tenant }), req)).toEqual({
+        ok: false,
+        reason: "malformed payload",
+      });
+    }
+  });
+
+  it("refuses to issue an over-long or control-character tenant", async () => {
+    const authz = createHmacAuthzPort(secret);
+    for (const tenant of ["a".repeat(257), "ac\nme"]) {
+      await expect(authz.issueCapability({ id: "u" }, [], { tenant })).rejects.toThrow(/tenant/);
+    }
+    await expect(authz.issueCapability({ id: "u" }, [], { tenant: "a".repeat(256) })).resolves.toBeTypeOf(
+      "string",
+    );
+  });
+
+  it("verifies a token issued by the Python sales-api port (secret interop-secret, tenant acme)", async () => {
+    // Issued by python/examples/sales-api's HmacAuthzPort (no jti; claims sub/scopes/exp/tenant), which
+    // test_authz_port.py verifies back -- together the two literals make the interop bidirectional.
+    const token =
+      "eyJzdWIiOiJweS11c2VyIiwic2NvcGVzIjpbeyJraW5kIjoicmVhZCIsInJlZiI6InF1ZXJ5Oi8vc2FsZXMvc3VtbWFyeT9meT0yMDI2In1dLCJleHAiOjQxMDI0NDQ4MDAsInRlbmFudCI6ImFjbWUifQ.vf71x9NdeJ2ilagq-UuWcnUBzwzfT6zuFCqA8q-sKEk";
+    const authz = createHmacAuthzPort("interop-secret");
+    expect(await authz.verify(token, { kind: "read", ref: "query://sales/summary?fy=2026" })).toEqual({
+      ok: true,
+      principal: { id: "py-user" },
+      tenant: "acme",
+    });
+  });
+});

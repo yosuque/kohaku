@@ -68,9 +68,13 @@ class TestDeeplyNestedRequestBody:
         res = harness.client.post(
             _url("/binding/action"),
             content=f'{{"action":"widget.submit","payload":{{"a":{deep}}}}}',
-            headers={"content-type": "application/json"},
+            headers={
+                "content-type": "application/json",
+                # A bearer must be present (its absence is a 401 before the body is read), never verified.
+                "authorization": "Bearer not-yet-verified",
+            },
         )
-        # Rejected by the body parse before the (missing) capability is even checked.
+        # Rejected by the body parse, before the capability is verified.
         assert res.status_code == 400
         assert res.json()["error"]["code"] == "BAD_REQUEST"
 

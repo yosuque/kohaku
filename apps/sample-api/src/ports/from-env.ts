@@ -156,6 +156,18 @@ export function capabilitySecretFromEnv(env: NodeJS.ProcessEnv): string {
   return raw != null && raw.trim() !== "" ? raw : "dev-secret-change-me";
 }
 
+/** Options for the env-selected AuthzPort (`createAuthzFromEnv` / `createPortsFromEnv`). */
+export interface AuthzFromEnvOptions {
+  /**
+   * Under `KOHAKU_AUTHZ=jwt`, reject a capability that binds no tenant (authz-jwt's `requireCapabilityTenant`,
+   * SPEC CAP-TEN-001). Only a REST host that issues every capability with the request's resolved tenant should
+   * set this (sample-api's `index.ts` does); sample-mcp never resolves a tenant, so its capabilities are
+   * tenant-less and it must leave this off. Still subject to `KOHAKU_JWT_REQUIRE_TENANT`: a deployment that
+   * opted out of tenant-bearing JWTs (`0`) gets no capability tenant requirement either. Default false.
+   */
+  requireCapabilityTenant?: boolean;
+}
+
 /**
  * Builds the AuthzPort itself (hmac / jwt) against an already-built revocation store. Shared by
  * `createAuthzFromEnv` (its own, independently-connected revocation store) and `createPortsFromEnv` (a
@@ -165,6 +177,7 @@ export function capabilitySecretFromEnv(env: NodeJS.ProcessEnv): string {
 function buildAuthzFromEnv(
   env: NodeJS.ProcessEnv,
   revocations: CapabilityRevocationStore,
+  options: AuthzFromEnvOptions = {},
 ): { kind: AuthzKind; authz: AuthzPort; identity?: JwtIdentityResolver } {
   const capabilitySecret = capabilitySecretFromEnv(env);
   const kind = (env["KOHAKU_AUTHZ"] ?? "hmac") as AuthzKind;
@@ -209,15 +222,19 @@ function buildAuthzFromEnv(
     ...(env["KOHAKU_JWT_ISSUER"] ? { issuer: env["KOHAKU_JWT_ISSUER"] } : {}),
     ...(audience ? { audience } : {}),
     requireTenant,
+    // A tenant-bearing JWT yields a tenant-bound capability (the REST host passes the resolved tenant to
+    // issuance), so a REST deployment that requires the former can require the latter. Both stay off when
+    // the deployment opted out of tenants, and off for a host that never resolves one (sample-mcp).
+    ...(requireTenant && options.requireCapabilityTenant === true ? { requireCapabilityTenant: true } : {}),
     capabilitySecret,
     revocations,
   });
   return { kind, authz: port, identity: port.identity };
 }
 
-export function createAuthzFromEnv(env: NodeJS.ProcessEnv): AuthzFromEnv {
+export function createAuthzFromEnv(env: NodeJS.ProcessEnv, options: AuthzFromEnvOptions = {}): AuthzFromEnv {
   const revocationsFromEnv = createRevocationsFromEnv(env);
-  const { kind, authz, identity } = buildAuthzFromEnv(env, revocationsFromEnv.revocations);
+  const { kind, authz, identity } = buildAuthzFromEnv(env, revocationsFromEnv.revocations, options);
   return {
     kind,
     authz,
@@ -251,12 +268,16 @@ export interface PortsFromEnv {
  * For `file` / `memory`, there is nothing to share (the revocation store is already in-memory), so this
  * simply delegates to `createStorageFromEnv`.
  */
-export function createPortsFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir: string }): PortsFromEnv {
+export function createPortsFromEnv(
+  env: NodeJS.ProcessEnv,
+  defaults: { dataDir: string },
+  options: AuthzFromEnvOptions = {},
+): PortsFromEnv {
   const kind = storageKindFromEnv(env);
   if (kind === "file" || kind === "memory") {
     const storageFromEnv = createStorageFromEnv(env, defaults);
     const revocations = createMemoryRevocationStore();
-    const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations);
+    const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations, options);
     return {
       storage: storageFromEnv.storage,
       authz,
@@ -282,7 +303,7 @@ export function createPortsFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir: 
       client: connection.redis,
       ...(keyPrefix ? { keyPrefix } : {}),
     });
-    const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations);
+    const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations, options);
     return {
       storage,
       authz,
@@ -309,7 +330,7 @@ export function createPortsFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir: 
     migrate: false,
     ...(schema ? { schema } : {}),
   });
-  const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations);
+  const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations, options);
   return {
     storage,
     authz,

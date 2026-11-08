@@ -142,7 +142,7 @@ class _AuthzOkNoPrincipal:
     """authz.verify always returns ok=True with no principal (a capability-issuer misconfiguration to guard against)."""
 
     async def issue_capability(
-        self, principal: Any, scopes: Any, *, ttl_seconds: Any = None
+        self, principal: Any, scopes: Any, *, ttl_seconds: Any = None, tenant: Any = None
     ) -> str:
         return "cap"
 

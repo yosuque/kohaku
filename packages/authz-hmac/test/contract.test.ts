@@ -3,6 +3,7 @@ import { createHmacApprovalPort, createHmacAuthzPort, createMemoryApprovalStore 
 
 describeAuthzPortContract("createHmacAuthzPort", () => ({ port: createHmacAuthzPort("contract-secret") }), {
   revocation: true,
+  tenant: true,
 });
 
 describeApprovalPortContract("createHmacApprovalPort (no store)", () => ({

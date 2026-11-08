@@ -55,6 +55,12 @@ export interface OperationDescriptor {
 export interface InvocationContext {
   principal: Principal;
   capability?: string;
+  /**
+   * The tenant the invocation runs under. On the REST data plane this is the tenant bound into the verified
+   * capability (SPEC CAP-TEN-002), falling back to the host's own tenant resolution for a tenant-less
+   * (pre-upgrade) capability. Absent when no tenant applies.
+   */
+  tenant?: string;
 }
 
 export interface DomainPort {

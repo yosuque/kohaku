@@ -51,7 +51,12 @@ class _StubRateLimiter(PolicyRateLimiter):
 
 class _SimpleAuthz:
     async def issue_capability(
-        self, principal: Principal, scopes: list[Any], *, ttl_seconds: int | None = None
+        self,
+        principal: Principal,
+        scopes: list[Any],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
     ) -> str:
         return "cap"
 

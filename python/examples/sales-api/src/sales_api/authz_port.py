@@ -1,9 +1,9 @@
 """AuthzPort implementation (port of TS: apps/sample-api/src/ports/authz-port.ts).
 
 An in-house HMAC-SHA256 capability token (on-behalf-of). Emphasizing pedagogy, the structure is transparent:
-base64url(payload).base64url(hmac). payload = {sub, scopes: [{kind, ref}], exp}.
+base64url(payload).base64url(hmac). payload = {sub, scopes: [{kind, ref}], exp, tenant?}.
 
-Wire compatibility: the JSON has no separators (equivalent to TS's JSON.stringify) with key order sub/scopes/exp,
+Wire compatibility: the JSON has no separators (equivalent to TS's JSON.stringify) with key order sub/scopes/exp[/tenant],
 base64url has no padding, and the signature is HMAC-SHA256 over the payload string itself. It can be cross-verified
 with a TS host in the future.
 """
@@ -30,29 +30,67 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+# Longest tenant claim `issue_capability` signs and `verify` accepts (TS: MAX_CAPABILITY_TENANT_LENGTH, in
+# UTF-16 code units; identical for the BMP identifiers this is meant for).
+MAX_CAPABILITY_TENANT_LENGTH = 256
+
+
+def _is_valid_tenant_claim(tenant: str) -> bool:
+    """A tenant claim is a short identifier: at most 256 characters and no control characters (SPEC
+    CAP-TEN-001), the same rule as TS's isValidTenantClaim."""
+    return len(tenant) <= MAX_CAPABILITY_TENANT_LENGTH and not any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F for ch in tenant
+    )
+
+
 class HmacAuthzPort:
     """An AuthzPort that issues and verifies HMAC-SHA256 capability tokens.
 
     now is the source of the current time (in seconds), defaulting to time.time. A fixed time can be injected in tests
     to check expiry (TS references Date.now directly; an extension for the Python version's testability).
+
+    A capability may bind a tenant (SPEC CAP-TEN-001): `issue_capability(..., tenant=...)` signs it as a
+    `tenant` claim and `verify` returns it as `VerifyResult.tenant`. With `require_tenant=True`, `verify`
+    rejects a token that carries no tenant claim (TS `HmacAuthzOptions.requireTenant`). A TS-issued token's
+    `jti` claim is accepted and ignored (this example has no revocation store).
     """
 
-    def __init__(self, secret: str, *, now: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self,
+        secret: str,
+        *,
+        now: Callable[[], float] | None = None,
+        require_tenant: bool = False,
+    ) -> None:
         self._secret = secret.encode("utf-8")
         self._now = now if now is not None else time.time
+        self._require_tenant = require_tenant
 
     def _sign(self, payload: str) -> str:
         digest = hmac.new(self._secret, payload.encode("utf-8"), hashlib.sha256).digest()
         return _b64url_encode(digest)
 
     async def issue_capability(
-        self, principal: Principal, scopes: list[Scope], *, ttl_seconds: int | None = None
+        self,
+        principal: Principal,
+        scopes: list[Scope],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
     ) -> str:
-        payload_obj = {
+        payload_obj: dict[str, object] = {
             "sub": principal.id,
             "scopes": [{"kind": s.kind, "ref": s.ref} for s in scopes],
             "exp": int(self._now()) + (ttl_seconds if ttl_seconds is not None else 600),
         }
+        # An empty tenant is no tenant: it is never signed, so verify cannot return an empty-string tenant.
+        if tenant:
+            if not _is_valid_tenant_claim(tenant):
+                raise ValueError(
+                    f"capability tenant must be at most {MAX_CAPABILITY_TENANT_LENGTH} characters "
+                    "with no control characters"
+                )
+            payload_obj["tenant"] = tenant
         # Like TS's JSON.stringify: no separators, non-ASCII kept as UTF-8.
         payload = _b64url_encode(
             json.dumps(payload_obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -93,6 +131,16 @@ class HmacAuthzPort:
         if not isinstance(scopes, list) or not isinstance(claims.get("sub"), str):
             return VerifyResult(ok=False, reason="malformed payload")
         scope_list = scopes
+        # An explicit `"tenant": null` is malformed, like TS's isHmacClaims (absent is fine).
+        raw_tenant = claims.get("tenant")
+        if "tenant" in claims and (
+            not isinstance(raw_tenant, str) or not _is_valid_tenant_claim(raw_tenant)
+        ):
+            return VerifyResult(ok=False, reason="malformed payload")
+        # An empty tenant claim (never signed by this issuer) counts as no tenant.
+        tenant = raw_tenant or None
+        if self._require_tenant and tenant is None:
+            return VerifyResult(ok=False, reason="capability lacks tenant")
         # Scope matching is exact (a prefix match would let ?region=us permit ?region=usa).
         granted = any(
             isinstance(s, dict) and s.get("kind") == req.kind and s.get("ref") == req.ref
@@ -101,13 +149,16 @@ class HmacAuthzPort:
         if not granted:
             return VerifyResult(ok=False, reason=f"scope does not cover {req.kind}:{req.ref}")
 
-        return VerifyResult(ok=True, principal=Principal(id=claims["sub"]))
+        return VerifyResult(ok=True, principal=Principal(id=claims["sub"]), tenant=tenant)
 
 
 def create_hmac_authz_port(
-    secret: str = "dev-secret-change-me", *, now: Callable[[], float] | None = None
+    secret: str = "dev-secret-change-me",
+    *,
+    now: Callable[[], float] | None = None,
+    require_tenant: bool = False,
 ) -> HmacAuthzPort:
-    return HmacAuthzPort(secret, now=now)
+    return HmacAuthzPort(secret, now=now, require_tenant=require_tenant)
 
 
 __all__ = ["HmacAuthzPort", "create_hmac_authz_port"]

@@ -162,12 +162,16 @@ export function capabilityTtl(deps: KohakuHostDeps): number {
  * WriteScopeDroppedError, and — if listOperations itself rejects — still issues the capability but
  * fail-closed for writes (an empty allowed set), reporting the rejection the same way; delivery proceeds
  * either way.
+ *
+ * `tenant` is the request's resolved tenant (`session.tenant`); it is bound into the capability so the data
+ * plane can treat the signed value as authoritative (SPEC CAP-TEN-001).
  */
 export async function issueSpecCapability(
   spec: UISpec,
   principal: Principal,
   ctx: RouteContext,
   call: RestCallContext,
+  tenant?: string,
 ): Promise<string> {
   const { deps } = ctx;
   return hostCore.issueSpecCapabilitySafely(
@@ -177,6 +181,7 @@ export async function issueSpecCapability(
     () => allowedActions(ctx),
     (e) => reportHostError(deps, call.endpoint, call.requestId, e),
     capabilityTtl(deps),
+    tenant != null ? { tenant } : undefined,
   );
 }
 

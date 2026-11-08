@@ -115,7 +115,12 @@ class _RecordingAuthz:
         self.issued_for: list[str] = []
 
     async def issue_capability(
-        self, principal: Principal, scopes: list[Any], *, ttl_seconds: int | None = None
+        self,
+        principal: Principal,
+        scopes: list[Any],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
     ) -> str:
         self.issued_for.append(principal.id)
         return "cap:" + "|".join(s.ref for s in scopes)
@@ -317,7 +322,12 @@ class TestFailClosed:
 
             class _Authz:
                 async def issue_capability(
-                    self, principal: Principal, scopes: list[Any], *, ttl_seconds: int | None = None
+                    self,
+                    principal: Principal,
+                    scopes: list[Any],
+                    *,
+                    ttl_seconds: int | None = None,
+                    tenant: str | None = None,
                 ) -> str:
                     raise AssertionError("must not be called: resolve_principal already failed")
 

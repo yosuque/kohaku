@@ -5,6 +5,7 @@ packages/host-core/test/capability.test.ts).
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from kohaku.host_core import WriteScopeDroppedError, issue_capability_for_spec
@@ -55,7 +56,12 @@ class FakeAuthz:
         self.calls: list[list[Scope]] = []
 
     async def issue_capability(
-        self, principal: Principal, scopes: list[Scope], *, ttl_seconds: int | None = None
+        self,
+        principal: Principal,
+        scopes: list[Scope],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
     ) -> str:
         self.calls.append(list(scopes))
         return "cap-token"
@@ -113,3 +119,77 @@ def test_write_scope_dropped_error_carries_the_action_name() -> None:
     err = WriteScopeDroppedError("sales.updateTarget")
     assert err.action == "sales.updateTarget"
     assert "sales.updateTarget" in str(err)
+
+
+class TenantEchoAuthz:
+    """An AuthzPort whose token is the JSON of what was issued, so verify echoes the issued tenant back."""
+
+    def __init__(self) -> None:
+        self.kwargs: list[dict[str, Any]] = []
+
+    async def issue_capability(
+        self,
+        principal: Principal,
+        scopes: list[Scope],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
+    ) -> str:
+        self.kwargs.append({"ttl_seconds": ttl_seconds, "tenant": tenant})
+        return json.dumps(
+            {
+                "sub": principal.id,
+                "scopes": [{"kind": s.kind, "ref": s.ref} for s in scopes],
+                "tenant": tenant,
+            }
+        )
+
+    async def verify(self, token: str, req: VerifyRequest) -> VerifyResult:
+        claims = json.loads(token)
+        granted = any(s["kind"] == req.kind and s["ref"] == req.ref for s in claims["scopes"])
+        if not granted:
+            return VerifyResult(ok=False, reason="scope does not cover request")
+        return VerifyResult(ok=True, principal=Principal(id=claims["sub"]), tenant=claims["tenant"])
+
+
+def test_tenant_is_bound_into_the_capability_and_reported_by_verify() -> None:
+    """Port of capability.test.ts "capability tenant binding": a tenant passed to issuance shows up in verify."""
+    authz = TenantEchoAuthz()
+
+    async def run() -> VerifyResult:
+        token = await issue_capability_for_spec(
+            authz, PRINCIPAL, _spec_with_ref_and_action(), tenant="acme"
+        )
+        return await authz.verify(
+            token, VerifyRequest(kind="read", ref="query://sales/summary?fy=2026")
+        )
+
+    result = asyncio.run(run())
+    assert result.ok is True
+    assert result.tenant == "acme"
+
+
+class LegacyAuthz:
+    """A port written before the `tenant` option existed: its issue_capability has no `tenant` keyword."""
+
+    async def issue_capability(
+        self, principal: Principal, scopes: list[Scope], *, ttl_seconds: int | None = None
+    ) -> str:
+        return "legacy-token"
+
+    async def verify(self, token: str, req: VerifyRequest) -> VerifyResult:
+        return VerifyResult(ok=True, principal=PRINCIPAL)
+
+
+def test_tenant_keyword_is_omitted_entirely_when_there_is_none() -> None:
+    """Without a tenant the call shape is exactly the pre-option one, so a legacy port keeps working
+    (the type ignore is the point: such a port no longer satisfies the Protocol, but still runs)."""
+
+    async def run() -> str:
+        return await issue_capability_for_spec(
+            LegacyAuthz(),  # type: ignore[arg-type]
+            PRINCIPAL,
+            _spec_with_ref_and_action(),
+        )
+
+    assert asyncio.run(run()) == "legacy-token"
