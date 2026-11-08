@@ -38,11 +38,13 @@ gemini = ["google-genai>=1.0"]
 evidence = ["cryptography>=43"]
 # JWT / OIDC identity resolution (kohaku.authz_jwt). Symmetric with the TS side's `jose` dependency. The
 # `crypto` extra is needed for the asymmetric algorithms a JWKS carries (RS256 / ES256 / EdDSA). Floor 2.14.0
-# (released 2026-09-11, past ADR-0002's 7-day cooldown): the first release with the security fixes this module
-# relies on -- the header `alg` bound to the JWK's algorithm, PyJWKClient refusing non-http(s) URIs and redirects,
-# and its unknown-`kid` refresh cooldown (GHSA-jq35-7prp-9v3f, GHSA-993g-76c3-p5m4, GHSA-9v7f-9g4p-ffgj,
-# GHSA-2gx3-rcp4-g85q). ADR-0002 raises a floor to a security-fix version.
-jwt = ["PyJWT[crypto]>=2.14.0"]
+# (released 2026-09-11, past ADR-0002's 7-day cooldown), per ADR-0002's security-fix exception. Per PyJWT's
+# CHANGELOG: 2.13.0 made PyJWKClient refuse non-http(s) URIs and bound the token's header `alg` to a PyJWK's
+# algorithm; 2.14.0 added the one this module depends on for a remote JWKS, PyJWKClient not following redirects
+# (a redirect could hand the key fetch to another host), and also hardened HMAC-key validation. The advisory ids
+# (GHSA-993g-76c3-p5m4, GHSA-jq35-7prp-9v3f, GHSA-9v7f-9g4p-ffgj) are as cited there; the advisories themselves
+# were not opened. The unknown-`kid` cooldown and the cache are this module's own (identity.py), not PyJWKClient's.
+jwt =["PyJWT[crypto]>=2.14.0"]
 # Convenience bundle: every optional feature set, for demos and quickstarts that don't want to pick individually.
 all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence,jwt]"]
 

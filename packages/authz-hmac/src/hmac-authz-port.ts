@@ -70,8 +70,12 @@ const MAX_CAPABILITY_TENANT_LENGTH = 256;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
-/** A tenant claim is a short identifier: at most 256 code units and no control characters (SPEC CAP-TEN-001). */
-function isValidTenantClaim(tenant: string): boolean {
+/**
+ * A tenant claim is a short identifier: at most 256 code units and no control characters (SPEC CAP-TEN-001).
+ * Exported so `@kohaku-ui/authz-jwt` applies the identical rule to the bearer JWT's tenant claim: a tenant that
+ * would pass identity resolution but then be refused at capability issuance fails there as a 500 instead of a 401.
+ */
+export function isValidTenantClaim(tenant: string): boolean {
   return tenant.length <= MAX_CAPABILITY_TENANT_LENGTH && !CONTROL_CHARACTERS.test(tenant);
 }
 

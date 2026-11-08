@@ -8,6 +8,7 @@ from the verified bearer token, never from headers; the data plane (``/binding/*
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -115,6 +116,27 @@ class TestSampleWithJwtAuthzWiring:
         res = client.get("/api/kohaku/catalog", headers=_bearer("not-a-jwt"))
         assert res.status_code == 401
         assert "INVALID_TOKEN" in res.json()["error"]["message"]
+
+    def test_logs_why_a_presented_token_was_rejected_but_never_the_token_and_keeps_the_401_opaque(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client, _, _ = _make_app()
+        caplog.set_level(logging.WARNING, logger="sales_api.request_identity_jwt")
+        bad = _jwt(sub="u", tenant="t" * 257)
+        res = client.get("/api/kohaku/catalog", headers=_bearer(bad))
+        assert res.status_code == 401
+        assert res.json()["error"]["message"] == "authentication required (INVALID_TENANT)"
+        assert [r.getMessage() for r in caplog.records if "INVALID_TENANT" in r.getMessage()]
+
+        expired = jwt.encode({"sub": "u", "exp": int(time.time()) - 60}, SECRET, algorithm="HS256")
+        client.get("/api/kohaku/catalog", headers=_bearer(expired))
+        messages = [r.getMessage() for r in caplog.records]
+        assert len(messages) == 2
+        assert "expired" in messages[1].lower()
+        assert not any(bad in m or expired in m for m in messages)
+
+        client.get("/api/kohaku/catalog")  # a missing header is routine: not logged
+        assert len(caplog.records) == 2
 
     def test_derives_roles_from_the_token_a_viewer_cannot_approve_an_admin_can_list_promotions(
         self,

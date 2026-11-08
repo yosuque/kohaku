@@ -3,6 +3,7 @@ defaults differ from jose's and the resolver pins jose's behaviour (see ``identi
 
 from __future__ import annotations
 
+import asyncio
 import http.server
 import json
 import threading
@@ -13,6 +14,7 @@ from typing import Any
 import jwt
 import pytest
 
+import kohaku.authz_jwt.identity as identity_module
 from kohaku.authz_jwt import (
     JwtClaimNames,
     JwtIdentityError,
@@ -24,7 +26,7 @@ from kohaku.authz_jwt import (
 )
 from kohaku.spec import Principal
 
-from ._tokens import SECRET, RsaKeyPair, hs256, run
+from ._tokens import SECRET, EcKeyPair, RsaKeyPair, hs256, run
 
 ISSUER = "https://issuer.test"
 
@@ -237,14 +239,131 @@ class TestJwks:
         token = pair.sign({"sub": "rs"}, aud="kohaku", with_kid=False)
         assert run(resolver.resolve(token)).principal.id == "rs"
 
+    def test_binds_the_header_alg_to_the_jwk_alg(self) -> None:
+        # The JWK says RS256; a token signed RS512 with the very same key must not verify even though the
+        # caller allows RS512 (jose's isUsableJWK: a JWK that names an alg only serves that alg).
+        pair = RsaKeyPair()
+        resolver = create_jwt_identity_resolver(
+            JwtJwksKey(pair.jwks), algorithms=["RS256", "RS512"], audience="kohaku"
+        )
+        assert run(resolver.resolve(pair.sign({"sub": "ok"}, aud="kohaku"))).principal.id == "ok"
+        assert (
+            _code_of(resolver, pair.sign({"sub": "x"}, aud="kohaku", alg="RS512"))
+            == "INVALID_TOKEN"
+        )
+
+    def test_a_jwk_without_alg_serves_any_allowed_alg_of_its_key_type(self) -> None:
+        pair = RsaKeyPair()
+        bare = {k: v for k, v in pair.jwk.items() if k != "alg"}
+        resolver = create_jwt_identity_resolver(
+            JwtJwksKey({"keys": [bare]}), algorithms=["RS256", "RS512"], audience="kohaku"
+        )
+        for alg in ("RS256", "RS512"):
+            token = pair.sign({"sub": alg}, aud="kohaku", alg=alg)
+            assert run(resolver.resolve(token)).principal.id == alg
+
+    def test_a_jwk_that_may_not_verify_or_is_not_for_signatures_is_never_a_candidate(self) -> None:
+        pair = RsaKeyPair()
+        token = pair.sign({"sub": "x"}, aud="kohaku")
+        for override in ({"key_ops": ["sign"]}, {"key_ops": ["verify", "verify"]}, {"use": "enc"}):
+            jwks = {"keys": [{**pair.jwk, **override}]}
+            resolver = create_jwt_identity_resolver(JwtJwksKey(jwks), audience="kohaku")
+            assert _code_of(resolver, token) == "INVALID_TOKEN"
+        allowed = {"keys": [{**pair.jwk, "key_ops": ["verify"]}]}
+        resolver = create_jwt_identity_resolver(JwtJwksKey(allowed), audience="kohaku")
+        assert run(resolver.resolve(token)).principal.id == "x"
+
+    def test_a_private_key_in_the_jwk_set_is_never_a_candidate(self) -> None:
+        pair = RsaKeyPair()
+        private_jwk = {
+            **jwt.algorithms.RSAAlgorithm.to_jwk(pair.private_key, as_dict=True),
+            "kid": pair.kid,
+            "alg": "RS256",
+        }
+        resolver = create_jwt_identity_resolver(
+            JwtJwksKey({"keys": [private_jwk]}), audience="kohaku"
+        )
+        assert _code_of(resolver, pair.sign({"sub": "x"}, aud="kohaku")) == "INVALID_TOKEN"
+
+    def test_without_a_kid_the_key_type_filters_before_ambiguity_is_declared(self) -> None:
+        rsa_pair, ec_pair = RsaKeyPair("r"), EcKeyPair("e")
+        jwks = {"keys": [ec_pair.jwk, rsa_pair.jwk]}
+        resolver = create_jwt_identity_resolver(
+            JwtJwksKey(jwks), algorithms=["RS256", "ES256"], audience="kohaku"
+        )
+        rs = rsa_pair.sign({"sub": "rsa"}, aud="kohaku", with_kid=False)
+        assert run(resolver.resolve(rs)).principal.id == "rsa"
+
+    def test_without_a_kid_every_remaining_candidate_is_tried(self) -> None:
+        first, second = RsaKeyPair("a"), RsaKeyPair("b")
+        resolver = create_jwt_identity_resolver(
+            JwtJwksKey({"keys": [first.jwk, second.jwk]}), audience="kohaku"
+        )
+        for pair in (first, second):
+            token = pair.sign({"sub": pair.kid}, aud="kohaku", with_kid=False)
+            assert run(resolver.resolve(token)).principal.id == pair.kid
+        stranger = RsaKeyPair("c")
+        assert (
+            _code_of(resolver, stranger.sign({"sub": "x"}, aud="kohaku", with_kid=False))
+            == "INVALID_TOKEN"
+        )
+
+    def test_rejects_a_malformed_jwk_set_at_construction(self) -> None:
+        for bad in ({}, {"keys": "nope"}, {"keys": [1]}):
+            with pytest.raises(ValueError, match="JWK set"):
+                create_jwt_identity_resolver(JwtJwksKey(bad), audience="kohaku")
+
+
+class TestNumericDateClaims:
+    """jose's validateNumericDate: exp / nbf / iat must be JSON numbers when present (PyJWT would coerce
+    a numeric string)."""
+
+    def _resolver(self) -> Any:
+        return create_jwt_identity_resolver(JwtSecretKey(SECRET))
+
+    def _signed(self, claims: dict[str, Any]) -> str:
+        return jwt.encode({"sub": "u", **claims}, SECRET, algorithm="HS256")
+
+    def test_a_numeric_string_exp_is_rejected(self) -> None:
+        far_future = str(int(time.time()) + 3600)
+        assert _code_of(self._resolver(), self._signed({"exp": far_future})) == "INVALID_TOKEN"
+
+    def test_a_string_nbf_is_rejected(self) -> None:
+        assert _code_of(self._resolver(), self._signed({"nbf": "0"})) == "INVALID_TOKEN"
+
+    def test_a_garbage_iat_is_rejected(self) -> None:
+        assert _code_of(self._resolver(), self._signed({"iat": "garbage"})) == "INVALID_TOKEN"
+
+    def test_a_null_or_boolean_date_claim_is_rejected(self) -> None:
+        for claim in ("exp", "nbf", "iat"):
+            assert _code_of(self._resolver(), self._signed({claim: None})) == "INVALID_TOKEN"
+            assert _code_of(self._resolver(), self._signed({claim: True})) == "INVALID_TOKEN"
+
+    def test_a_non_finite_date_claim_is_rejected(self) -> None:
+        # Python's json accepts NaN / Infinity, which JSON (and so jose) does not.
+        assert _code_of(self._resolver(), self._signed({"iat": float("inf")})) == "INVALID_TOKEN"
+
+    def test_absent_and_numeric_date_claims_still_verify(self) -> None:
+        now = int(time.time())
+        assert run(self._resolver().resolve(self._signed({}))).principal.id == "u"
+        token = self._signed({"iat": now - 5, "nbf": now - 5, "exp": now + 60})
+        assert run(self._resolver().resolve(token)).principal.id == "u"
+
 
 class _JwksHandler(http.server.BaseHTTPRequestHandler):
     body: bytes = b"{}"
     hits: int = 0
+    status: int = 200
+    delay: float = 0.0
+    location: str | None = None
 
     def do_GET(self) -> None:
         type(self).hits += 1
-        self.send_response(200)
+        if type(self).delay:
+            time.sleep(type(self).delay)
+        self.send_response(type(self).status)
+        if type(self).location:
+            self.send_header("location", type(self).location)
         self.send_header("content-type", "application/json")
         self.end_headers()
         self.wfile.write(type(self).body)
@@ -255,7 +374,9 @@ class _JwksHandler(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture
 def jwks_server() -> Iterator[tuple[str, type[_JwksHandler]]]:
-    handler = type("Handler", (_JwksHandler,), {"hits": 0, "body": b"{}"})
+    handler = type(
+        "Handler", (_JwksHandler,), {"hits": 0, "body": b"{}", "status": 200, "delay": 0.0}
+    )
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -310,9 +431,106 @@ class TestJwksUrl:
         handler.body = json.dumps({"keys": [old.jwk, new.jwk]}).encode()
         assert _code_of(resolver, new.sign({"sub": "b"}, aud="kohaku")) == "INVALID_TOKEN"
 
-        real_monotonic = time.monotonic
-        monkeypatch.setattr(time, "monotonic", lambda: real_monotonic() + 31)
+        # Moves the resolver module's own clock only, not the process-wide time.monotonic.
+        real_monotonic = identity_module._monotonic
+        monkeypatch.setattr(identity_module, "_monotonic", lambda: real_monotonic() + 31)
         assert run(resolver.resolve(new.sign({"sub": "b"}, aud="kohaku"))).principal.id == "b"
+
+    def test_the_fetched_set_is_trusted_for_ten_minutes_then_refetched(
+        self, jwks_server: tuple[str, type[_JwksHandler]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url, handler = jwks_server
+        pair = RsaKeyPair()
+        handler.body = json.dumps(pair.jwks).encode()
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        run(resolver.resolve(pair.sign({"sub": "a"}, aud="kohaku")))
+        real_monotonic = identity_module._monotonic
+
+        monkeypatch.setattr(identity_module, "_monotonic", lambda: real_monotonic() + 599)
+        run(resolver.resolve(pair.sign({"sub": "b"}, aud="kohaku")))
+        assert handler.hits == 1
+
+        monkeypatch.setattr(identity_module, "_monotonic", lambda: real_monotonic() + 601)
+        run(resolver.resolve(pair.sign({"sub": "c"}, aud="kohaku")))
+        assert handler.hits == 2
+
+    def test_concurrent_resolutions_on_a_cold_cache_share_one_fetch(
+        self, jwks_server: tuple[str, type[_JwksHandler]]
+    ) -> None:
+        url, handler = jwks_server
+        pair = RsaKeyPair()
+        handler.body = json.dumps(pair.jwks).encode()
+        handler.delay = 0.3  # long enough that all twenty arrive while the first fetch is in flight
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        tokens = [pair.sign({"sub": f"u{i}"}, aud="kohaku") for i in range(20)]
+
+        async def go() -> list[str]:
+            resolved = await asyncio.gather(*(resolver.resolve(t) for t in tokens))
+            return [r.principal.id for r in resolved]
+
+        assert run(go()) == [f"u{i}" for i in range(20)]
+        assert handler.hits == 1
+
+    def test_concurrent_resolutions_share_one_failed_fetch_instead_of_queueing_a_timeout_each(
+        self, jwks_server: tuple[str, type[_JwksHandler]]
+    ) -> None:
+        url, handler = jwks_server
+        pair = RsaKeyPair()
+        handler.status = 500
+        handler.delay = 0.3
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        tokens = [pair.sign({"sub": f"u{i}"}, aud="kohaku") for i in range(10)]
+
+        async def go() -> list[object]:
+            return list(
+                await asyncio.gather(*(resolver.resolve(t) for t in tokens), return_exceptions=True)
+            )
+
+        results = run(go())
+        assert all(isinstance(r, JwtIdentityError) and r.code == "INVALID_TOKEN" for r in results)
+        assert handler.hits == 1
+        # The failure is not cached: the next resolution tries again (and succeeds once the issuer recovers).
+        handler.status = 200
+        handler.delay = 0.0
+        handler.body = json.dumps(pair.jwks).encode()
+        assert (
+            run(resolver.resolve(pair.sign({"sub": "back"}, aud="kohaku"))).principal.id == "back"
+        )
+        assert handler.hits == 2
+
+    def test_a_single_key_without_kid_verifies_a_token_without_kid(
+        self, jwks_server: tuple[str, type[_JwksHandler]]
+    ) -> None:
+        url, handler = jwks_server
+        pair = RsaKeyPair()
+        handler.body = json.dumps(
+            {"keys": [{k: v for k, v in pair.jwk.items() if k != "kid"}]}
+        ).encode()
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        token = pair.sign({"sub": "nokid"}, aud="kohaku", with_kid=False)
+        assert run(resolver.resolve(token)).principal.id == "nokid"
+
+    def test_a_redirecting_jwks_url_is_not_followed(
+        self, jwks_server: tuple[str, type[_JwksHandler]]
+    ) -> None:
+        # Another host must not be able to take over the key fetch by redirecting it (PyJWT >= 2.14).
+        url, handler = jwks_server
+        pair = RsaKeyPair()
+        handler.status = 302
+        handler.location = (
+            url  # even a redirect back to itself would count a second hit if followed
+        )
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        assert _code_of(resolver, pair.sign({"sub": "x"}, aud="kohaku")) == "INVALID_TOKEN"
+        assert handler.hits == 1
+
+    def test_a_token_naming_a_disallowed_algorithm_costs_no_fetch(
+        self, jwks_server: tuple[str, type[_JwksHandler]]
+    ) -> None:
+        url, handler = jwks_server
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+        assert _code_of(resolver, hs256({"sub": "u"}, aud="kohaku")) == "INVALID_TOKEN"
+        assert handler.hits == 0
 
     def test_an_unreachable_jwks_url_is_invalid_token_not_a_crash(self) -> None:
         pair = RsaKeyPair()
@@ -401,3 +619,43 @@ class TestRequireTenant:
             map_claims=lambda p: ResolvedIdentity(principal=Principal(id=str(p["sub"]))),
         )
         assert run(resolver.resolve(hs256({"sub": "u"}))).tenant is None
+
+
+class TestTenantClaimValidation:
+    """Mirror of the TS 'tenant claim validation' cases: a tenant the capability port would refuse (more than 256
+    UTF-16 code units, or a control character) fails identity resolution as INVALID_TENANT -- a 401 -- instead of
+    failing capability issuance later as a 500."""
+
+    resolver = create_jwt_identity_resolver(JwtSecretKey(SECRET))
+
+    def test_rejects_an_over_long_tenant_claim_as_invalid_tenant(self) -> None:
+        assert _code_of(self.resolver, hs256({"sub": "u", "tenant": "t" * 257})) == "INVALID_TENANT"
+
+    def test_accepts_a_tenant_claim_of_exactly_256_utf16_code_units(self) -> None:
+        assert (
+            run(self.resolver.resolve(hs256({"sub": "u", "tenant": "t" * 256}))).tenant == "t" * 256
+        )
+
+    def test_counts_utf16_code_units_not_code_points(self) -> None:
+        ok = "\U0001f600" * 128  # 256 code units
+        assert run(self.resolver.resolve(hs256({"sub": "u", "tenant": ok}))).tenant == ok
+        assert (
+            _code_of(self.resolver, hs256({"sub": "u", "tenant": "\U0001f600" * 129}))
+            == "INVALID_TENANT"
+        )
+
+    def test_rejects_a_tenant_claim_containing_a_control_character_as_invalid_tenant(self) -> None:
+        for tenant in ("ac\nme", "ac\x00me", "ac\x7fme"):
+            assert (
+                _code_of(self.resolver, hs256({"sub": "u", "tenant": tenant})) == "INVALID_TENANT"
+            )
+
+    def test_rejects_an_invalid_tenant_even_when_require_tenant_is_false(self) -> None:
+        assert _code_of(self.resolver, hs256({"sub": "u", "tenant": "a\tb"})) == "INVALID_TENANT"
+
+    def test_does_not_apply_to_a_caller_supplied_map_claims(self) -> None:
+        mapped = create_jwt_identity_resolver(
+            JwtSecretKey(SECRET),
+            map_claims=lambda _p: ResolvedIdentity(principal=Principal(id="x"), tenant="a\nb"),
+        )
+        assert run(mapped.resolve(hs256({"sub": "u"}))).tenant == "a\nb"

@@ -11,6 +11,7 @@ clients already parse). Principal / roles / tenant then all come from the token,
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     from .request_identity import CallNext
 
 _IDENTITY_STATE = "kohaku_identity"
+_logger = logging.getLogger(__name__)
 
 
 def create_jwt_request_identity(identity: JwtIdentityResolver) -> RequestIdentity:
@@ -40,6 +42,13 @@ def create_jwt_request_identity(identity: JwtIdentityResolver) -> RequestIdentit
             )
         except Exception as e:
             reason = e.code if isinstance(e, JwtIdentityError) else "INVALID_TOKEN"
+            # The 401 body stays opaque (only the code); the operator gets the real reason (e.g. the PyJWT error
+            # behind INVALID_TOKEN: expired, wrong audience, unknown kid...). A missing header is routine and not
+            # logged. The token itself is never logged, and PyJWT error messages do not carry it.
+            if reason != "MISSING_TOKEN":
+                _logger.warning(
+                    "[identity] bearer token rejected (%s): %s", reason, e.__cause__ or e
+                )
             return JSONResponse(
                 error_body("CAPABILITY_DENIED", f"authentication required ({reason})"),
                 status_code=401,
