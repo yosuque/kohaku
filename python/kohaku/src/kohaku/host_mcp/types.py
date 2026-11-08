@@ -166,7 +166,12 @@ class McpHostDeps:
     Required for a shared Streamable HTTP deployment (`sales_api.mcp_http`, which builds one `Server` shared by
     every session) — see `principal`'s doc comment above for why a single static `principal` is unsafe there.
     When unwired, every call runs as `principal` or the built-in anonymous principal, unchanged from before
-    this field existed."""
+    this field existed.
+
+    It must return a **distinct id per caller**: the id also binds MCP Tasks (`tasks/get` / `tasks/cancel`
+    ownership). A resolver that returns the default principal's id (or any shared guest id) for several callers
+    makes them one task owner; a call that resolves the default principal's id is owned by `rate_limit_key` /
+    the connection id instead."""
     fixation_lookup: Callable[[str, SessionContext], Awaitable[FixationRecord | None]] | None = None
     """Fixation lookup (intentHash, session -> FixationRecord | None). The session (surface
     "mcp-app" + the caller-provided locale) is passed so products can gate delivery — e.g. serve
@@ -214,9 +219,12 @@ class McpHostDeps:
     rate_limiter: PolicyRateLimiter | None = None
     """Rate limiter for the tool calls (product responsibility; typically host_core's
     PolicyRuntime.rate_limiter, which resolves the effective RateLimitRule per route_class from a Policy
-    file's rateLimits section -- this profile never resolves a tenant, so tenant is always None here).
-    Checked before `${prefix}_compose` / `${prefix}_render_snapshot` / the intent tools / `${prefix}_event`
-    (route_class "compose"), `${prefix}_action` ("action"), and `${prefix}_resolve_binding` ("resolve").
+    file's rateLimits section -- this profile resolves no tenant of its own, so a `compose` check carries
+    none; `${prefix}_action` / `${prefix}_resolve_binding` are checked after the capability verified and carry
+    the capability's signed tenant when it binds one, so a tenant's `rateLimits` rule applies there, SPEC
+    CAP-TEN-002). Checked before `${prefix}_compose` / `${prefix}_render_snapshot` / the intent tools /
+    `${prefix}_event` (route_class "compose"), and after capability verification for `${prefix}_action`
+    ("action") and `${prefix}_resolve_binding` ("resolve").
 
     The bucket key's "principal" component is, in order: `rate_limit_key(ctx)` when wired; else the
     resolved principal's id when `resolve_principal` is wired (a real per-caller identity); else (the
@@ -237,11 +245,13 @@ class McpHostDeps:
     does not model (a client IP, an API-key id read from the HTTP request, ...). Takes precedence over
     `resolve_principal`'s principal id and the per-connection fallback (see `rate_limiter`). A raise is
     fail-closed: the tool call returns a structured tool error and the failure reaches `on_error`, as with
-    `resolve_principal`."""
+    `resolve_principal`. It is NOT the MCP Tasks owner key: a task is bound to the resolved principal's id when
+    `resolve_principal` is wired (see `_mcp_task_owner_key`), because an IP-based key is shared by distinct
+    authenticated callers."""
     on_rate_limited: Callable[[RateLimitedInfo], object] | None = None
     """Observer called (fire-and-forget: never awaited, a raise is swallowed) each time `rate_limiter`
-    denies a tool call, with the route class, the bucket key as `principal` (see `rate_limiter`; this
-    profile has no tenant) and the call's correlation id as `requestId` (`mcp:<connection id>:<jsonrpc
+    denies a tool call, with the route class, the bucket key as `principal` (see `rate_limiter`), the
+    capability's `tenant` for `action` / `resolve` (None for `compose`) and the call's correlation id as `requestId` (`mcp:<connection id>:<jsonrpc
     id>`)."""
 
 

@@ -748,6 +748,107 @@ describe("task ownership: a leaked task id alone must not read or cancel the tas
   });
 });
 
+describe("task ownership binds to the resolved principal, not the (shareable) rate-limit key", () => {
+  // Two authenticated principals behind one NAT share an IP-based rateLimitKey; the owner must still differ.
+  let currentPrincipal = "alice";
+  beforeEach(() => {
+    currentPrincipal = "alice";
+  });
+
+  function buildWithPrincipals(): McpServer {
+    const server = new McpServer({ name: "kohaku-tasks-owner-test", version: "0.1.0" });
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: fixedSpecComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        resolvePrincipal: () => ({ id: currentPrincipal }),
+        rateLimitKey: () => "shared-nat-ip",
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>", tasksEnabled: true },
+    );
+    return server;
+  }
+
+  async function rawTasks(server: McpServer, method: "tasks/get" | "tasks/cancel", taskId: string) {
+    return sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params: { taskId, _meta: taskExtensionEnvelope() },
+    });
+  }
+
+  async function startTask(server: McpServer): Promise<string> {
+    const { json } = await sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "kohaku_compose",
+        arguments: { question: "Monthly revenue trend" },
+        _meta: taskExtensionEnvelope(),
+      },
+    });
+    return (json["result"] as Record<string, unknown>)["taskId"] as string;
+  }
+
+  it("a second principal sharing the same rateLimitKey cannot get or cancel the first one's task; the creator still can", async () => {
+    const server = buildWithPrincipals();
+    const taskId = await startTask(server);
+    await tick();
+
+    currentPrincipal = "bob";
+    for (const method of ["tasks/get", "tasks/cancel"] as const) {
+      const res = await rawTasks(server, method, taskId);
+      expect((res.json["error"] as { code?: number } | undefined)?.code).toBe(-32602);
+    }
+
+    currentPrincipal = "alice";
+    const own = (await rawTasks(server, "tasks/get", taskId)).json["result"] as Record<string, unknown>;
+    expect(own["taskId"]).toBe(taskId);
+    const cancel = await rawTasks(server, "tasks/cancel", taskId);
+    expect(cancel.json["error"]).toBeUndefined();
+  });
+
+  it("a resolvePrincipal that returns the default (guest) principal id falls back to rateLimitKey, not one shared owner", async () => {
+    let ip = "ip-1";
+    const server = new McpServer({ name: "kohaku-tasks-guest-test", version: "0.1.0" });
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: fixedSpecComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        resolvePrincipal: () => ({ id: "mcp-user", roles: ["user"] }),
+        rateLimitKey: () => ip,
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>", tasksEnabled: true },
+    );
+    const taskId = await startTask(server);
+    await tick();
+    expect(__getTaskStoreForTest(server)!.get(taskId, "ip-1")).toBeDefined();
+    expect(__getTaskStoreForTest(server)!.get(taskId, "mcp-user")).toBeUndefined();
+    ip = "ip-2";
+    for (const method of ["tasks/get", "tasks/cancel"] as const) {
+      const res = await rawTasks(server, method, taskId);
+      expect((res.json["error"] as { code?: number } | undefined)?.code).toBe(-32602);
+    }
+  });
+
+  it("the task is attributed to the resolved principal's id", async () => {
+    const server = buildWithPrincipals();
+    currentPrincipal = "carol";
+    const taskId = await startTask(server);
+    expect(__getTaskStoreForTest(server)!.get(taskId, "carol")).toBeDefined();
+    expect(__getTaskStoreForTest(server)!.get(taskId, "shared-nat-ip")).toBeUndefined();
+    await tick();
+  });
+});
+
 describe("cancel edge cases over the wire", () => {
   it("cancel after completion and a double cancel ack and leave the status", async () => {
     const server = buildAttached();
