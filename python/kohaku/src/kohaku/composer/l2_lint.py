@@ -43,7 +43,10 @@ class KitClassesVocabulary(Protocol):
 
 
 # Allowed APIs of the window.kohaku bridge (paired with the surface exposed by the sandbox's runtime.ts).
-_KOHAKU_API_ALLOWLIST = frozenset({"fetchData", "emit", "onProps", "ready"})
+KOHAKU_API_ALLOWLIST_ORDERED: tuple[str, ...] = ("fetchData", "emit", "onProps", "ready")
+"""The same allowlist in TS's `KOHAKU_API_ALLOWLIST` insertion order (a Set there, so iteration order is part of
+its contract: kohaku.evals' schema extractor spreads it into a prompt, byte for byte)."""
+_KOHAKU_API_ALLOWLIST = frozenset(KOHAKU_API_ALLOWLIST_ORDERED)
 
 _KOHAKU_METHOD_RE = re.compile(r"kohaku\s*\??\.\s*([A-Za-z_$][A-Za-z0-9_$]*)")
 _HTML_CLOSED_RE = re.compile(r"</html>\s*$", re.IGNORECASE)
