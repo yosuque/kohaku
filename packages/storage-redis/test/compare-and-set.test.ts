@@ -1,4 +1,5 @@
 import type { PromotionState } from "@kohaku-ui/spec-core";
+import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRedisStoragePort, type RedisStoragePort } from "../src/index.js";
 import { backend, startRedis, uniquePrefix } from "./backend.js";
@@ -76,12 +77,30 @@ describe.skipIf(backend.mode === "skip")("createRedisStoragePort: compare-and-se
     }
   });
 
-  it("closes the dedicated compare-and-set connection of an injected-client port", async () => {
+  it("close() is idempotent for url-constructed ports that used compare-and-set", async () => {
     await openPair();
     await a.putPromotionState(state("r1"), { expectedRevision: null });
     await a.close();
     await b.close();
-    // A second close is harmless.
     await a.close();
+  });
+
+  it("closes the dedicated compare-and-set connection of an injected-client port, and leaves the injected client connected", async () => {
+    const client = new Redis(url);
+    const clientsBefore = async () =>
+      Number(/connected_clients:(\d+)/.exec(await client.info("clients"))?.[1]);
+    try {
+      const port = createRedisStoragePort({ client, keyPrefix: uniquePrefix() });
+      const baseline = await clientsBefore();
+      await port.putPromotionState(state("r1"), { expectedRevision: null });
+      // The first compare-and-set write opened one extra (duplicated) connection ...
+      expect(await clientsBefore()).toBe(baseline + 1);
+      await port.close();
+      // ... close() ended it, while the injected client is still usable (its owner disconnects it).
+      expect(await clientsBefore()).toBe(baseline);
+      expect(client.status).toBe("ready");
+    } finally {
+      client.disconnect();
+    }
   });
 });

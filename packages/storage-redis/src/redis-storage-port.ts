@@ -382,6 +382,8 @@ interface CompareAndSet {
  * the process the transactions on that one connection are also serialized by a mutex (two interleaved
  * `WATCH`es on a single connection would otherwise share, and one `EXEC` would clear, the other's watch);
  * across processes the `WATCH` is what detects the race.
+ * `close()` ends that connection; a `write()` racing shutdown could open a fresh one that is never closed, which only
+ * matters while the process is exiting.
  */
 function createCompareAndSet(
   redis: Redis,
