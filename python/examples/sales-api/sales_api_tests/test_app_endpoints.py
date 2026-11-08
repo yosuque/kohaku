@@ -8,9 +8,9 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
+from kohaku.authz_hmac import create_hmac_authz_port
 from kohaku.storage import MemoryStoragePort
 from sales_api.app import create_app
-from sales_api.authz_port import create_hmac_authz_port
 from sales_api.fake_llm import create_deterministic_fake_llm
 
 
