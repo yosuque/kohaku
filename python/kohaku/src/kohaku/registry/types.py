@@ -130,8 +130,12 @@ class ComponentDefinition:
     vocabulary and prompt enumeration, so the LLM structurally cannot output that part (used for
     runtime-only parts like ui.loading)."""
     deprecated: DeprecationDecl | None = None
-    """Present once a part is superseded. TS's migrateProps has no Python counterpart: it is a
-    function and neither exported to JSON nor hand-ported (only fallback.mapProps is)."""
+    """Present once a part is superseded. See DeprecationDecl."""
+    migrate_props: Callable[[JsonObject], JsonObject] | None = None
+    """Migration hook (Port of TS ComponentDefinition.migrateProps): rewrites props from this part's shape
+    into deprecated.replacedBy's shape (used by host_core.plan_catalog_migration). A function value is
+    never part of the wire catalog or the catalog fingerprint. The core catalog's hooks are hand-ported
+    into kohaku.registry.core._MIGRATE_PROPS, because a function cannot be read from core-catalog.json."""
 
 
 @dataclass(frozen=True)
