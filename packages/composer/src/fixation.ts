@@ -1,8 +1,10 @@
 import {
   type CanonicalIntent,
   computeStructureHash,
+  type FilterDescriptor,
   type FixationRecord,
   FixationRecordSchema,
+  parseQueryRef,
   type UISpec,
 } from "@kohaku-ui/spec-core";
 import type { ComposeResult } from "./compose.js";
@@ -33,6 +35,8 @@ export type FixationMaterialization = { result: ComposeResult | null; check: Fix
  * value's check hands the host the material to decide:
  * - fresh / revalidated: return with a Spec in result (deliverable).
  * - stale: return with result=null (not deliverable — the host falls back to normal compose).
+ * A pinned Spec carrying injected filters (`data.bind`, `ComposePolicy.l1Filters`) is also checked against the
+ * CURRENT filter descriptors (`SemanticPort.describeFilters`, when the port has it): see detectFilterDrift.
  * lineage recording (intent.unfixated on invalidate, etc.) is not done in the composer
  * (the dependency direction must not flow backward — recording is the host layer's responsibility).
  */
@@ -114,6 +118,15 @@ export async function materializeFixation(
     ]);
   }
 
+  // Authorized-range drift of injected filters (design.md #78): the pinned Spec's `data.bind` values are the
+  // read scopes the capability issued for it is built from, and nothing above looks at them. A bind value the
+  // Intent's CURRENT descriptors no longer offer (an option removed from a vocabulary, a facet made
+  // `filterable: false`, a tenant's narrowed list) must not keep minting capabilities from a pin.
+  const filterDrift = await detectFilterDrift(fixation.pinnedSpec, intent, ctx, tenant);
+  if (filterDrift != null) {
+    return stale([`filter options drifted: ${filterDrift}`]);
+  }
+
   // pinnedSpec's refVersions is the old version at fixation time, so always drop it and re-fill with the latest version.
   // Delivering it as-is would make the renderer's per-reference matching always STALE.
   const { refVersions: _stale, ...pinnedRest } = fixation.pinnedSpec;
@@ -141,6 +154,57 @@ export async function materializeFixation(
     durationMs: 0,
   };
   return { result: { spec, trace }, check };
+}
+
+/**
+ * Checks that every `data.bind` of a pinned Spec is still allowed by the Intent's CURRENT filter descriptors,
+ * and returns a human-readable description of the first violation (null when there is none, or nothing to check).
+ *
+ * The model cannot author `data.bind` (it is outside the generation vocabulary), so a bind in a fixated L1 Spec
+ * is one the composer injected from a descriptor: it must still be governed by one -- a descriptor with the
+ * same `queryParam` whose `paths` include the carrying component's ref path -- and its `values` must be a
+ * SUBSET of that descriptor's option values. Compared by subset of values, not by hash: a label-only change, or
+ * options added to the vocabulary, leave the pin deliverable (a pinned Spec keeps offering exactly what it was
+ * approved with, which the current descriptors still allow). A bind with no governing descriptor at all (the
+ * filter was removed) is drift too.
+ *
+ * Without a descriptor source -- a SemanticPort with no `describeFilters` -- or when it throws (fail-open, like
+ * refs.ts), today's behaviour is kept: nothing is checked. A Spec with no `data.bind` never calls the port. The
+ * descriptors are the port's own: the composer's shape guard (dropShapeChangingFilters) is not re-run on this
+ * delivery fast path.
+ */
+async function detectFilterDrift(
+  pinned: UISpec,
+  intent: CanonicalIntent,
+  ctx: ComposeContext,
+  tenant?: string,
+): Promise<string | null> {
+  const bound = pinned.components.filter((c) => c.data?.bind != null && Object.keys(c.data.bind).length > 0);
+  if (bound.length === 0 || ctx.semantic.describeFilters == null) return null;
+  let descriptors: FilterDescriptor[];
+  try {
+    descriptors = await ctx.semantic.describeFilters(intent, tenant != null ? { tenant } : undefined);
+  } catch {
+    return null;
+  }
+  for (const c of bound) {
+    let path: string;
+    try {
+      path = parseQueryRef(c.data!.$ref).path;
+    } catch {
+      continue; // an unparsable ref is the ref-drift check's business, not a filter's
+    }
+    for (const [queryParam, bind] of Object.entries(c.data!.bind!)) {
+      const governing = descriptors.find(
+        (d) => d.queryParam === queryParam && Array.isArray(d.paths) && d.paths.includes(path),
+      );
+      if (governing == null) return `${c.id}: no filter governs "${queryParam}" on "${path}" any more`;
+      const allowed = new Set(governing.options.map((o) => o.value));
+      const removed = bind.values.find((v) => !allowed.has(v));
+      if (removed != null) return `${c.id}: "${queryParam}" value "${removed}" is no longer an option`;
+    }
+  }
+  return null;
 }
 
 /**

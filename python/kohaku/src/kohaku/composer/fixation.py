@@ -13,12 +13,14 @@ from typing import Literal
 
 from kohaku.spec import (
     CacheKeyParts,
+    FilterDescriptor,
     FixationRecord,
     Intent,
     QueryHandle,
     UISpec,
     combine_data_versions,
     compute_structure_hash,
+    parse_query_ref,
     validate_fixation_record,
 )
 
@@ -124,6 +126,14 @@ async def materialize_fixation(
             ],
         )
 
+    # Authorized-range drift of injected filters (design.md #78): the pinned Spec's `data.bind` values are the
+    # read scopes the capability issued for it is built from, and nothing above looks at them. A bind value the
+    # Intent's CURRENT descriptors no longer offer (an option removed from a vocabulary, a facet made
+    # `filterable=False`, a tenant's narrowed list) must not keep minting capabilities from a pin.
+    filter_drift = await _detect_filter_drift(fixation.pinnedSpec, intent, ctx, tenant)
+    if filter_drift is not None:
+        return None, FixationCheck(kind="stale", issues=[f"filter options drifted: {filter_drift}"])
+
     # pinnedSpec's refVersions is the old version at fixation time, so always drop it and re-fill with the latest version.
     # Delivering it as-is would make the renderer's per-reference matching always STALE.
     data_version = combine_data_versions([(h.uri, versions[i]) for i, h in enumerate(handles)])
@@ -159,6 +169,50 @@ async def materialize_fixation(
         durationMs=0,
     )
     return ComposeResult(spec=spec, trace=trace), check
+
+
+async def _detect_filter_drift(
+    pinned: UISpec, intent: Intent, ctx: ComposeContext, tenant: str | None
+) -> str | None:
+    """Checks that every `data.bind` of a pinned Spec is still allowed by the Intent's CURRENT filter
+    descriptors, and returns a human-readable description of the first violation (None when there is none, or
+    nothing to check). Port of TS fixation.ts's detectFilterDrift.
+
+    The model cannot author `data.bind` (it is outside the generation vocabulary), so a bind in a fixated L1
+    Spec is one the composer injected from a descriptor: it must still be governed by one -- a descriptor with
+    the same `queryParam` whose `paths` include the carrying component's ref path -- and its `values` must be a
+    SUBSET of that descriptor's option values. Compared by subset of values, not by hash: a label-only change,
+    or options added to the vocabulary, leave the pin deliverable. A bind with no governing descriptor at all
+    (the filter was removed) is drift too.
+
+    Without a descriptor source -- a SemanticPort with no `describe_filters` -- or when it raises (fail-open),
+    today's behaviour is kept: nothing is checked. A Spec with no `data.bind` never calls the port.
+    """
+    bound = [c for c in pinned.components if c.data is not None and c.data.bind]
+    describe_filters = getattr(ctx.semantic, "describe_filters", None)
+    if len(bound) == 0 or describe_filters is None:
+        return None
+    try:
+        descriptors: list[FilterDescriptor] = list(await describe_filters(intent, tenant=tenant))
+    except Exception:  # noqa: BLE001 - fail-open, like _resolve_refs
+        return None
+    for c in bound:
+        assert c.data is not None and c.data.bind is not None
+        try:
+            path = parse_query_ref(c.data.ref).path
+        except Exception:  # noqa: BLE001 - an unparsable ref is the ref-drift check's business
+            continue
+        for query_param, bind in c.data.bind.items():
+            governing = next(
+                (d for d in descriptors if d.queryParam == query_param and path in d.paths), None
+            )
+            if governing is None:
+                return f'{c.id}: no filter governs "{query_param}" on "{path}" any more'
+            allowed = {o.value for o in governing.options}
+            removed = next((v for v in bind.values if v not in allowed), None)
+            if removed is not None:
+                return f'{c.id}: "{query_param}" value "{removed}" is no longer an option'
+    return None
 
 
 def _detect_ref_drift(
