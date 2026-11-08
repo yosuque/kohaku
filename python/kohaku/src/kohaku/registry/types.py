@@ -133,7 +133,9 @@ class ComponentDefinition:
     """Present once a part is superseded. See DeprecationDecl."""
     migrate_props: Callable[[JsonObject], JsonObject] | None = None
     """Migration hook (Port of TS ComponentDefinition.migrateProps): rewrites props from this part's shape
-    into deprecated.replacedBy's shape (used by host_core.plan_catalog_migration). A function value is
+    into deprecated.replacedBy's shape (used by host_core.plan_catalog_migration). The hook must not mutate
+    its argument; return the new props instead (planning hands it a private deep copy, so a mutation cannot
+    reach the stored fixation, but it is still a contract violation). A function value is
     never part of the wire catalog or the catalog fingerprint. The core catalog's hooks are hand-ported
     into kohaku.registry.core._MIGRATE_PROPS, because a function cannot be read from core-catalog.json."""
 

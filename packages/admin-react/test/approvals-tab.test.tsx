@@ -339,8 +339,50 @@ describe("ApprovalsTab", () => {
     }
   });
 
-  it("shows an issued-and-unused token from the lineage, disables Approve, and lets it lapse with the clock", async () => {
+  it("shows a recorded issuance from the lineage as information only: Approve stays enabled and mints a fresh token", async () => {
     // Only Date and the interval are faked (setTimeout stays real for testing-library's polling).
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const issuedEvent = {
+        id: "ev-issued",
+        ts: new Date(Date.now() - 30_000).toISOString(),
+        type: "action.approvalIssued",
+        actor: { kind: "user", id: "other-approver" },
+        payload: {
+          action: "sales.refund",
+          payloadHash: "sha256:0123456789abcdef0123",
+          requesterId: "demo-viewer",
+          approverId: "other-approver",
+          ttlSeconds: 300,
+          expiresAt: new Date(Date.now() + 90_000).toISOString(),
+        },
+      };
+      let issueCalls = 0;
+      renderInAdmin(<ApprovalsTab />, {
+        handlers: {
+          "GET /lineage": lineage([requestedEvent(), issuedEvent]),
+          "POST /approvals": () => {
+            issueCalls += 1;
+            return jsonResponse({ approval: `tok.${issueCalls}` });
+          },
+        },
+      });
+      await screen.findByText("sales.refund");
+      await screen.findByText(m.approvals.issuedBy("other-approver", 90));
+      // The recorded expiry is advisory (the port may have clamped the real lifetime shorter), so it must not
+      // lock the approver out: Approve is enabled and mints a fresh token.
+      const approve = screen.getByText(m.approvals.approveButton) as HTMLButtonElement;
+      expect(approve.disabled).toBe(false);
+      expect(approve.title).toBe("");
+      fireEvent.click(approve);
+      await screen.findByLabelText(m.approvals.tokenLabel);
+      expect(issueCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops showing a recorded issuance once its recorded expiry has passed", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     try {
       const issuedEvent = {
@@ -360,17 +402,11 @@ describe("ApprovalsTab", () => {
       renderInAdmin(<ApprovalsTab />, {
         handlers: { "GET /lineage": lineage([requestedEvent(), issuedEvent]) },
       });
-      await screen.findByText("sales.refund");
       await screen.findByText(m.approvals.issuedBy("other-approver", 90));
-      const approve = screen.getByText(m.approvals.approveButton) as HTMLButtonElement;
-      expect(approve.disabled).toBe(true);
-      expect(approve.title).toBe(m.approvals.approveDisabledIssued);
-
       await act(async () => {
         vi.advanceTimersByTime(91_000);
       });
       expect(screen.queryByText(/other-approver/)).toBeNull();
-      expect((screen.getByText(m.approvals.approveButton) as HTMLButtonElement).disabled).toBe(false);
     } finally {
       vi.useRealTimers();
     }

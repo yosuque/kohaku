@@ -366,16 +366,16 @@ const JA: UIStrings = {
       approveDisabledMismatch:
         "記録されたペイロードがペイロードハッシュと一致しないため、ここからは承認できません。",
       approveDisabledIssued:
-        "この要求の承認は発行済みで、まだ期限が切れていません。期限切れ後に再発行するか、API から再発行してください。",
+        "この要求の承認トークンはこのページで発行済みで、まだ期限が切れていません。期限切れ後に再発行するか、API から再発行してください。",
       issuedNotice: (action) =>
         `${action} の承認トークンを発行しました。コピーして要求者に渡してください(持参人トークンです)。`,
       tokenLabel: "承認トークン",
       issuedBy: (approverId, remainingSeconds) =>
-        `${approverId} が発行済み — 残り ${
+        `${approverId} が発行済み — 記録上の期限まで ${
           remainingSeconds < 60
             ? `${remainingSeconds} 秒`
             : `${Math.floor(remainingSeconds / 60)} 分 ${remainingSeconds % 60} 秒`
-        }`,
+        }(目安です)。そのトークンはまだ有効かもしれません。もう一度承認すると、独立して使える 2 つ目のトークンが発行されます。`,
       issuedAge: (seconds, ttlSeconds) => `${seconds} 秒前に発行(有効期間 ${ttlSeconds} 秒)`,
       copyButton: "コピー",
       copied: "コピーしました",

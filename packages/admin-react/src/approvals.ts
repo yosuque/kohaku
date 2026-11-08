@@ -26,7 +26,9 @@ export interface PendingApproval {
    * Present when an approver has already minted a token for this exact row (an `action.approvalIssued` newer
    * than the latest `action.approved`) and that token has not yet expired as of the derivation's `now`. It
    * never settles the row: the token is a bearer secret the lineage does not hold, and whether it was ever
-   * used is known only from the later `action.approved`.
+   * used is known only from the later `action.approved`. `expiresAt` is the host's advisory figure (issue time
+   * + the TTL that was requested; the approval port may have granted less), so show it as information and never
+   * use it to disable minting a new token.
    */
   issued?: { issuedAt: string; expiresAt: string; approverId: string };
   /** The first recorded payload of the unsettled requests. Present only when the host records payloads (`recordPayload: true`). */
