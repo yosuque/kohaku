@@ -87,6 +87,7 @@ import {
   SEMANTIC_LOCALE_TAGS,
   SEMANTIC_PROMPT_CASES,
 } from "../test/semantic-gui-catalog.js";
+import { buildAuthzHmacFixtures } from "./authz-hmac-fixtures.js";
 import { buildDomainMcpFixtures } from "./domain-mcp-fixtures.js";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../test/fixtures");
@@ -778,6 +779,11 @@ async function main(): Promise<void> {
   // outputSchema -> DataShape) against their Python mirror kohaku.domain_mcp. See domain-mcp-fixtures.ts.
   const domainMcp = buildDomainMcpFixtures();
 
+  // Pins the bytes of the HMAC capability and approval tokens (@kohaku-ui/authz-hmac / kohaku.authz_hmac) for a
+  // fixed secret and issue time, so a token one language issues verifies in the other and both issue the same
+  // string. See authz-hmac-fixtures.ts for how a deterministic fixture is derived from the non-injectable ports.
+  const authzHmac = await buildAuthzHmacFixtures();
+
   writeFileSync(
     join(OUT_DIR, "cross-language-canonical.json"),
     JSON.stringify(
@@ -798,13 +804,14 @@ async function main(): Promise<void> {
         semanticPrompts: semanticPromptCases,
         semanticLocale: semanticLocaleCases,
         llmBaseUrl,
+        authzHmac,
       },
       null,
       2,
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, domainMcp=${domainMcp.schemaProjection.length}+${domainMcp.argumentCoercion.length}+${domainMcp.tabular.length}+${domainMcp.shape.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, domainMcp=${domainMcp.schemaProjection.length}+${domainMcp.argumentCoercion.length}+${domainMcp.tabular.length}+${domainMcp.shape.length}, authzHmac=${authzHmac.capabilities.length}+${authzHmac.approvals.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

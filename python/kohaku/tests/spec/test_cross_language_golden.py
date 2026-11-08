@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 
+from kohaku.authz_hmac import create_hmac_approval_port, create_hmac_authz_port
 from kohaku.composer import (
     DEFAULT_KIT_VOCABULARY,
     L2_SYSTEM_PROMPT,
@@ -48,6 +50,8 @@ from kohaku.spec import (
     LineagePageRequest,
     Principal,
     PromotionState,
+    Scope,
+    VerifyRequest,
     action_payload_hash,
     cache_key,
     canonical_stringify,
@@ -465,3 +469,94 @@ def test_evidence_pack_signature_covers_the_raw_manifest_json() -> None:
         tampered = copy.deepcopy(fixture["manifest"])
         tamper(tampered)
         assert verify_manifest_signature(tampered, fixture["signature"], public_key) is False
+
+
+def _const(value: str) -> Callable[[], str]:
+    return lambda: value
+
+
+def _authz_hmac_golden(cross_language_fixture: dict[str, Any]) -> dict[str, Any]:
+    golden: dict[str, Any] = cross_language_fixture["authzHmac"]
+    assert golden["capabilities"] and golden["approvals"]
+    return golden
+
+
+def test_authz_hmac_capability_tokens(cross_language_fixture: dict[str, Any]) -> None:
+    """Each pinned capability token was issued by the TS port at a fixed time: the Python port verifies it to the
+    same outcome, and -- given the same clock and jti -- issues the identical string (key order, UTF-8 string
+    serialisation, the tenant omission rules and the exp arithmetic all agree byte for byte)."""
+    golden = _authz_hmac_golden(cross_language_fixture)
+    for case in golden["capabilities"]:
+        jti = case["jti"]
+        authz = create_hmac_authz_port(
+            golden["secret"],
+            now=lambda: float(golden["nowSeconds"]),
+            generate_jti=_const(jti),
+        )
+        scopes = [Scope(kind=s["kind"], ref=s["ref"]) for s in case["scopes"]]
+
+        async def run(
+            case: dict[str, Any] = case, authz: Any = authz, scopes: list[Scope] = scopes
+        ) -> None:
+            issued = await authz.issue_capability(
+                Principal(id=case["principalId"]),
+                scopes,
+                ttl_seconds=case.get("ttlSeconds"),
+                tenant=case.get("tenant"),
+            )
+            assert issued == case["token"], case["name"]
+
+            request = VerifyRequest(kind=case["request"]["kind"], ref=case["request"]["ref"])
+            result = await authz.verify(case["token"], request)
+            expected = case["expected"]
+            if expected["ok"]:
+                assert result.ok is True, case["name"]
+                assert (
+                    result.principal is not None and result.principal.id == expected["principalId"]
+                )
+                assert result.tenant == expected["tenant"], case["name"]
+            else:
+                assert (result.ok, result.reason) == (False, expected["reason"]), case["name"]
+
+        asyncio.run(run())
+
+
+def test_authz_hmac_approval_tokens(cross_language_fixture: dict[str, Any]) -> None:
+    """Same as above for the approval token (derived MAC key, v2 prefix, tenant omitted when absent but signed
+    when it is the empty string, TTL clamped to the maximum)."""
+    golden = _authz_hmac_golden(cross_language_fixture)
+    for case in golden["approvals"]:
+        jti = case["jti"]
+        approvals = create_hmac_approval_port(
+            golden["secret"],
+            now=lambda: float(golden["nowSeconds"]),
+            generate_jti=_const(jti),
+        )
+
+        async def run(case: dict[str, Any] = case, approvals: Any = approvals) -> None:
+            data = case["input"]
+            issued = await approvals.issue_approval(
+                action=data["action"],
+                payload_hash=data["payloadHash"],
+                requester_id=data["requesterId"],
+                approver_id=data["approverId"],
+                tenant=data.get("tenant"),
+                ttl_seconds=case.get("ttlSeconds"),
+            )
+            assert issued == case["token"], case["name"]
+
+            request = case["request"]
+            result = await approvals.verify_approval(
+                case["token"],
+                action=request["action"],
+                payload_hash=request["payloadHash"],
+                requester_id=request["requesterId"],
+                tenant=request.get("tenant"),
+            )
+            assert result.ok is True, case["name"]
+            assert result.grant is not None
+            assert (result.grant.exp, result.grant.jti) == (case["exp"], case["jti"])
+            assert result.grant.approverId == data["approverId"]
+            assert result.grant.tenant == data.get("tenant")
+
+        asyncio.run(run())
