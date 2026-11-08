@@ -83,6 +83,7 @@ import {
   pinnedCapabilityToken,
   withFixedNow,
 } from "../scripts/authz-hmac-fixtures.js";
+import { buildStorageLayoutFixtures, type StorageLayoutFixtures } from "../scripts/storage-layout-fixtures.js";
 import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
 
 /**
@@ -162,6 +163,7 @@ interface Fixture {
     requestUrl: string | null;
   }[];
   authzHmac: AuthzHmacFixtures;
+  storageLayout: StorageLayoutFixtures;
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -320,6 +322,26 @@ describe("cross-language golden (KOHAKU_LLM_BASE_URL normalisation)", () => {
         `${c.provider} ${JSON.stringify(c.baseUrl)}`,
       ).toBe(c.root);
     }
+  });
+});
+
+describe("cross-language golden (storage layout: Redis keys, Postgres DDL, stored record text)", () => {
+  const spec = JSON.parse(
+    readFileSync(join(dirname(fixturePath), "../..", fixture.spec.file.replace(/^spec\//, "")), "utf8"),
+  ) as unknown;
+
+  it("pins a non-trivial corpus", () => {
+    const { redis, postgres, rows } = fixture.storageLayout;
+    expect(redis.keys.length).toBeGreaterThan(0);
+    expect(redis.indexValues.length).toBeGreaterThan(0);
+    expect(redis.candidates.length).toBeGreaterThan(0);
+    expect(postgres.schemas.length).toBeGreaterThan(0);
+    expect(postgres.correlationColumnValues.length).toBeGreaterThan(0);
+    expect(rows.lineage.length + rows.promotion.length + rows.fixation.length).toBeGreaterThan(0);
+  });
+
+  it("is exactly what the real adapter modules produce (so the Python adapters are held to the TS ones)", () => {
+    expect(buildStorageLayoutFixtures(spec)).toEqual(fixture.storageLayout);
   });
 });
 

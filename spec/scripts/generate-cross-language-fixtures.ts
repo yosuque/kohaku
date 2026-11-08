@@ -95,6 +95,7 @@ import {
 } from "../test/semantic-gui-catalog.js";
 import { buildAuthzHmacFixtures } from "./authz-hmac-fixtures.js";
 import { buildDomainMcpFixtures } from "./domain-mcp-fixtures.js";
+import { buildStorageLayoutFixtures } from "./storage-layout-fixtures.js";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../test/fixtures");
 mkdirSync(OUT_DIR, { recursive: true });
@@ -986,6 +987,13 @@ async function main(): Promise<void> {
   // string. See authz-hmac-fixtures.ts for how a deterministic fixture is derived from the non-injectable ports.
   const authzHmac = await buildAuthzHmacFixtures();
 
+  // Pins what the Redis / Postgres StoragePort adapters (@kohaku-ui/storage-redis / storage-postgres and their
+  // Python mirrors kohaku.storage.redis / .postgres) must agree on to share one backend: the Redis key layout, the
+  // Postgres DDL, and the exact text of a stored record. The fixation rows pin the example Spec as the pinnedSpec.
+  const storageLayout = buildStorageLayoutFixtures(
+    JSON.parse(readFileSync(join(OUT_DIR, "../../examples/quarterly-sales.spec.json"), "utf8")),
+  );
+
   writeFileSync(
     join(OUT_DIR, "cross-language-canonical.json"),
     JSON.stringify(
@@ -1009,6 +1017,7 @@ async function main(): Promise<void> {
         semanticLocale: semanticLocaleCases,
         llmBaseUrl,
         authzHmac,
+        storageLayout,
       },
       null,
       2,
