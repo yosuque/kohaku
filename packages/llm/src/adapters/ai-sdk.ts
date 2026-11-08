@@ -107,21 +107,32 @@ async function importProvider<T>(provider: LlmConfig["provider"], load: () => Pr
   }
 }
 
+/**
+ * The transport-level options every provider factory shares: `baseURL` (KOHAKU_LLM_BASE_URL, e.g. a gateway or
+ * proxy in front of the vendor API) and the test-only `fetch`. Both are omitted entirely when unset so the SDK
+ * keeps its own defaults. `fetch` is a function and so is never part of any cache key.
+ */
+function transportOptions(config: LlmConfig) {
+  return {
+    ...(config.baseUrl != null && config.baseUrl !== "" ? { baseURL: config.baseUrl } : {}),
+    ...(config.fetch != null ? { fetch: config.fetch } : {}),
+  };
+}
+
 async function resolveModel(config: LlmConfig): Promise<LanguageModel> {
+  const apiKey = config.apiKey != null ? { apiKey: config.apiKey } : {};
   switch (config.provider) {
     case "claude": {
       const { createAnthropic } = await importProvider("claude", () => import("@ai-sdk/anthropic"));
-      return createAnthropic({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
+      return createAnthropic({ ...apiKey, ...transportOptions(config) })(config.model);
     }
     case "openai": {
       const { createOpenAI } = await importProvider("openai", () => import("@ai-sdk/openai"));
-      return createOpenAI({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
+      return createOpenAI({ ...apiKey, ...transportOptions(config) })(config.model);
     }
     case "gemini": {
       const { createGoogleGenerativeAI } = await importProvider("gemini", () => import("@ai-sdk/google"));
-      return createGoogleGenerativeAI({
-        ...(config.apiKey != null ? { apiKey: config.apiKey } : {}),
-      })(config.model);
+      return createGoogleGenerativeAI({ ...apiKey, ...transportOptions(config) })(config.model);
     }
     case "ollama":
     case "llama": {
@@ -133,6 +144,7 @@ async function resolveModel(config: LlmConfig): Promise<LanguageModel> {
         name: config.provider,
         baseURL: config.baseUrl!,
         apiKey: config.apiKey ?? "not-required",
+        ...(config.fetch != null ? { fetch: config.fetch } : {}),
         // When this is false (the default), no JSON Schema is sent and the model generates free-form JSON
         // that fails validation. The /v1 endpoints of ollama / llama.cpp already support json_schema.
         supportsStructuredOutputs: true,
