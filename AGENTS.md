@@ -102,6 +102,7 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog           # re-export 
 | [spec/SPEC.md](spec/SPEC.md) | Kohaku Protocol v0.1 (normative; MUST/SHOULD and conformance requirements). Japanese: [spec/SPEC.ja.md](spec/SPEC.ja.md) |
 | [docs/runbooks/](docs/runbooks/) | Step-by-step runbooks for the recurring change chains (protocol change, adding a core component, mirroring to Python) |
 | [docs/runbooks/release.md](docs/runbooks/release.md) | The two-step release procedure (version PR, draft release, pre-publish checklist, npm/PyPI trusted publishing). Japanese: [docs/runbooks/release.ja.md](docs/runbooks/release.ja.md) |
+| [docs/adr/](docs/adr/0001-record-architecture-decisions.md) | Architecture decision records (MADR; template `0000-template.md`). One decision per file, numbered `NNNN-<kebab-title>.md`, English canonical + `.ja.md`; each new ADR needs a sidebar entry in `apps/docs-site/src/sidebar.ts`. A superseded ADR is kept and marked `superseded by ADR-XXXX` |
 
 Both languages of a document must be kept in sync: English (unsuffixed) is canonical; update the `.ja.md` counterpart in the same change.
 
