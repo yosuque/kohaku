@@ -129,6 +129,7 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/intents` | Intent DSL (`defineVocabulary` / `defineIntent`) — derives SemanticPort definitions, GUI facets, and MCP tool inputs from a single source of value sets and labels (an environment-neutral leaf depending only on spec-core + data-binding) |
 | `packages/llm` | LLM provider abstraction (5 switchable providers, automatic structured-output fallback) |
 | `packages/semantic-llm` | Default SemanticPort (`createLlmSemanticPort`): maps GUI/NL input onto an Intent catalog defined with `@kohaku-ui/intents`, via structured output. A starting point — `cli`'s `kohaku init` generates a project on it; sample-api also builds on it |
+| `packages/domain-mcp` | An existing MCP server as a DomainPort (`createMcpDomainPort`): read-only tools become `query://` refs, every other tool an `approve`-tier governed Action; plus `createMcpIntents` and a time-bucket `mcpDataVersion` (the MCP client is passed in; `@modelcontextprotocol/client` is an optional peer). Python mirror: `kohaku.domain_mcp` |
 | `packages/composer` | UI Composition Service (L0/L1/L2, repair loop, deterministic post-processing, Spec cache) |
 | `packages/renderer-core` | Shared renderer core (framework-free / DOM-free environment-neutral logic: `resolveEmit`, presenters). Consumed identically by renderer-react and renderer-wc |
 | `packages/renderer-react` | Spec→React rendering engine + core component implementations (`./core`) |

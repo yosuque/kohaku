@@ -84,6 +84,10 @@ python/
 │  │  ├─ composer/         # ← packages/composer(L0/L1/L2・single-flight・修復ループ。TS と異なり
 │  │  │                    #   tier ladder・single-flight・結果組み立てを compose.py から別モジュール
 │  │  │                    #   に分割していない — 挙動は同一で、ファイル構成が粗いだけ)
+│  │  ├─ domain_mcp/       # ← packages/domain-mcp(MCP サーバーを DomainPort にする: port.py・
+│  │  │                    #   schema_projection.py・coerce.py・tabular.py・shape.py・intents.py・
+│  │  │                    #   data_version.py・types.py。MCP クライアントは引数で渡し、ここでは
+│  │  │                    #   `mcp` を import しない。下の「MCP サーバーを DomainPort にする」を参照)
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
 │  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
@@ -452,6 +456,31 @@ Python 側ではそもそも独立パッケージ境界を持たないため(TS 
 (`"approve"` tier)operation、および `sales_api_tests/test_governed_actions.py` /
 `test_approval_port.py` は、TS サンプル自身の統制された Action デモを写している(全体の手順は
 [ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。
+
+## MCP サーバーを DomainPort にする(`kohaku.domain_mcp`、TS と対称)
+
+`kohaku.domain_mcp` は `@kohaku-ui/domain-mcp` のミラーで、既存の MCP サーバーをホストの `DomainPort` にします。
+`annotations.read_only_hint is True` のツールは `query://` の op(結果は `TabularData`)、それ以外のツールは
+`tier="approve"` の Action(`tier_for` で上書き可)で、その `paramsSchema` は `inputSchema` を閉じた
+`ActionParamsSchema` の部分集合へ射影したものです(`anyOf` / `oneOf` / `$ref` / `additionalProperties: true` を使う場合は付きません)。
+既存の `mcp` extra(`pip install 'kohaku-ui[mcp]'`)に含まれ、`mcp` 自体は import しません: 公式 SDK の `Client` を
+引数で渡します(`list_tools(cursor=...)` / `call_tool(name, arguments)` を持つ任意のオブジェクトで可)。
+
+```python
+from mcp import Client
+from kohaku.domain_mcp import create_mcp_domain_port, create_mcp_intents
+
+async with Client("http://upstream.example/mcp") as client:
+    domain = await create_mcp_domain_port(client=client)
+    intents = create_mcp_intents(domain, source="orders")  # 読み取り専用ツールごとに Intent を 1 つ
+    # domain.describe_shape(ref) -> DataShape | None, domain.data_version() -> "mcp:<区切り>"
+```
+
+`mcp_data_version()` は時間の区切り(`mcp:<floor(now / 300)>`)です。`now` が受け取るのはエポック**秒**で、TS の
+`now` はミリ秒です。射影・文字列 ref パラメタの型変換・結果 → `TabularData` の変換・`outputSchema` → `DataShape` は、
+言語間 golden fixture の `domainMcp` セクションで TS の出力に固定されています。`query_ops` / `action_ops` は、TS の
+`ReadonlySet` に対して順序付きの tuple です(Intent の順序はツール一覧の順に従います)。
+[docs/user-guide.ja.md](../docs/user-guide.ja.md)(「既存の MCP サーバーから始める」)も参照してください。
 
 ## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)
 

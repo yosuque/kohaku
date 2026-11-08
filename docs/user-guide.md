@@ -376,6 +376,45 @@ No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtu
 
 **Measuring "time to first compose"** (the quickstart's KPI, target ≤ 15 minutes): start a stopwatch before `npx @kohaku-ui/cli init`, stop it when the Dashboard shows the Summary view (L0) and, with a key configured, when the first Chat answer renders (L1). Record both on a clean machine with a warm npm cache; the CI `pack-smoke` job runs the same generation end to end (`scripts/pack-smoke.mjs`, step 7b).
 
+### Starting from an existing MCP server (`@kohaku-ui/domain-mcp`)
+
+If your data already sits behind an MCP server, `@kohaku-ui/domain-mcp` turns it into the `DomainPort` so you write no Port code. It reads the server's `tools/list` once and sorts every tool by one MCP hint:
+
+| The tool says | kohaku exposes it as |
+|---|---|
+| `annotations.readOnlyHint: true` | a `query://<source>/<tool>` ref. The result becomes `TabularData` (an array, `{ rows: [...] }` or a single wrapped array, read from `structuredContent` or the first JSON text block). |
+| anything else, including no annotation (MCP's default is `false`) | a governed Action with `tier: "approve"`. Override with `tierFor(tool)`. |
+
+```ts
+import { createMcpDomainPort, createMcpIntents } from "@kohaku-ui/domain-mcp";
+import { createKohakuHost } from "@kohaku-ui/host";
+
+const domain = await createMcpDomainPort({
+  client, // a connected @modelcontextprotocol/client Client (any object with listTools / callTool works)
+  onSchemaProjection: (r) => console.warn("paramsSchema", r), // what was dropped / omitted, per tool
+});
+const host = createKohakuHost({
+  domain,
+  querySource: "orders",
+  llm,
+  intents: createMcpIntents(domain, { source: "orders" }), // one Intent per read-only tool
+  describeShape: (ref) => domain.describeShape(ref), //   columns from the tool's outputSchema
+  dataVersion: domain.dataVersion, //                     the same function the port stamps on the data
+  routes: { approvals, authorizeGovernance },
+});
+```
+
+What to know before you point it at a real server:
+
+- **Writes need an approval port.** An `approve`-tier Action is refused with 403 `APPROVAL_REQUIRED` until someone other than the requester mints a token (`POST /approvals`, see "Governed actions" in Demo 5). Wire `routes.approvals` (for example `createHmacApprovalPort`) and `routes.authorizeGovernance`, otherwise every write stays refused.
+- **The Action's `paramsSchema` is a projection.** The tool's `inputSchema` is mapped onto kohaku's closed JSON Schema subset: `description`, `title`, `default`, `format` and `pattern` are dropped (reported through `onSchemaProjection`), every object is closed with `additionalProperties: false`, and a schema that uses `anyOf` / `oneOf` / `$ref`, a type array, `additionalProperties: true` or an unknown keyword is **omitted**, so kohaku does not validate that Action's payload. The approver is then judging the raw payload, so check the `omitted` reports and `include` or `tierFor` accordingly.
+- **A write tool can never be read.** `createMcpIntents` only creates Intents for read-only tools, and a read capability is only issued for an Intent's resolved refs, so `query://orders/refund_order` has no capability behind it. A tool that requires a parameter an Intent cannot carry (anything but a string, enum, number or integer) is skipped (`onSkip`).
+- **MCP has no data version.** `mcpDataVersion` (the default of the port) is a time bucket, `mcp:<floor(now / 300 s)>`; a Spec cached in one bucket is re-composed in the next. Pass `dataVersion` to the port to use a real version (an ETag-like tool of your own).
+- **Ref parameters are strings.** The port converts them by the tool's `inputSchema` type (`number`, `integer`, `boolean`; a bad value raises an error coded `ACTION_PARAMS_INVALID` before the tool is called, which REST reports like any failed read, as 404 `REF_NOT_FOUND`), drops `_cursor` / `_sort` / `_dir` and maps `_limit` onto the tool's own `limit` argument if it has one.
+- **Not followed:** `tools/list_changed` (restart the host to pick up a new tool) and the caller's identity (the MCP client's transport authenticates to the server; the calling principal is not forwarded).
+
+The Python port is `kohaku.domain_mcp` (`create_mcp_domain_port` / `create_mcp_intents` / `mcp_data_version`), under the existing `mcp` extra.
+
 ### Step 0 — Server-Driven UI without an LLM
 
 ```bash

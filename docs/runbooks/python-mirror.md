@@ -17,6 +17,7 @@ as the source of truth if this table and the README ever disagree.
 | `packages/registry` | `kohaku/src/kohaku/registry/` |
 | `packages/data-binding` | `kohaku/src/kohaku/data_binding/` |
 | `packages/intents` | `kohaku/src/kohaku/intents/` |
+| `packages/domain-mcp` | `kohaku/src/kohaku/domain_mcp/` |
 | `packages/llm` | `kohaku/src/kohaku/llm/` |
 | `packages/composer` | `kohaku/src/kohaku/composer/` |
 | `packages/lineage` | `kohaku/src/kohaku/lineage/` |
@@ -154,13 +155,13 @@ cd python && uv sync && uv run ruff check && uv run ruff format --check && uv ru
 `lint-imports` (import-linter) enforces the layer-direction contract declared in
 `[tool.importlinter]` in [python/pyproject.toml](../../python/pyproject.toml), via three contracts:
 
-- **layers** — the total order `host_rest | host_mcp | evals` → `host_core` → `composer` →
+- **layers** — the total order `host_rest | host_mcp | evals` → `host_core` → `composer | domain_mcp` →
   `registry | intents | lineage | storage` → `data_binding` → `llm | spec` (higher layers may import
   lower ones, never the reverse; `|` separates independent siblings within one layer).
 - **independence** — `kohaku.registry` and `kohaku.data_binding` must not import each other (TS:
   independent same-layer siblings).
 - **forbidden** — only `composer` / `evals` may import `llm`; the lower packages
-  (`spec`/`registry`/`data_binding`/`intents`/`lineage`/`storage`) must not.
+  (`spec`/`registry`/`data_binding`/`intents`/`lineage`/`storage`/`domain_mcp`) must not.
 
 If you add a new Python module or introduce a cross-module import, update `[tool.importlinter]` to
 match — and keep it paired with the TS side's `LAYERS` array in

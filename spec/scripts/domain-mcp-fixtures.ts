@@ -105,7 +105,10 @@ const COERCION_CASES: { args: Record<string, unknown>; inputSchema: unknown }[] 
   },
   {
     args: { limit: "x" },
-    inputSchema: { type: "object", properties: { limit: { anyOf: [{ type: "integer" }, { type: "null" }] } } },
+    inputSchema: {
+      type: "object",
+      properties: { limit: { anyOf: [{ type: "integer" }, { type: "null" }] } },
+    },
   },
   { args: { n: "abc" }, inputSchema: COERCION_SCHEMA },
   { args: { n: "" }, inputSchema: COERCION_SCHEMA },

@@ -1,0 +1,5 @@
+---
+"@kohaku-ui/domain-mcp": minor
+---
+
+New package `@kohaku-ui/domain-mcp` (Python mirror: `kohaku.domain_mcp`, under the existing `mcp` extra): an existing MCP server becomes a kohaku `DomainPort`. A tool with `annotations.readOnlyHint === true` is a `query://` reference whose result becomes `TabularData` (`createMcpIntents` makes one Intent per read-only tool), and every other tool is a governed Action with `tier: "approve"` (`tierFor` overrides) whose `paramsSchema` is the tool's `inputSchema` projected onto kohaku's closed subset (annotations, `pattern` and `format` are dropped and reported through `onSchemaProjection`; a schema using `anyOf` / `oneOf` / `$ref` / `additionalProperties: true` is omitted, so the approver judges the raw payload). String ref parameters are coerced by the tool's `inputSchema` type, `outputSchema` becomes a `DataShape`, and `mcpDataVersion` is a 5 minute time bucket because MCP exposes no data version. `@modelcontextprotocol/client` is an optional peer: the client is passed in. The first release that contains this package needs `scripts/npm-bootstrap.mjs --publish` first (see `docs/runbooks/release.md`).
