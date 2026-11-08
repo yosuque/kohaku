@@ -16,6 +16,9 @@ pnpm smoke:pack              # pack every package and verify the tarballs outsid
 pnpm meta:sync               # regenerate the publishing metadata / publishConfig (CI checks for drift)
 pnpm changeset               # record a version bump for a change (a version PR is opened from main; publishing is a separate, tag-driven step — docs/runbooks/release.md)
 pnpm seed                    # regenerate the sales seed (deterministic — regeneration produces no git diff)
+pnpm init:versions           # regenerate cli/src/init/versions.ts (the `kohaku init` version table) from the pnpm catalog (CI checks for drift)
+pnpm python:version          # sync the Python distribution version to the TypeScript one (CI checks for drift)
+pnpm regen                   # run every generator above in order, stopping at the first failure (CONTRIBUTING.md §5)
 KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts   # regenerate the `kohaku init` goldens after an intentional template change (the test byte-compares the generated project, plain and --mcp)
 pnpm dev                     # sample-api (:8787) + sample-web (:5173) together
 pnpm docs:build              # documentation site generated from docs/ (apps/docs-site; nothing there is content — edit docs/*.md)
