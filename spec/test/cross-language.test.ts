@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHmacApprovalPort, createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import {
   createJudge,
   createSchemaExtractor,
@@ -73,6 +74,15 @@ import {
   defaultOutputLocale,
   normalizeGuiAction,
 } from "../../packages/semantic-llm/src/index.js";
+// The HMAC token pinning shares its derivation with the generator (see authz-hmac-fixtures.ts).
+import {
+  type ApprovalGoldenCase,
+  type AuthzHmacFixtures,
+  type CapabilityGoldenCase,
+  pinnedApprovalToken,
+  pinnedCapabilityToken,
+  withFixedNow,
+} from "../scripts/authz-hmac-fixtures.js";
 import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
 
 /**
@@ -151,6 +161,7 @@ interface Fixture {
     root: string | null;
     requestUrl: string | null;
   }[];
+  authzHmac: AuthzHmacFixtures;
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -310,6 +321,49 @@ describe("cross-language golden (KOHAKU_LLM_BASE_URL normalisation)", () => {
       ).toBe(c.root);
     }
   });
+});
+
+describe("cross-language golden (HMAC capability and approval tokens)", () => {
+  const { authzHmac } = fixture;
+  const authz = createHmacAuthzPort(authzHmac.secret);
+  const approvals = createHmacApprovalPort(authzHmac.secret);
+  const payloadOf = (token: string): string =>
+    Buffer.from(token.split(".")[0] as string, "base64url").toString("utf8");
+
+  it("pins a non-trivial corpus (capabilities and approvals)", () => {
+    expect(authzHmac.capabilities.length).toBeGreaterThan(0);
+    expect(authzHmac.approvals.length).toBeGreaterThan(0);
+  });
+
+  for (const c of authzHmac.capabilities as CapabilityGoldenCase[]) {
+    it(`capability: ${c.name}`, async () => {
+      // The pinned bytes are exactly what the real port issues (jti swapped, re-signed) at the pinned time...
+      expect(await pinnedCapabilityToken(c)).toBe(c.token);
+      // ...and the port verifies them to the fixture's outcome (the Python test asserts the same outcome).
+      const result = await withFixedNow(authzHmac.nowSeconds, () => authz.verify(c.token, c.request));
+      if (c.expected.ok) {
+        expect(result.ok).toBe(true);
+        expect(result.principal?.id).toBe(c.expected.principalId);
+        expect(result.tenant ?? null).toBe(c.expected.tenant);
+      } else {
+        expect(result).toEqual({ ok: false, reason: c.expected.reason });
+      }
+      expect(JSON.parse(payloadOf(c.token)).jti).toBe(c.jti);
+    });
+  }
+
+  for (const c of authzHmac.approvals as ApprovalGoldenCase[]) {
+    it(`approval: ${c.name}`, async () => {
+      expect(await pinnedApprovalToken(c)).toBe(c.token);
+      const result = await withFixedNow(authzHmac.nowSeconds, () =>
+        approvals.verifyApproval(c.token, c.request),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.grant?.exp).toBe(c.exp);
+      expect(result.grant?.jti).toBe(c.jti);
+      expect(result.grant?.approverId).toBe(c.input.approverId);
+    });
+  }
 });
 
 describe("cross-language golden (prompt fragments)", () => {

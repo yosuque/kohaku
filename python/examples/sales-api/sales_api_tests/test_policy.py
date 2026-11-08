@@ -16,11 +16,11 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from kohaku.authz_hmac import create_hmac_authz_port
 from kohaku.host_core import load_policy_file
 from kohaku.spec import KohakuPolicyFile, LineageFilter, PolicyCompose, PolicySection
 from kohaku.storage import MemoryStoragePort
 from sales_api.app import SalesApp, create_app
-from sales_api.authz_port import create_hmac_authz_port
 from sales_api.fake_llm import create_deterministic_fake_llm
 
 POLICY_FILE_PATH = Path(__file__).resolve().parent.parent / "policy" / "kohaku.policy.json"

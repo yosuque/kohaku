@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
 
+from kohaku.authz_hmac import (
+    create_hmac_approval_port,
+    create_hmac_authz_port,
+    create_memory_approval_store,
+)
 from kohaku.composer import ComposeTrace
 from kohaku.host_mcp import (
     ActionEffects as McpActionEffects,
@@ -36,8 +41,6 @@ from kohaku.storage import FileStoragePort
 
 from .action_effects import sales_action_effects
 from .app import admit_fixation_for_locale, create_app
-from .approval_port import MemoryApprovalStore, create_hmac_approval_port
-from .authz_port import create_hmac_authz_port
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _RENDERER_PATH = _REPO_ROOT / "apps/sample-mcp/dist/renderer/index.html"
@@ -135,10 +138,10 @@ async def create_kohaku_mcp_setup(
     authz = create_hmac_authz_port(capability_secret)
     # Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish") needs an
     # ApprovalPort to ever be allowed on the MCP profile too (symmetric with __main__.py's REST-side
-    # wiring). Reuses the same KOHAKU_CAPABILITY_SECRET as the AuthzPort -- see approval_port.py's own doc
+    # wiring). Reuses the same KOHAKU_CAPABILITY_SECRET as the AuthzPort -- see kohaku.authz_hmac.approval_port's docstring
     # comment for why sharing the secret is by design. With an in-process ApprovalStore so an approval is
     # single-use (design.md #63; without one a token stays replayable until it expires).
-    approvals = create_hmac_approval_port(capability_secret, store=MemoryApprovalStore())
+    approvals = create_hmac_approval_port(capability_secret, store=create_memory_approval_store())
 
     sales = await create_app(llm=llm, storage=storage, authz=authz, approvals=approvals)
     # The MCP side's compose is also recorded to View Lineage (the same recorder as the REST side is built from the shared lineage).

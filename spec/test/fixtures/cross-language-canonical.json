@@ -4507,5 +4507,198 @@
       "root": "http://llama.example:8080/v1",
       "requestUrl": null
     }
-  ]
+  ],
+  "authzHmac": {
+    "secret": "golden-secret",
+    "nowSeconds": 1800000000,
+    "capabilities": [
+      {
+        "name": "plain read scope, default TTL, no tenant",
+        "principalId": "golden-user",
+        "scopes": [
+          {
+            "kind": "read",
+            "ref": "query://sales/summary?fy=2026"
+          }
+        ],
+        "jti": "Z29sZGVuLWNhcC1qdGktMDE",
+        "token": "eyJzdWIiOiJnb2xkZW4tdXNlciIsInNjb3BlcyI6W3sia2luZCI6InJlYWQiLCJyZWYiOiJxdWVyeTovL3NhbGVzL3N1bW1hcnk_Znk9MjAyNiJ9XSwiZXhwIjoxODAwMDAwNjAwLCJqdGkiOiJaMjlzWkdWdUxXTmhjQzFxZEdrdE1ERSJ9.LuuXIdu8MP8DGMWi-G6onCj2NcWgHc6n4NAsiyQn3i8",
+        "expected": {
+          "ok": true,
+          "principalId": "golden-user",
+          "tenant": null
+        },
+        "request": {
+          "kind": "read",
+          "ref": "query://sales/summary?fy=2026"
+        }
+      },
+      {
+        "name": "read + write scopes, explicit TTL, ASCII tenant",
+        "principalId": "golden-user",
+        "scopes": [
+          {
+            "kind": "read",
+            "ref": "query://sales/summary?fy=2026&region=us"
+          },
+          {
+            "kind": "write",
+            "ref": "annotate"
+          }
+        ],
+        "ttlSeconds": 900,
+        "tenant": "acme",
+        "jti": "Z29sZGVuLWNhcC1qdGktMDI",
+        "token": "eyJzdWIiOiJnb2xkZW4tdXNlciIsInNjb3BlcyI6W3sia2luZCI6InJlYWQiLCJyZWYiOiJxdWVyeTovL3NhbGVzL3N1bW1hcnk_Znk9MjAyNiZyZWdpb249dXMifSx7ImtpbmQiOiJ3cml0ZSIsInJlZiI6ImFubm90YXRlIn1dLCJleHAiOjE4MDAwMDA5MDAsImp0aSI6IloyOXNaR1Z1TFdOaGNDMXFkR2t0TURJIiwidGVuYW50IjoiYWNtZSJ9.tSYVwNsxxmIKhG6FVxNDqGkjLYZjdpjD65kC8rriL-A",
+        "expected": {
+          "ok": true,
+          "principalId": "golden-user",
+          "tenant": "acme"
+        },
+        "request": {
+          "kind": "read",
+          "ref": "query://sales/summary?fy=2026&region=us"
+        }
+      },
+      {
+        "name": "non-ASCII principal, scope ref and tenant (UTF-8 kept, not \\u-escaped)",
+        "principalId": "ユーザー",
+        "scopes": [
+          {
+            "kind": "read",
+            "ref": "query://sales/summary?region=東京"
+          }
+        ],
+        "ttlSeconds": 3600,
+        "tenant": "株式会社アクメ",
+        "jti": "Z29sZGVuLWNhcC1qdGktMDM",
+        "token": "eyJzdWIiOiLjg6bjg7zjgrbjg7wiLCJzY29wZXMiOlt7ImtpbmQiOiJyZWFkIiwicmVmIjoicXVlcnk6Ly9zYWxlcy9zdW1tYXJ5P3JlZ2lvbj3mnbHkuqwifV0sImV4cCI6MTgwMDAwMzYwMCwianRpIjoiWjI5c1pHVnVMV05oY0MxcWRHa3RNRE0iLCJ0ZW5hbnQiOiLmoKrlvI_kvJrnpL7jgqLjgq_jg6EifQ.euru9lrU2IyOgRTmm3pvkOsZYrq8xjLk-HkmEiynA9s",
+        "expected": {
+          "ok": true,
+          "principalId": "ユーザー",
+          "tenant": "株式会社アクメ"
+        },
+        "request": {
+          "kind": "read",
+          "ref": "query://sales/summary?region=東京"
+        }
+      },
+      {
+        "name": "empty tenant is never signed",
+        "principalId": "golden-user",
+        "scopes": [
+          {
+            "kind": "read",
+            "ref": "query://sales/kpi"
+          }
+        ],
+        "ttlSeconds": 60,
+        "tenant": "",
+        "jti": "Z29sZGVuLWNhcC1qdGktMDQ",
+        "token": "eyJzdWIiOiJnb2xkZW4tdXNlciIsInNjb3BlcyI6W3sia2luZCI6InJlYWQiLCJyZWYiOiJxdWVyeTovL3NhbGVzL2twaSJ9XSwiZXhwIjoxODAwMDAwMDYwLCJqdGkiOiJaMjlzWkdWdUxXTmhjQzFxZEdrdE1EUSJ9.YZyNbLO7G8pIvjPtVwp_AGAUq1faaoaOngJ4hkNiOYs",
+        "expected": {
+          "ok": true,
+          "principalId": "golden-user",
+          "tenant": null
+        },
+        "request": {
+          "kind": "read",
+          "ref": "query://sales/kpi"
+        }
+      },
+      {
+        "name": "no scopes at all",
+        "principalId": "golden-user",
+        "scopes": [],
+        "jti": "Z29sZGVuLWNhcC1qdGktMDU",
+        "token": "eyJzdWIiOiJnb2xkZW4tdXNlciIsInNjb3BlcyI6W10sImV4cCI6MTgwMDAwMDYwMCwianRpIjoiWjI5c1pHVnVMV05oY0MxcWRHa3RNRFUifQ.gYXmcIFjdt58hb-t_lfCHJOc2a-pnJdWbsumNr6lUHY",
+        "expected": {
+          "ok": false,
+          "reason": "scope does not cover read:query://sales/summary?fy=2026"
+        },
+        "request": {
+          "kind": "read",
+          "ref": "query://sales/summary?fy=2026"
+        }
+      }
+    ],
+    "approvals": [
+      {
+        "name": "tenant-less approval, default TTL (the tenant key is omitted, not null)",
+        "input": {
+          "action": "publish",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "operator-1",
+          "approverId": "reviewer-1"
+        },
+        "jti": "Z29sZGVuLWFwcHItMDE",
+        "token": "kohaku-approval.v2.eyJhY3Rpb24iOiJwdWJsaXNoIiwicGF5bG9hZEhhc2giOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsImFwcHJvdmVySWQiOiJyZXZpZXdlci0xIiwicmVxdWVzdGVySWQiOiJvcGVyYXRvci0xIiwiZXhwIjoxODAwMDAwMzAwLCJqdGkiOiJaMjlzWkdWdUxXRndjSEl0TURFIn0.UJctk1YkTkvCWhna-eksVPH0xdxJTQ0rueBrz1q6L44",
+        "exp": 1800000300,
+        "request": {
+          "action": "publish",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "operator-1"
+        }
+      },
+      {
+        "name": "tenant-bound approval, explicit TTL",
+        "input": {
+          "action": "publish",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "operator-1",
+          "approverId": "reviewer-1",
+          "tenant": "acme"
+        },
+        "ttlSeconds": 600,
+        "jti": "Z29sZGVuLWFwcHItMDI",
+        "token": "kohaku-approval.v2.eyJhY3Rpb24iOiJwdWJsaXNoIiwicGF5bG9hZEhhc2giOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsImFwcHJvdmVySWQiOiJyZXZpZXdlci0xIiwicmVxdWVzdGVySWQiOiJvcGVyYXRvci0xIiwidGVuYW50IjoiYWNtZSIsImV4cCI6MTgwMDAwMDYwMCwianRpIjoiWjI5c1pHVnVMV0Z3Y0hJdE1ESSJ9.uL2n00LH2XMlJmqr18B9su_H2nY-cXo5pIOSxZhb8pg",
+        "exp": 1800000600,
+        "request": {
+          "action": "publish",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "operator-1",
+          "tenant": "acme"
+        }
+      },
+      {
+        "name": "a TTL above the maximum is clamped to 3600; non-ASCII tenant and ids",
+        "input": {
+          "action": "publish",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "オペレーター",
+          "approverId": "レビュアー",
+          "tenant": "株式会社アクメ"
+        },
+        "ttlSeconds": 86400,
+        "jti": "Z29sZGVuLWFwcHItMDM",
+        "token": "kohaku-approval.v2.eyJhY3Rpb24iOiJwdWJsaXNoIiwicGF5bG9hZEhhc2giOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsImFwcHJvdmVySWQiOiLjg6zjg5Pjg6XjgqLjg7wiLCJyZXF1ZXN0ZXJJZCI6IuOCquODmuODrOODvOOCv-ODvCIsInRlbmFudCI6IuagquW8j-S8muekvuOCouOCr-ODoSIsImV4cCI6MTgwMDAwMzYwMCwianRpIjoiWjI5c1pHVnVMV0Z3Y0hJdE1ETSJ9.Fglb-zb4DhQnGh9U8vI0eHRF5hXJAJxsLe1hX-NtC8E",
+        "exp": 1800003600,
+        "request": {
+          "action": "publish",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "オペレーター",
+          "tenant": "株式会社アクメ"
+        }
+      },
+      {
+        "name": "an empty-string tenant is signed (unlike the capability token) and is distinct from none",
+        "input": {
+          "action": "annotate",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "operator-1",
+          "approverId": "reviewer-1",
+          "tenant": ""
+        },
+        "jti": "Z29sZGVuLWFwcHItMDQ",
+        "token": "kohaku-approval.v2.eyJhY3Rpb24iOiJhbm5vdGF0ZSIsInBheWxvYWRIYXNoIjoic2hhMjU2OmFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJhcHByb3ZlcklkIjoicmV2aWV3ZXItMSIsInJlcXVlc3RlcklkIjoib3BlcmF0b3ItMSIsInRlbmFudCI6IiIsImV4cCI6MTgwMDAwMDMwMCwianRpIjoiWjI5c1pHVnVMV0Z3Y0hJdE1EUSJ9.k-dP9tyDUinlLTenWkv7svmvLyhgqZoieMFxa9HM52g",
+        "exp": 1800000300,
+        "request": {
+          "action": "annotate",
+          "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requesterId": "operator-1",
+          "tenant": ""
+        }
+      }
+    ]
+  }
 }

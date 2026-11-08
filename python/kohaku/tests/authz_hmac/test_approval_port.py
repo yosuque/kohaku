@@ -1,4 +1,4 @@
-"""Tests for ApprovalPort (port of TS: packages/authz-hmac/test/approval-port.test.ts).
+"""Tests for the HMAC ApprovalPort (port of TS: packages/authz-hmac/test/approval-port.test.ts).
 
 Exact binding (action / payloadHash / requester / tenant), self-approval rejection, domain separation
 from capability tokens, expiry, and single-use enforcement via MemoryApprovalStore.
@@ -7,6 +7,7 @@ from capability tokens, expiry, and single-use enforcement via MemoryApprovalSto
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -14,17 +15,23 @@ import time
 
 import pytest
 
-from kohaku.spec import ApprovalIssueError, ApprovalVerifyResult, Principal, Scope, VerifyRequest
-from sales_api.approval_port import (
+from kohaku.authz_hmac import (
     APPROVAL_TOKEN_PREFIX,
-    DEFAULT_APPROVAL_TTL_SECONDS,
     DEFAULT_MAX_APPROVAL_TTL_SECONDS,
     HmacApprovalPort,
     MemoryApprovalStore,
-    _b64url_encode,
     create_hmac_approval_port,
+    create_hmac_authz_port,
 )
-from sales_api.authz_port import create_hmac_authz_port
+from kohaku.authz_hmac.authz_port import b64url_encode as _b64url_encode
+from kohaku.spec import (
+    DEFAULT_APPROVAL_TTL_SECONDS,
+    ApprovalIssueError,
+    ApprovalVerifyResult,
+    Principal,
+    Scope,
+    VerifyRequest,
+)
 
 ACTION = "annotate"
 PAYLOAD_HASH = "sha256:" + "a" * 64
@@ -414,5 +421,121 @@ class TestMemoryApprovalStore:
             assert await store.consume("jti-1", 1010) is True
             clock["t"] = 1011  # jti-1 has now expired
             assert await store.consume("jti-2", 1100) is True
+
+        asyncio.run(run())
+
+    def test_keeps_exact_expiry_semantics_when_the_throttled_sweep_has_not_run_yet(self) -> None:
+        """TS: "keeps exact expiry semantics for a jti even when the throttled sweep has not run yet"."""
+
+        async def run() -> None:
+            clock = {"t": 1000.0}
+            store = MemoryApprovalStore(now=lambda: clock["t"])
+            assert await store.consume("jti-1", 1000.5) is True  # sweeps once at t=1000
+            clock["t"] = (
+                1000.75  # inside the sweep interval: no sweep runs, but jti-1 has already expired
+            )
+            assert await store.consume("jti-1", 1100) is True
+            assert await store.consume("jti-1", 1100) is False  # live again, so a replay is refused
+
+        asyncio.run(run())
+
+    def test_the_sweep_is_throttled_to_once_per_interval(self) -> None:
+        async def run() -> None:
+            clock = {"t": 1000.0}
+            store = MemoryApprovalStore(now=lambda: clock["t"])
+            await store.consume("a", 1000.5)
+            clock["t"] = 1000.75
+            await store.consume("b", 2000)
+            assert set(store._consumed) == {
+                "a",
+                "b",
+            }  # not swept yet (within SWEEP_INTERVAL_SECONDS)
+            clock["t"] = 1001.0
+            await store.consume("c", 2000)
+            assert set(store._consumed) == {"b", "c"}  # swept: "a" expired at 1000.5
+
+        asyncio.run(run())
+
+
+class TestMoreTtlAndPrefixCases:
+    def test_also_caps_a_configured_default_ttl_that_exceeds_the_maximum(self) -> None:
+        async def run() -> None:
+            clock = {"t": 1_000_000.0}
+            approvals = create_hmac_approval_port(
+                "test-secret", ttl_seconds=500, max_ttl_seconds=30, now=lambda: clock["t"]
+            )
+            token = await _issue(approvals)
+            clock["t"] += 30
+            assert (await _verify(approvals, token)).ok is False
+
+        asyncio.run(run())
+
+    def test_rejects_a_token_whose_prefix_was_swapped_to_another_version(self) -> None:
+        async def run() -> None:
+            approvals = create_hmac_approval_port("test-secret")
+            token = await _issue(approvals)
+            relabelled = token.replace("kohaku-approval.v2.", "kohaku-approval.v3.", 1)
+            assert (await _verify(approvals, relabelled)).ok is False
+
+        asyncio.run(run())
+
+    def test_a_self_approval_refusal_carries_the_client_caused_error_code(self) -> None:
+        from kohaku.spec import APPROVAL_ISSUE_ERROR_CODE
+
+        async def run() -> None:
+            approvals = create_hmac_approval_port("test-secret")
+            with pytest.raises(ApprovalIssueError) as info:
+                await _issue(approvals, requester_id="same", approver_id="same")
+            assert info.value.code == APPROVAL_ISSUE_ERROR_CODE
+
+        asyncio.run(run())
+
+    def test_a_tenant_less_approval_omits_the_tenant_claim_instead_of_writing_null(self) -> None:
+        """TS's JSON.stringify drops an undefined tenant; `"tenant":null` would not be byte-identical."""
+
+        async def run() -> None:
+            approvals = create_hmac_approval_port("test-secret")
+            token = await _issue(approvals)
+            payload = token[len(APPROVAL_TOKEN_PREFIX) : token.rfind(".")]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+            assert list(claims) == [
+                "action",
+                "payloadHash",
+                "approverId",
+                "requesterId",
+                "exp",
+                "jti",
+            ]
+            with_tenant = await _issue(approvals, tenant="acme")
+            payload = with_tenant[len(APPROVAL_TOKEN_PREFIX) : with_tenant.rfind(".")]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+            assert list(claims) == [
+                "action",
+                "payloadHash",
+                "approverId",
+                "requesterId",
+                "tenant",
+                "exp",
+                "jti",
+            ]
+
+        asyncio.run(run())
+
+
+class TestHugeIntegerExp:
+    def test_an_integer_exp_too_large_for_a_float_is_malformed_not_an_exception(self) -> None:
+        async def run() -> None:
+            claims = {
+                "action": ACTION,
+                "payloadHash": PAYLOAD_HASH,
+                "approverId": APPROVER_ID,
+                "requesterId": REQUESTER_ID,
+                "exp": 10**400,
+                "jti": "j",
+            }
+            result = await _verify(
+                create_hmac_approval_port("test-secret"), _forge("test-secret", claims)
+            )
+            assert (result.ok, result.reason) == (False, "malformed payload")
 
         asyncio.run(run())

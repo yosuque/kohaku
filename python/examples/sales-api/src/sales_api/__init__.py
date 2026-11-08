@@ -4,8 +4,9 @@ Provides the domain (aggregation queries), Intent catalog, Port implementations 
 few-shot supply. The wiring of the REST/MCP hosts is done by a separate layer.
 """
 
+from kohaku.authz_hmac import HmacAuthzPort, create_hmac_authz_port
+
 from .action_effects import ActionEffect, sales_action_effects
-from .authz_port import HmacAuthzPort, create_hmac_authz_port
 from .catalog import sales_contribution, sales_kpi_card
 from .domain import (
     OPERATIONS,
