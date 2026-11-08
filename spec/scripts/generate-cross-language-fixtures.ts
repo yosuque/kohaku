@@ -69,6 +69,18 @@ import {
 // fallback.mapProps functions), so this reaches the source file directly rather than adding a
 // package.json dependency edge + pnpm-lock.yaml churn for a single script.
 import { coreCatalog } from "../../packages/registry/src/core/index.js";
+// Relative, same reasoning as above: the semantic-llm default SemanticPort's deterministic pieces (GUI
+// normalization, prompt builders). The catalog and the case lists are shared with test/cross-language.test.ts.
+import {
+  buildNormalizeSystemPrompt,
+  buildNormalizeUserPrompt,
+  normalizeGuiAction,
+} from "../../packages/semantic-llm/src/index.js";
+import {
+  createSemanticGuiCatalog,
+  SEMANTIC_GUI_CASES,
+  SEMANTIC_PROMPT_CASES,
+} from "../test/semantic-gui-catalog.js";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../test/fixtures");
 mkdirSync(OUT_DIR, { recursive: true });
@@ -397,6 +409,35 @@ async function main(): Promise<void> {
     return { ...c, mappedProps: def.fallback.mapProps(c.inputProps) };
   });
 
+  // semantic-llm: deterministic GUI normalization (never goes through the LLM) and the prompt builders. A
+  // failing case records the thrown message, which Python reproduces word for word.
+  const semanticGuiCatalog = createSemanticGuiCatalog();
+  const semanticGuiCases = await Promise.all(
+    SEMANTIC_GUI_CASES.map(async (c) => {
+      const current =
+        c.current != null
+          ? {
+              ...c.current,
+              hash: await computeIntentHash({ canonical: c.current.canonical, params: c.current.params }),
+            }
+          : undefined;
+      try {
+        const out = normalizeGuiAction(
+          { kind: "gui", action: c.action, params: c.params, ...(current != null ? { current } : {}) },
+          semanticGuiCatalog,
+        );
+        return { ...c, output: { canonical: out.canonical, params: out.params } };
+      } catch (e) {
+        return { ...c, error: (e as Error).message };
+      }
+    }),
+  );
+  const semanticPromptCases = SEMANTIC_PROMPT_CASES.map((c) => ({
+    ...c,
+    system: buildNormalizeSystemPrompt(c.rules),
+    user: buildNormalizeUserPrompt(c.catalogDoc, c.locale, c.text),
+  }));
+
   const exampleSpec = parseSpec(
     JSON.parse(readFileSync(join(OUT_DIR, "../../examples/quarterly-sales.spec.json"), "utf8")),
   );
@@ -680,13 +721,15 @@ async function main(): Promise<void> {
         distillation,
         fallback: fallbackCases,
         promptFragments,
+        semanticGui: semanticGuiCases,
+        semanticPrompts: semanticPromptCases,
       },
       null,
       2,
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

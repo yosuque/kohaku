@@ -51,6 +51,13 @@ import {
   signManifest,
   verifyManifestSignature,
 } from "../../packages/lineage/src/index.js";
+// Relative (not "@kohaku-ui/semantic-llm") import, same reasoning as the composer import above.
+import {
+  buildNormalizeSystemPrompt,
+  buildNormalizeUserPrompt,
+  normalizeGuiAction,
+} from "../../packages/semantic-llm/src/index.js";
+import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
 
 /**
  * Cross-language golden (TS side). Pins that the TS implementation reproduces the fixture
@@ -84,6 +91,18 @@ interface Fixture {
     designBrief: string[];
     promptRevision: string;
   };
+  semanticGui: (SemanticGuiCase & {
+    output?: { canonical: string; params: JsonObject };
+    error?: string;
+  })[];
+  semanticPrompts: {
+    rules: string[];
+    catalogDoc: string;
+    locale: string;
+    text: string;
+    system: string;
+    user: string;
+  }[];
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -210,6 +229,41 @@ describe("cross-language golden (prompt fragments)", () => {
 
   it("PROMPT_REVISION reproduces the fixture (catches an accidental, unbumped prompt change)", () => {
     expect(PROMPT_REVISION).toBe(fixture.promptFragments.promptRevision);
+  });
+});
+
+describe("cross-language golden (semantic-llm, deterministic pieces)", () => {
+  it("normalizeGuiAction reproduces the fixture (outputs and thrown messages)", async () => {
+    expect(fixture.semanticGui.length).toBeGreaterThan(0);
+    const catalog = createSemanticGuiCatalog();
+    for (const c of fixture.semanticGui) {
+      const current =
+        c.current != null
+          ? {
+              ...c.current,
+              hash: await computeIntentHash({ canonical: c.current.canonical, params: c.current.params }),
+            }
+          : undefined;
+      const input = {
+        kind: "gui" as const,
+        action: c.action,
+        params: c.params,
+        ...(current != null ? { current } : {}),
+      };
+      if (c.error != null) {
+        expect(() => normalizeGuiAction(input, catalog), c.name).toThrow(c.error);
+      } else {
+        expect(normalizeGuiAction(input, catalog), c.name).toEqual(c.output);
+      }
+    }
+  });
+
+  it("buildNormalizeSystemPrompt / buildNormalizeUserPrompt reproduce the fixture byte-for-byte", () => {
+    expect(fixture.semanticPrompts.length).toBeGreaterThan(0);
+    for (const c of fixture.semanticPrompts) {
+      expect(buildNormalizeSystemPrompt(c.rules)).toBe(c.system);
+      expect(buildNormalizeUserPrompt(c.catalogDoc, c.locale, c.text)).toBe(c.user);
+    }
   });
 });
 
