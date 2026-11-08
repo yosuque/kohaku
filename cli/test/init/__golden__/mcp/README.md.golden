@@ -36,7 +36,7 @@ npm run mcp:claude-desktop           # registers this project with Claude Deskto
 ```
 
 Restart Claude Desktop, then ask it about your data -- it calls this project's MCP server (`npm run mcp`, stdio) and
-renders the same UI Specs the web dashboard does. `npm run mcp:http` starts a Streamable HTTP server on :8788 instead,
+renders the same UI Specs the web dashboard does. `npm run mcp:http` starts a Streamable HTTP server at http://127.0.0.1:8788/mcp instead,
 for claude.ai / ChatGPT (no authentication -- see server/mcp-http.ts before exposing it beyond localhost; it only accepts
 localhost Host / Origin headers unless you set `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS`, e.g. behind a tunnel).
 Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-contained HTML snapshot instead

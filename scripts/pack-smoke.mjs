@@ -897,6 +897,13 @@ try {
           headers: { origin: "http://evil.example", "access-control-request-method": "POST" },
         });
         if (preflight.status !== 403) throw new Error(`a foreign-Origin preflight got ${preflight.status}, expected 403`);
+        // Only /mcp is served: any other path is answered 404 by the shared scaffold, not by the MCP handler.
+        const otherPath = await fetch(`http://127.0.0.1:${port}/other`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+          body: listBody,
+        });
+        if (otherPath.status !== 404) throw new Error(`POST /other got ${otherPath.status}, expected 404`);
 
         // The host is built once per process, so the second identical call is served from the Spec cache. If the
         // host were rebuilt per exchange, both calls would report a miss.
@@ -911,7 +918,7 @@ try {
     fail(`generated project's mcp-http server did not answer initialize on :${port}`, String(err));
   }
   log(
-    `  Streamable HTTP MCP server: answers initialize on a free port (:${port}), refuses a foreign Origin (403), and the second identical call is a Spec cache hit`,
+    `  Streamable HTTP MCP server: answers initialize on a free port (:${port}), refuses a foreign Origin (403), answers 404 off /mcp, and the second identical call is a Spec cache hit`,
   );
 
   // --- (c) scripts/claude-desktop.mjs --print against a fake HOME (never a real Claude Desktop config) ---
