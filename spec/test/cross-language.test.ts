@@ -17,6 +17,7 @@ import {
   computeStructureHash,
   decodeSeqCursor,
   encodeSeqCursor,
+  type FilterDescriptor,
   type FixationRecord,
   findUnsafeActionParamKeys,
   type JsonObject,
@@ -27,6 +28,7 @@ import {
   pageLineageArray,
   parseSpec,
   sha256Hex,
+  type UISpec,
   validateActionParams,
 } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
@@ -38,6 +40,8 @@ import {
   designKitPromptFragment,
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
+import { policyFingerprint } from "../../packages/composer/src/policy-fingerprint.js";
+import { injectFilters } from "../../packages/composer/src/post/inject-filters.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
 // Relative (not "@kohaku-ui/domain-mcp") import, same reasoning as the composer import above: spec does not
 // declare domain-mcp as a dependency. These four modules import only spec-core types.
@@ -67,6 +71,7 @@ import {
   defaultOutputLocale,
   normalizeGuiAction,
 } from "../../packages/semantic-llm/src/index.js";
+import type { PolicyFingerprintCase } from "./l1-filters-cases.js";
 import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
 
 /**
@@ -127,6 +132,15 @@ interface Fixture {
     root: string | null;
     requestUrl: string | null;
   }[];
+  l1Filters: {
+    inject: {
+      name: string;
+      spec: UISpec;
+      descriptors: FilterDescriptor[];
+      expected: { spec: UISpec; injected: string[]; skipped?: string };
+    }[];
+    policyFingerprint: { name: string; policy: PolicyFingerprintCase["policy"]; fingerprint: string }[];
+  };
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -354,6 +368,33 @@ describe("cross-language golden (semantic-llm, default outputLocale)", () => {
     for (const c of fixture.semanticLocale) {
       expect(defaultOutputLocale(c.tag ?? undefined), JSON.stringify(c.tag)).toBe(c.label);
     }
+  });
+});
+
+describe("cross-language golden (composer, L1 filter injection)", () => {
+  it("injectFilters reproduces the fixture byte-for-byte (canonical JSON of the resulting Spec)", () => {
+    expect(fixture.l1Filters.inject.length).toBeGreaterThan(0);
+    for (const c of fixture.l1Filters.inject) {
+      const out = injectFilters(c.spec, c.descriptors);
+      expect(out.injected, c.name).toEqual(c.expected.injected);
+      expect(out.skipped, c.name).toBe(c.expected.skipped);
+      expect(canonicalStringify(out.spec), c.name).toBe(canonicalStringify(c.expected.spec));
+    }
+  });
+
+  it("every injected Spec in the fixture is accepted by parseSpec", () => {
+    for (const c of fixture.l1Filters.inject) parseSpec(JSON.parse(JSON.stringify(c.expected.spec)));
+  });
+
+  it("policyFingerprint reproduces the fixture (l1Filters folds in only when true)", async () => {
+    expect(fixture.l1Filters.policyFingerprint.length).toBeGreaterThan(0);
+    for (const c of fixture.l1Filters.policyFingerprint) {
+      expect(await policyFingerprint(c.policy), c.name).toBe(c.fingerprint);
+    }
+    // l1Filters:false is indistinguishable from unset.
+    const byName = new Map(fixture.l1Filters.policyFingerprint.map((c) => [c.name, c.fingerprint]));
+    expect(byName.get("l1Filters false is the default")).toBe(byName.get("empty policy"));
+    expect(byName.get("l1Filters true")).not.toBe(byName.get("empty policy"));
   });
 });
 
