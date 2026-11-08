@@ -4,7 +4,7 @@
  */
 export const EXTERNAL_VERSIONS = {
   hono: "^4.13.8",
-  "@hono/node-server": "^2.1.1",
+  "@hono/node-server": "^2.1.6",
   zod: "^4.6.5",
   react: "19.3.1",
   "react-dom": "19.3.1",
