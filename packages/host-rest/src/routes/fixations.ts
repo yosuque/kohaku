@@ -138,7 +138,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
       } catch (e) {
         // fixate is an unconditional overwrite so it cannot lose a compare-and-set race itself, but a
         // wrapped port may still raise one; answer it with the contract's CONFLICT rather than a 500.
-        if (isStorageConflictError(e)) return storageConflictResponse(c, deps);
+        if (isStorageConflictError(e)) return storageConflictResponse(c, deps, e);
         await reportHostError(deps, call.endpoint, call.requestId, e);
         // An arbitrary exception's message never reaches the client (it may leak internals); a typed host error
         // (SpecError/ComposeError) still passes its own message through. The original error still reaches
@@ -167,7 +167,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
           // unimplemented maps to 501 (its own message is safe: a fixed string the host itself defines), anything else
           // unexpected maps to 500 with a fixed message (the raw message may leak internals; the original error still
           // reaches onError via reportHostError).
-          if (isStorageConflictError(e)) return storageConflictResponse(c, deps);
+          if (isStorageConflictError(e)) return storageConflictResponse(c, deps, e);
           if ((e as { code?: unknown }).code === GOVERNANCE_ERROR_DISCRIMINATORS.fixationUnsupportedCode) {
             return c.json(errorBody("NOT_IMPLEMENTED", errorMessage(e)), 501);
           }

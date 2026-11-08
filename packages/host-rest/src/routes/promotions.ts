@@ -404,7 +404,7 @@ async function promotionError(
   endpoint: string,
   e: unknown,
 ): Promise<Response> {
-  if (isStorageConflictError(e)) return storageConflictResponse(c, deps);
+  if (isStorageConflictError(e)) return storageConflictResponse(c, deps, e);
   if ((e as { code?: unknown }).code === GOVERNANCE_ERROR_DISCRIMINATORS.notPublishedCode) {
     // The promotion state the batch transition stopped at (PromotionNotPublishedError.status), carried on
     // the wire as error.status (distinct from the HTTP status of this response; SPEC §6.1).

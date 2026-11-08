@@ -36,6 +36,7 @@ export function createMemoryStoragePort(): StoragePort {
     // Single-threaded and free of awaits between each compare and its write, so the check-and-set below is
     // atomic within the process (a shared backend across processes is what redis / postgres are for).
     supportsCompareAndSet: true,
+    singleProcess: true,
     async getSpecCache(key) {
       return specCache.get(key);
     },

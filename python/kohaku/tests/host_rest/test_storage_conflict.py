@@ -7,20 +7,31 @@ own text, never a 500, never retried inside the host.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from kohaku.composer import ComposeContext
 from kohaku.host_core import STORAGE_CONFLICT_MESSAGE
 from kohaku.host_rest import HostErrorInfo, KohakuHostDeps, attach_kohaku_routes
+from kohaku.lineage import create_fixations, create_lineage, create_promotions
 from kohaku.llm import FakeLlm
 from kohaku.registry import core_catalog, resolve_catalog
-from kohaku.spec import Principal, StorageConflictError, UISpec
-from kohaku.storage import FileStoragePort
+from kohaku.spec import (
+    FixationRecord,
+    LineageActor,
+    LineageEventRecord,
+    Principal,
+    StorageConflictError,
+    UISpec,
+)
+from kohaku.storage import FileStoragePort, MemoryStoragePort
 
+from ..lineage._helpers import l1_spec
 from .conftest import PREFIX, FakeAuthz, FakeDomain, FakeSemantic
 
 _DRAFT = {
@@ -151,8 +162,10 @@ def test_every_promotion_transition_route_answers_409_conflict_with_the_fixed_me
         client.post(_url("/promotions/known/actions"), json={"action": {"kind": "judge.start"}})
     )
 
-    # An expected optimistic-concurrency outcome, not a host failure: it is not reported as an error.
-    assert reported == []
+    # Reported to on_error under a dedicated endpoint (like the MCP profile), so conflicts can be measured;
+    # the client message above stays fixed.
+    assert [r.endpoint for r in reported] == ["storage.conflict"] * 4
+    assert all(isinstance(r.error, StorageConflictError) for r in reported)
 
 
 def test_the_fixation_removal_route_answers_409_conflict_with_the_fixed_message(
@@ -162,7 +175,7 @@ def test_the_fixation_removal_route_answers_409_conflict_with_the_fixed_message(
 
     _expect_conflict(client.post(_url("/fixations/sha256:abc/remove")))
 
-    assert reported == []
+    assert [r.endpoint for r in reported] == ["storage.conflict"]
 
 
 def test_a_conflict_is_not_retried_inside_the_host(tmp_path: Path) -> None:
@@ -189,3 +202,93 @@ def test_an_unrelated_failure_is_still_a_500_internal_with_a_fixed_message(tmp_p
     assert res.json()["error"]["code"] == "INTERNAL"
     assert "hunter2" not in res.text
     assert len(reported) == 1
+
+
+# --- Real concurrency: two host instances (two apps, two lineage/promotion services, two lock owners) over
+# ONE compare-and-set storage, the shape a shared redis / postgres has. The in-process lock cannot order calls
+# across the two apps, so only the storage's compare-and-set can make one of them lose.
+
+
+def _two_instances(storage: MemoryStoragePort) -> list[FastAPI]:
+    apps = []
+    for _ in range(2):
+        ctx = ComposeContext(
+            catalog=resolve_catalog(core_catalog()),
+            semantic=FakeSemantic(),
+            storage=storage,
+            llm=FakeLlm(),
+        )
+        deps = KohakuHostDeps(
+            compose=ctx,
+            domain=FakeDomain(),
+            authz=FakeAuthz(),
+            query_source="sales",
+            promotions=create_promotions(lineage=create_lineage(storage), storage=storage),
+            fixations=create_fixations(lineage=create_lineage(storage), storage=storage),
+        )
+        app = FastAPI()
+        attach_kohaku_routes(app, deps)
+        apps.append(app)
+    return apps
+
+
+async def _post_both(apps: list[FastAPI], path: str, body: Any = None) -> list[httpx.Response]:
+    async def one(app: FastAPI) -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.post(_url(path), json=body)
+
+    return list(await asyncio.gather(*(one(a) for a in apps)))
+
+
+def test_two_concurrent_promotion_transitions_exactly_one_succeeds_the_other_is_409() -> None:
+    async def run() -> None:
+        storage = MemoryStoragePort()
+        await storage.append_lineage(
+            LineageEventRecord(
+                id="g-1",
+                ts="2026-07-17T00:00:00.000Z",
+                actor=LineageActor(kind="model"),
+                type="component.generated",
+                payload={"artifactId": "art-1", "html": "<html></html>", "request": "r"},
+            )
+        )
+        responses = await _post_both(
+            _two_instances(storage), "/promotions/art-1/actions", {"action": {"kind": "nominate"}}
+        )
+
+        assert sorted(r.status_code for r in responses) == [200, 409]
+        _expect_conflict(next(r for r in responses if r.status_code == 409))
+        state = await storage.get_promotion_state("art-1")
+        assert state is not None and state.status == "candidate"
+
+    asyncio.run(run())
+
+
+def test_two_concurrent_fixation_removals_exactly_one_succeeds_the_other_is_409() -> None:
+    async def run() -> None:
+        storage = MemoryStoragePort()
+        spec: UISpec = l1_spec()
+        await storage.put_fixation(
+            FixationRecord(
+                intentHash=spec.intent.hash,
+                canonical="sales.trend",
+                structureHash="sha256:" + "1" * 64,
+                pinnedSpec=spec,
+                fixatedAt="2026-07-01T00:00:00Z",
+                approver=Principal(id="tester"),
+                revision="r1",
+            )
+        )
+        responses = await _post_both(
+            _two_instances(storage), f"/fixations/{spec.intent.hash}/remove"
+        )
+
+        assert sorted(r.status_code for r in responses) == [200, 409]
+        _expect_conflict(next(r for r in responses if r.status_code == 409))
+        assert await storage.get_fixation(spec.intent.hash) is None
+        unfixated = [e for e in await storage.list_lineage() if e.type == "intent.unfixated"]
+        assert len(unfixated) == 1
+
+    asyncio.run(run())

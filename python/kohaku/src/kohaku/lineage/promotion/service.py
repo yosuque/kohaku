@@ -32,6 +32,7 @@ from kohaku.spec import (
     StorageConflictError,
     StoragePort,
     SupportsBatchPromotionStates,
+    is_storage_conflict_error,
     supports_compare_and_set,
     validate_promotion_state,
 )
@@ -614,7 +615,7 @@ class Promotions:
 
     async def _persist_many(
         self, candidates: list[PromotionCandidate], tenant: str | None = None
-    ) -> None:
+    ) -> list[PromotionCandidate]:
         """Batch counterpart of `_persist`: builds every PromotionState up front, then issues either one
         `StoragePort.put_promotion_states` call (when the storage implements
         `kohaku.spec.ports.SupportsBatchPromotionStates` -- see that Protocol's comment, and
@@ -622,15 +623,35 @@ class Promotions:
         unlike TS's real optional interface field) or falls back to the legacy one-`put_promotion_state`-call
         -per-state loop. A no-op for an empty list. Used by the batch nominate persistence in
         `_gather_candidates` below (mirrors TS nomination.ts's `toPersist` / candidate-store.ts's
-        `persistMany`)."""
+        `persistMany`).
+
+        Returns the candidates actually persisted. On a `supports_compare_and_set` port the batch write has no
+        per-item expectation, and an unconditional batch would overwrite a decision another instance recorded
+        after this scan loaded the candidate (an approve moving it past `candidate` would be rolled back). So
+        each candidate is written on its own, conditional on the revision the scan loaded it with (None when
+        no state existed), and a candidate that lost the race is SKIPPED: someone else changed it, so this
+        pass must not nominate it. Chosen over adding a per-item expectation to `put_promotion_states`, which
+        would complicate every adapter's batch path for a pass that is cheap to repeat."""
         if not candidates:
-            return
+            return []
+        if supports_compare_and_set(self._storage):
+            persisted: list[PromotionCandidate] = []
+            for candidate in candidates:
+                try:
+                    await self._persist(candidate, tenant)
+                except Exception as e:
+                    if not is_storage_conflict_error(e):
+                        raise
+                else:
+                    persisted.append(candidate)
+            return persisted
         states = [self._build_promotion_state(c, tenant) for c in candidates]
         if isinstance(self._storage, SupportsBatchPromotionStates):
             await self._storage.put_promotion_states(states)
         else:
             for state in states:
                 await self._storage.put_promotion_state(state)
+        return list(candidates)
 
     async def _gather_candidates(
         self, auto_nominate: bool, tenant: str | None = None
@@ -739,7 +760,15 @@ class Promotions:
 
         # Every eligible candidate's status transition is now applied in memory; persist them all in a single
         # batch write (see _persist_many's doc for the SupportsBatchPromotionStates isinstance check / fallback).
-        await self._persist_many(to_persist, tenant)
+        persisted = await self._persist_many(to_persist, tenant)
+        # A candidate a compare-and-set port refused (another instance changed it since the scan) was not
+        # nominated by this pass: put its in-memory status back so the returned list does not claim a
+        # transition that was not stored, and drop it from the audits below.
+        persisted_ids = {id(c) for c in persisted}
+        for candidate in to_persist:
+            if id(candidate) not in persisted_ids:
+                candidate.status = "in_use"
+        to_persist = persisted
 
         # component.nominated audit events are recorded only after the batch persist above resolves, and are
         # fail-open (mirroring handle_publish's own audit record): the status transition is already durable

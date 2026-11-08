@@ -24,7 +24,7 @@ export function createNomination(opts: {
    * Batch persist (candidate-store's `persistMany`), so a scan that nominates many candidates in one pass
    * issues a single storage read-modify-write instead of one per nominated candidate.
    */
-  persistMany: (items: ScopedCandidate[]) => Promise<void>;
+  persistMany: (items: ScopedCandidate[]) => Promise<ScopedCandidate[]>;
   onError?: (ctx: PromotionErrorContext, error: unknown) => void;
   /**
    * Optional schema extraction hook (see createPromotions' own doc for the full advisory / fail-open
@@ -145,7 +145,15 @@ export function createNomination(opts: {
         if (suggestion != null) candidate.suggestion = suggestion;
       });
     }
-    await persistMany(toPersist);
+    // persistMany may hand back the very array it was given, so snapshot the persisted items first.
+    const persisted = [...(await persistMany(toPersist))];
+    // A candidate a compare-and-set port refused (another instance changed it since the scan) was not
+    // nominated by this pass: put its in-memory status back so the returned list does not claim a transition
+    // that was not stored, and drop it from the audit below.
+    const lost = toPersist.filter((item) => !persisted.includes(item));
+    for (const { candidate } of lost) candidate.status = "in_use";
+    toPersist.length = 0;
+    toPersist.push(...persisted);
     // Stamp each nominate event with tenant too (so re-evaluation in the tenant scope finds the same
     // nominated and becomes idempotent). Recorded only after the batch persist above resolves. Fail-open (see
     // this function's doc): a record failure here must not stop auditing the remaining candidates in the batch,

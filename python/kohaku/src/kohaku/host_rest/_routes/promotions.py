@@ -162,7 +162,7 @@ async def _promotion_error(
     lineage is not depended on, using kohaku.spec's GovernanceErrorDiscriminators. A StorageConflictError
     (compare-and-set lost a race with another writer) is a 409 CONFLICT with the fixed message."""
     if is_storage_conflict_error(e):
-        return _storage_conflict(request, deps)
+        return await _storage_conflict(request, deps, e)
     if getattr(e, "code", None) == GovernanceErrorDiscriminators.NOT_PUBLISHED_CODE:
         error: dict[str, Any] = {"code": "PROMOTION_NOT_PUBLISHED", "message": _message(e)}
         status_val = getattr(e, "status", None)

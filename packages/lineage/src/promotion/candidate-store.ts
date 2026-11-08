@@ -1,5 +1,6 @@
 import {
   GOVERNANCE_ERROR_DISCRIMINATORS,
+  isStorageConflictError,
   type LineageEventRecord,
   type PromotionState,
   PromotionStateSchema,
@@ -73,9 +74,10 @@ export interface CandidateStore {
    * Batch counterpart of `persist`: persists several candidates in as few storage round trips as the
    * StoragePort allows. Uses `storage.putPromotionStates` when the port implements it (one read-modify-write for
    * the whole batch); otherwise falls back to calling `persist` once per candidate (legacy behavior, unchanged).
-   * A no-op for an empty list.
+   * A no-op for an empty list. Returns the items actually persisted: on a `supportsCompareAndSet` port each
+   * candidate is written conditionally on its loaded revision and one that lost the race is left out.
    */
-  persistMany(items: ScopedCandidate[]): Promise<void>;
+  persistMany(items: ScopedCandidate[]): Promise<ScopedCandidate[]>;
   scan(tenant?: string): Promise<PromotionCandidate[]>;
   /**
    * Same population as `scan`, but each candidate is paired with its own owning tenant (the tenant recorded on
@@ -291,14 +293,34 @@ export function createCandidateStore(opts: {
    * `putPromotionStates` call (StoragePort implements the batch extension) or falls back to the legacy
    * one-`putPromotionState`-call-per-state loop. A no-op for an empty list.
    */
-  async function persistMany(items: ScopedCandidate[]): Promise<void> {
-    if (items.length === 0) return;
+  async function persistMany(items: ScopedCandidate[]): Promise<ScopedCandidate[]> {
+    if (items.length === 0) return [];
+    // Compare-and-set port: the batch write has no per-item expectation, and an unconditional batch would
+    // overwrite a decision another instance recorded after this scan loaded the candidate (an approve moving
+    // it past `candidate` would be rolled back to `candidate`). So write each candidate on its own, conditional
+    // on the revision the scan loaded it with (`null` when no state existed), and SKIP a candidate that lost
+    // the race: someone else changed it, so this pass must not nominate it. The caller audits only the
+    // returned (persisted) items. Chosen over adding a per-item expectation to `putPromotionStates`, which
+    // would complicate every adapter's batch path for a pass that is cheap to repeat.
+    if (storage.supportsCompareAndSet === true) {
+      const persisted: ScopedCandidate[] = [];
+      for (const item of items) {
+        try {
+          await persist(item.candidate, item.tenant);
+          persisted.push(item);
+        } catch (e) {
+          if (!isStorageConflictError(e)) throw e;
+        }
+      }
+      return persisted;
+    }
     const states = items.map(({ candidate, tenant }) => buildPromotionState(candidate, tenant));
     if (storage.putPromotionStates != null) {
       await storage.putPromotionStates(states);
     } else {
       for (const state of states) await storage.putPromotionState(state);
     }
+    return items;
   }
 
   /**

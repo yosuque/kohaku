@@ -45,6 +45,13 @@ export interface StorageContractOptions {
    * skipped. An adapter that serves several host instances sharing one backend (redis, postgres) SHOULD opt in.
    */
   requireCompareAndSet?: boolean;
+  /**
+   * With `requireCompareAndSet`: set to false for a port that honors `expectedRevision` correctly but
+   * deliberately does NOT declare `supportsCompareAndSet` (its atomicity is in-process only, like the file
+   * port). The semantic cases still run; the declaration case then asserts the port does not claim the
+   * extension. Default true.
+   */
+  declaresCompareAndSet?: boolean;
 }
 
 /** The failure for a case whose optional StoragePort method the suite required but the port lacks. */
@@ -415,9 +422,13 @@ export function describeStoragePortContract(
         return { ok, conflict };
       }
 
-      casIt("declares supportsCompareAndSet", () => {
-        expect(port.supportsCompareAndSet).toBe(true);
-      });
+      casIt(
+        "declares supportsCompareAndSet (or deliberately does not, when declaresCompareAndSet is false)",
+        () => {
+          if (options.declaresCompareAndSet === false) expect(port.supportsCompareAndSet).not.toBe(true);
+          else expect(port.supportsCompareAndSet).toBe(true);
+        },
+      );
 
       casIt(
         "putPromotionState: an exact expectedRevision succeeds, a stale one throws and writes nothing",

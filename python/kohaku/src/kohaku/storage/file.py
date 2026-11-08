@@ -242,12 +242,14 @@ class FileStoragePort:
     ship a DB-backed StoragePort implementation for production use.
     """
 
-    supports_compare_and_set = True
-    """Declares the optional compare-and-set extension (`expected_revision` on put_promotion_state /
-    put_fixation / delete_fixation). Every conditional write compares against the snapshot freshly re-read
-    from disk inside the per-file lock (see `_merge_mutate`), so the check-and-set is atomic within the
-    process and also sees another process's write that has already landed on disk. It is still not a
-    cross-process lock (module docstring)."""
+    single_process = True
+    """Marks this port as only ever shared by the callers of one process (hosts do not warn about it). It
+    deliberately does NOT declare `supports_compare_and_set`: `expected_revision` is honored (the compare runs
+    against the snapshot freshly re-read from disk inside the per-file asyncio lock, see `_merge_mutate`), but a
+    lock that only orders calls within this process is not atomic across processes, and two processes sharing
+    one data directory (sample-api + a Python MCP host) is a documented setup. The lineage services therefore
+    do not pass `expected_revision` to this port. `MemoryStoragePort` (one disposable directory, one process)
+    does declare it."""
 
     def __init__(self, data_dir: str | Path) -> None:
         self._dir = Path(data_dir)
@@ -581,6 +583,10 @@ class MemoryStoragePort(FileStoragePort):
     memory; governance state is files under that temp directory). The temp directory is reclaimed at instance
     GC, or via close(). The public API is unchanged (usable with no constructor arguments).
     """
+
+    supports_compare_and_set = True
+    """One process owns the temporary directory, so the in-process lock makes the compare-and-set atomic for
+    every possible caller; it declares the extension (unlike its parent, which may share a directory)."""
 
     def __init__(self) -> None:
         import tempfile

@@ -200,6 +200,14 @@ export interface StoragePort {
    * `describeStoragePortContract`'s `requireCompareAndSet`). Absent = the adapter ignores the option.
    */
   readonly supportsCompareAndSet?: true;
+  /**
+   * Declares that this adapter is only ever shared by the callers of ONE process (an in-memory or
+   * per-process file store). Such an adapter has no cross-process guarantee to declare, so it neither
+   * declares `supportsCompareAndSet` (unless it is also truly atomic for its one process, like the memory port)
+   * nor deserves the host's start-up warning about a store that is missing it: `createKohakuHost` warns only
+   * for a port that declares neither marker.
+   */
+  readonly singleProcess?: true;
   getSpecCache(key: string): Promise<UISpec | null>;
   putSpecCache(key: string, spec: UISpec, ttlSeconds?: number): Promise<void>;
   appendLineage(event: LineageEventRecord): Promise<void>;
@@ -248,8 +256,9 @@ export interface StoragePort {
    * implements this MAY instead fold every state into a single read-modify-write. Implementations that omit
    * it keep the legacy behavior (the caller falls back to looping `putPromotionState`), so this is purely
    * additive and never widens what a caller could already do without it. The batch write carries no
-   * `expectedRevision` (it is unconditional even on a `supportsCompareAndSet` adapter): its only caller,
-   * the policy-driven `in_use` -> `candidate` nomination pass, is idempotent and re-derived on the next scan.
+   * `expectedRevision` (it is unconditional even on a `supportsCompareAndSet` adapter), so the lineage
+   * service does not use it on such a port: its bulk nomination pass writes each candidate with
+   * `putPromotionState` conditional on the revision it scanned and skips one that lost the race.
    */
   putPromotionStates?(states: PromotionState[]): Promise<void>;
   /** Lists promotion states. When tenant is specified, only that tenant's (unspecified = all = legacy behavior). */

@@ -9,6 +9,7 @@ import {
   type KeyedMutex,
   type SemanticPort,
   type SessionContext,
+  StorageConflictError,
   type StoragePort,
   type UISpec,
 } from "@kohaku-ui/spec-core";
@@ -259,6 +260,35 @@ describe("settleFixation: revalidated", () => {
     // The requestId passed to settleFixation is forwarded to onSelfHealError as the 3rd argument, so a host
     // can tie the self-heal failure back to the request that triggered it.
     expect(onSelfHealError).toHaveBeenCalledWith("fixation.refreshFingerprint", boom, "req-abc");
+  });
+
+  it("does not report a storage compare-and-set conflict from refreshFingerprint / invalidate: another instance already healed it", async () => {
+    const conflict = new StorageConflictError("fixation", INTENT.hash);
+    const refreshFingerprint = vi.fn(async () => {
+      throw conflict;
+    });
+    const invalidate = vi.fn(async () => {
+      throw conflict;
+    });
+    const onSelfHealError = vi.fn();
+    const host = baseHost({ fixations: { refreshFingerprint, invalidate }, onSelfHealError });
+    const fixation = makeFixation(validPinned(), "sha256:stale-fp");
+    const target = {
+      intentHash: INTENT.hash,
+      tenant: undefined,
+      catalogFingerprint: catalog.fingerprint,
+      fixation,
+    };
+    settleFixation(
+      { result: { spec: validPinned(), trace: {} as never }, check: { kind: "revalidated" as const } },
+      target,
+      host,
+    );
+    settleFixation({ result: null, check: { kind: "stale" as const, issues: ["x"] } }, target, host);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(refreshFingerprint).toHaveBeenCalled();
+    expect(invalidate).toHaveBeenCalled();
+    expect(onSelfHealError).not.toHaveBeenCalled();
   });
 
   it("does not call refreshFingerprint when the check is 'fresh' (no fingerprint mismatch)", () => {

@@ -40,6 +40,23 @@ export interface TenantKeyedTable<T> {
   delete(tenant: string | undefined, id: string, expectedRevision?: string): Promise<void>;
 }
 
+/**
+ * Runs one conditional statement of the compare-and-set path, mapping SQLSTATE `40001` (serialization
+ * failure) to `StorageConflictError`. Under the default READ COMMITTED a conditional UPDATE / DELETE re-checks its
+ * predicate and simply matches no row; under a stricter isolation level (a pool configured with
+ * `default_transaction_isolation = 'repeatable read'` or `serializable`) Postgres instead aborts with 40001 when
+ * the row changed concurrently, which is the same "another writer got there first" outcome and must answer
+ * 409 CONFLICT, not 500.
+ */
+async function conditional<R>(kind: "promotion" | "fixation", id: string, run: () => Promise<R>): Promise<R> {
+  try {
+    return await run();
+  } catch (e) {
+    if ((e as { code?: unknown } | null)?.code === "40001") throw new StorageConflictError(kind, id);
+    throw e;
+  }
+}
+
 export function tenantKeyedTable<T>(
   pool: Pool,
   table: string,
@@ -63,19 +80,23 @@ export function tenantKeyedTable<T>(
     async put(tenant, id, record, expectedRevision) {
       if (expectedRevision === null) {
         // Must not exist yet: a lost insert race (or an existing row) inserts nothing.
-        const inserted = await pool.query(
-          `INSERT INTO ${table} (tenant, ${idColumn}, ${payloadColumn}) VALUES ($1, $2, $3)
-           ON CONFLICT (tenant, ${idColumn}) DO NOTHING`,
-          [normalizeTenant(tenant) ?? "", id, JSON.stringify(record)],
+        const inserted = await conditional(kind, id, () =>
+          pool.query(
+            `INSERT INTO ${table} (tenant, ${idColumn}, ${payloadColumn}) VALUES ($1, $2, $3)
+             ON CONFLICT (tenant, ${idColumn}) DO NOTHING`,
+            [normalizeTenant(tenant) ?? "", id, JSON.stringify(record)],
+          ),
         );
         if (inserted.rowCount === 0) throw new StorageConflictError(kind, id);
         return;
       }
       if (expectedRevision !== undefined) {
-        const updated = await pool.query(
-          `UPDATE ${table} SET ${payloadColumn} = $3
-           WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $4::text`,
-          [normalizeTenant(tenant) ?? "", id, JSON.stringify(record), expectedRevision],
+        const updated = await conditional(kind, id, () =>
+          pool.query(
+            `UPDATE ${table} SET ${payloadColumn} = $3
+             WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $4::text`,
+            [normalizeTenant(tenant) ?? "", id, JSON.stringify(record), expectedRevision],
+          ),
         );
         if (updated.rowCount === 0) throw new StorageConflictError(kind, id);
         return;
@@ -96,10 +117,12 @@ export function tenantKeyedTable<T>(
         ]);
         return;
       }
-      const updated = await pool.query(
-        `UPDATE ${table} SET ${payloadColumn} = $3
-         WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $4::text`,
-        [normalized, id, JSON.stringify(record), expectedRevision],
+      const updated = await conditional(kind, id, () =>
+        pool.query(
+          `UPDATE ${table} SET ${payloadColumn} = $3
+           WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $4::text`,
+          [normalized, id, JSON.stringify(record), expectedRevision],
+        ),
       );
       if (updated.rowCount !== 0) return;
       // Zero rows: either the row is absent (ifPresent's silent no-op) or it carries another revision (a
@@ -144,9 +167,11 @@ export function tenantKeyedTable<T>(
     },
     async delete(tenant, id, expectedRevision) {
       if (expectedRevision !== undefined) {
-        const deleted = await pool.query(
-          `DELETE FROM ${table} WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $3::text`,
-          [normalizeTenant(tenant) ?? "", id, expectedRevision],
+        const deleted = await conditional(kind, id, () =>
+          pool.query(
+            `DELETE FROM ${table} WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $3::text`,
+            [normalizeTenant(tenant) ?? "", id, expectedRevision],
+          ),
         );
         if (deleted.rowCount === 0) throw new StorageConflictError(kind, id);
         return;
