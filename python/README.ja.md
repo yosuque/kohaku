@@ -146,7 +146,9 @@ python/
 │  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
 │  │  ├─ evals/            # ← packages/evals(judge / スキーマ抽出 / golden / FixtureLlm / 蒸留データセット export)
-│  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
+│  │  ├─ storage/          # ← packages/storage-memory(file.py: FileStoragePort / MemoryStoragePort)+
+│  │  │                    #   storage-redis(redis/)+ storage-postgres(postgres/): TS の 1 ファイルが
+│  │  │                    #   1 モジュール。ドライバは任意の extra `redis` / `postgres`。spec のみに依存
 │  │  ├─ authz_hmac/       # ← packages/authz-hmac(jti 失効つきの HMAC capability AuthzPort と、approval
 │  │  │                    #   トークンの ApprovalPort。TS のファイルごとに 1 モジュール、依存先は spec のみ)
 │  │  ├─ authz_jwt/        # ← packages/authz-jwt(bearer JWT の identity resolver と、capability を
@@ -247,6 +249,8 @@ compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_i
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
 **`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。任意の forward-paging 拡張 `page_lineage`(design.md #53)も実装しており、呼び出し側では `put_promotion_states` が使う「`isinstance` と `runtime_checkable` Protocol」の仕組みではなく、単純な `hasattr(storage, "page_lineage")` プローブで確認する — 理由は `kohaku.spec.ports.StoragePort` の `page_lineage` に付けたコメントを参照。
+
+**`kohaku.storage.redis` / `kohaku.storage.postgres`(`storage-redis` / `storage-postgres` の Python 移植)**: 複数のホストインスタンスが 1 つのバックエンドを共有するための、本番向けの `StoragePort` と `CapabilityRevocationStore` のアダプタ。ドライバは extra で入れる(`pip install 'kohaku-ui[redis]'`、`pip install 'kohaku-ui[postgres]'` と、libpq が無ければ `psycopg[binary]`)。`kohaku.storage` 自体はこれらを import しない。**TS のアダプタとデータ互換**で、Redis のキー配置と sorted set の索引、Postgres の DDL・`POSTGRES_SCHEMA_VERSION`・advisory lock によるマイグレーション、保存される JSON 文字列は同じである。そのため TS のホストと Python のホストが 1 つの Redis、あるいは 1 つのデータベースを共有できる(言語間 golden の `storageLayout` と、同じバックエンドに対して TS と Python のアダプタを動かす `python-interop` テストで固定している)。どちらも任意の compare-and-set を宣言する(`supports_compare_and_set`、`expected_revision` → `StorageConflictError`)。Redis は redis-py がトランザクションに固定する接続での WATCH / MULTI / EXEC、Postgres は DDL を変えない 1 本の条件付き文である。redis-py のクライアントと psycopg のプールは最初に使ったイベントループに結びつくので、ポートの構築と serve は 1 つのループで行うこと(`sales_api.__main__` はそうしている)。`examples/sales-api` は TS のサンプルと同じ変数でバックエンドを選ぶ: `KOHAKU_STORAGE=file|memory|redis|postgres`、`KOHAKU_REDIS_URL`(と `KOHAKU_STORAGE_KEY_PREFIX`)、`KOHAKU_POSTGRES_URL`(と `KOHAKU_POSTGRES_SCHEMA`)。共有バックエンドを選んだときに公開デモの `KOHAKU_CAPABILITY_SECRET` を使うと起動を拒否する。Python の storage スイート(`kohaku/tests/storage/_contract.py`。`@kohaku-ui/port-contracts` の `describeStoragePortContract` の移植)は memory / file / redis / postgres に対して動く。Redis / Postgres のケースは `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL`、無ければ使い捨ての testcontainers、それも無ければ skip でバックエンドを解決する(`KOHAKU_ADAPTER_TESTS=require` で skip を禁止、これは CI の `adapters` ジョブと同じ。`=skip` で強制的に skip)。
 
 **`kohaku explain` / DevTools(design.md #54/#55)**: `ComposeTrace.cacheKeyParts`(`cache_key()` 呼び出し
 そのものの部品。TS とバイト単位で一致)と、上で述べた相関 id は、`kohaku.lineage` の `view.composed` /
@@ -664,9 +668,8 @@ failed catalog/structure validation」という文言とは別物にし、この
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):**
-  `storage-redis` / `storage-postgres` の本番アダプタ、
-  `admin-react`。これらはいずれもまだ conformance
-  スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
+  `admin-react`。これはまだ conformance
+  スイートの検査対象外であり、上記の CONFORMANT ステータスはこれをカバーしていない。
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch

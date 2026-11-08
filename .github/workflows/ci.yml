@@ -168,7 +168,12 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run lint-imports
+      # The Redis / Postgres adapter suites need a backend; the dedicated `adapters` job below runs them against
+      # real service containers with KOHAKU_ADAPTER_TESTS=require, so this job skips them (`skip` short-circuits the
+      # backend resolution in kohaku/tests/storage/_backend.py) rather than start testcontainers once per Python leg.
       - run: uv run pytest
+        env:
+          KOHAKU_ADAPTER_TESTS: skip
   # REST black-box conformance against the TS host itself, once per storage backend behind it: `file` (the
   # sample's default port) proves the compiled CLI against a real running server, the same way
   # conformance-python below proves the Python port; `redis` / `postgres` catch a backend-specific deviation
@@ -221,11 +226,28 @@ jobs:
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
           scripts/wait-for-http.sh http://localhost:8787/api/kohaku/catalog 30 "$LOG"
           node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku
-  # Conformance black-box check against the Python host (guarantees cross-implementation spec conformance in CI).
+  # Conformance black-box check against the Python host (guarantees cross-implementation spec conformance in CI),
+  # once per storage backend behind it exactly like conformance-ts above: `file` (the sample's default port),
+  # `redis` and `postgres` (kohaku.storage.redis / .postgres, the Python ports of the TS adapters).
   # The LLM uses the example (sales-api) deterministic pseudo-LLM (KOHAKU_LLM_PROVIDER=fake by default); no real LLM required.
   conformance-python:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        storage: [file, redis, postgres]
+    # Each leg starts only the backend it tests: a service whose image is an empty string is not started.
+    services:
+      redis:
+        image: ${{ matrix.storage == 'redis' && 'redis:7-alpine' || '' }}
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: ${{ matrix.storage == 'postgres' && 'postgres:16-alpine' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -247,9 +269,20 @@ jobs:
       # as required in conformance-python, which already has Node+pnpm+uv (this costs less CI time and fewer
       # duplicate installs than adding setup-node to the pytest job).
       - name: L2 JS sidecar live test (requires Node)
+        # Independent of the storage backend, so only the `file` leg runs it.
+        if: matrix.storage == 'file'
         run: KOHAKU_REQUIRE_NODE_SIDECAR=1 uv run pytest kohaku/tests/composer/test_l2_js_sidecar.py kohaku/tests/composer/test_compose.py::TestComposeL2::test_l2_script_syntax_repair_via_sidecar -q
         working-directory: python
-      - name: Start Python sales-api and run REST black-box check
+      - name: Start Python sales-api on ${{ matrix.storage }} and run REST black-box check
+        env:
+          KOHAKU_STORAGE: ${{ matrix.storage }}
+          KOHAKU_REDIS_URL: redis://localhost:6379
+          KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          # A redis/postgres backend requires a real capability secret (the sample refuses to start on the fixed
+          # demo default once storage leaves the single-process file shape, like the TS sample-api) -- this is a
+          # CI-only value, never used outside this ephemeral job. The `file` leg gets an empty value, which counts
+          # as unset, so it keeps exercising the zero-config demo default.
+          KOHAKU_CAPABILITY_SECRET: ${{ matrix.storage != 'file' && 'ci-conformance-adapters-test-secret-not-for-production-use' || '' }}
         run: |
           LOG=$(mktemp)
           (cd python && KOHAKU_DATA_DIR=$(mktemp -d) PORT=8790 uv run python -m sales_api) >"$LOG" 2>&1 &
@@ -280,12 +313,16 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: pnpm changeset status --since="origin/$BASE_REF"
         continue-on-error: true
-  # The three production adapters against real backends. Locally these suites skip without Docker / a URL
-  # (see @kohaku-ui/port-contracts' resolveAdapterBackend); here the backends run as job services and
-  # KOHAKU_ADAPTER_TESTS=require turns a skip into a failure, so this job can never pass vacuously.
+  # The production adapters against real backends, in both languages. Locally these suites skip without Docker / a
+  # URL (see @kohaku-ui/port-contracts' resolveAdapterBackend and kohaku/tests/storage/_backend.py); here the
+  # backends run as job services and KOHAKU_ADAPTER_TESTS=require turns a skip into a failure, so this job can never
+  # pass vacuously. It runs the TS suites, the Python storage suites (kohaku.storage.redis / .postgres against the
+  # same services), and the cross-language tests: each storage-redis / storage-postgres python-interop test starts the
+  # Python adapter (python/.venv, hence the uv sync before the vitest step) against the same backend, writes with
+  # one language and compare-and-sets with the other.
   adapters:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       redis:
         image: redis:7-alpine
@@ -309,7 +346,21 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          # uv.lock alone determines the environment; the default globs would walk node_modules after the install.
+          cache-dependency-glob: python/uv.lock
+      - run: uv sync --frozen
+        working-directory: python
       - run: pnpm vitest run --project storage-redis --project storage-postgres --project authz-jwt --project sample-api
+      - run: uv run pytest kohaku/tests/storage -q
+        working-directory: python
+      # The Python storage suite again on the newest supported interpreter (the repo's `python` job covers 3.12 and
+      # 3.13, but without backends): --isolated keeps python/.venv (3.12) untouched.
+      - run: uv run --isolated --frozen --python 3.13 pytest kohaku/tests/storage -q
+        working-directory: python
   # The `ci` job above typechecks and tests against `src/*.ts` directly (packages export source; publishConfig
   # only applies once a package is packed). That means nothing in `ci` ever notices a missing publishConfig
   # entry, a `.d.ts` that stops resolving once packed, or a guest closure (packages/sandbox) whose stringified

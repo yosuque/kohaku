@@ -10418,5 +10418,1036 @@
         }
       }
     ]
+  },
+  "storageLayout": {
+    "redis": {
+      "prefixes": [
+        "kohaku",
+        "app1",
+        "we:ird prefix"
+      ],
+      "keys": [
+        {
+          "prefix": "kohaku",
+          "tenant": null,
+          "tenantSegment": "%",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:%:promotion:a1",
+          "promotionIndex": "kohaku:promotion:index",
+          "fixation": "kohaku:%:fixation:sha256:ab",
+          "fixationIndex": "kohaku:fixation:index"
+        },
+        {
+          "prefix": "kohaku",
+          "tenant": "",
+          "tenantSegment": "%",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:%:promotion:a1",
+          "promotionIndex": "kohaku:promotion:index",
+          "fixation": "kohaku:%:fixation:sha256:ab",
+          "fixationIndex": "kohaku:fixation:index"
+        },
+        {
+          "prefix": "kohaku",
+          "tenant": "acme",
+          "tenantSegment": "acme",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:acme:promotion:a1",
+          "promotionIndex": "kohaku:acme:promotion:index",
+          "fixation": "kohaku:acme:fixation:sha256:ab",
+          "fixationIndex": "kohaku:acme:fixation:index"
+        },
+        {
+          "prefix": "kohaku",
+          "tenant": "acme:eu",
+          "tenantSegment": "acme%3Aeu",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:acme%3Aeu:promotion:a1",
+          "promotionIndex": "kohaku:acme%3Aeu:promotion:index",
+          "fixation": "kohaku:acme%3Aeu:fixation:sha256:ab",
+          "fixationIndex": "kohaku:acme%3Aeu:fixation:index"
+        },
+        {
+          "prefix": "kohaku",
+          "tenant": "%",
+          "tenantSegment": "%25",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:%25:promotion:a1",
+          "promotionIndex": "kohaku:%25:promotion:index",
+          "fixation": "kohaku:%25:fixation:sha256:ab",
+          "fixationIndex": "kohaku:%25:fixation:index"
+        },
+        {
+          "prefix": "kohaku",
+          "tenant": "a/b c%ü!~*()'",
+          "tenantSegment": "a%2Fb%20c%25%C3%BC!~*()'",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:a%2Fb%20c%25%C3%BC!~*()':promotion:a1",
+          "promotionIndex": "kohaku:a%2Fb%20c%25%C3%BC!~*()':promotion:index",
+          "fixation": "kohaku:a%2Fb%20c%25%C3%BC!~*()':fixation:sha256:ab",
+          "fixationIndex": "kohaku:a%2Fb%20c%25%C3%BC!~*()':fixation:index"
+        },
+        {
+          "prefix": "kohaku",
+          "tenant": "日本",
+          "tenantSegment": "%E6%97%A5%E6%9C%AC",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:%E6%97%A5%E6%9C%AC:promotion:a1",
+          "promotionIndex": "kohaku:%E6%97%A5%E6%9C%AC:promotion:index",
+          "fixation": "kohaku:%E6%97%A5%E6%9C%AC:fixation:sha256:ab",
+          "fixationIndex": "kohaku:%E6%97%A5%E6%9C%AC:fixation:index"
+        },
+        {
+          "prefix": "kohaku",
+          "tenant": "😀",
+          "tenantSegment": "%F0%9F%98%80",
+          "spec": "kohaku:spec:k:1",
+          "promotion": "kohaku:%F0%9F%98%80:promotion:a1",
+          "promotionIndex": "kohaku:%F0%9F%98%80:promotion:index",
+          "fixation": "kohaku:%F0%9F%98%80:fixation:sha256:ab",
+          "fixationIndex": "kohaku:%F0%9F%98%80:fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": null,
+          "tenantSegment": "%",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:%:promotion:a1",
+          "promotionIndex": "app1:promotion:index",
+          "fixation": "app1:%:fixation:sha256:ab",
+          "fixationIndex": "app1:fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": "",
+          "tenantSegment": "%",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:%:promotion:a1",
+          "promotionIndex": "app1:promotion:index",
+          "fixation": "app1:%:fixation:sha256:ab",
+          "fixationIndex": "app1:fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": "acme",
+          "tenantSegment": "acme",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:acme:promotion:a1",
+          "promotionIndex": "app1:acme:promotion:index",
+          "fixation": "app1:acme:fixation:sha256:ab",
+          "fixationIndex": "app1:acme:fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": "acme:eu",
+          "tenantSegment": "acme%3Aeu",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:acme%3Aeu:promotion:a1",
+          "promotionIndex": "app1:acme%3Aeu:promotion:index",
+          "fixation": "app1:acme%3Aeu:fixation:sha256:ab",
+          "fixationIndex": "app1:acme%3Aeu:fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": "%",
+          "tenantSegment": "%25",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:%25:promotion:a1",
+          "promotionIndex": "app1:%25:promotion:index",
+          "fixation": "app1:%25:fixation:sha256:ab",
+          "fixationIndex": "app1:%25:fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": "a/b c%ü!~*()'",
+          "tenantSegment": "a%2Fb%20c%25%C3%BC!~*()'",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:a%2Fb%20c%25%C3%BC!~*()':promotion:a1",
+          "promotionIndex": "app1:a%2Fb%20c%25%C3%BC!~*()':promotion:index",
+          "fixation": "app1:a%2Fb%20c%25%C3%BC!~*()':fixation:sha256:ab",
+          "fixationIndex": "app1:a%2Fb%20c%25%C3%BC!~*()':fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": "日本",
+          "tenantSegment": "%E6%97%A5%E6%9C%AC",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:%E6%97%A5%E6%9C%AC:promotion:a1",
+          "promotionIndex": "app1:%E6%97%A5%E6%9C%AC:promotion:index",
+          "fixation": "app1:%E6%97%A5%E6%9C%AC:fixation:sha256:ab",
+          "fixationIndex": "app1:%E6%97%A5%E6%9C%AC:fixation:index"
+        },
+        {
+          "prefix": "app1",
+          "tenant": "😀",
+          "tenantSegment": "%F0%9F%98%80",
+          "spec": "app1:spec:k:1",
+          "promotion": "app1:%F0%9F%98%80:promotion:a1",
+          "promotionIndex": "app1:%F0%9F%98%80:promotion:index",
+          "fixation": "app1:%F0%9F%98%80:fixation:sha256:ab",
+          "fixationIndex": "app1:%F0%9F%98%80:fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": null,
+          "tenantSegment": "%",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:%:promotion:a1",
+          "promotionIndex": "we:ird prefix:promotion:index",
+          "fixation": "we:ird prefix:%:fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": "",
+          "tenantSegment": "%",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:%:promotion:a1",
+          "promotionIndex": "we:ird prefix:promotion:index",
+          "fixation": "we:ird prefix:%:fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": "acme",
+          "tenantSegment": "acme",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:acme:promotion:a1",
+          "promotionIndex": "we:ird prefix:acme:promotion:index",
+          "fixation": "we:ird prefix:acme:fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:acme:fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": "acme:eu",
+          "tenantSegment": "acme%3Aeu",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:acme%3Aeu:promotion:a1",
+          "promotionIndex": "we:ird prefix:acme%3Aeu:promotion:index",
+          "fixation": "we:ird prefix:acme%3Aeu:fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:acme%3Aeu:fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": "%",
+          "tenantSegment": "%25",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:%25:promotion:a1",
+          "promotionIndex": "we:ird prefix:%25:promotion:index",
+          "fixation": "we:ird prefix:%25:fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:%25:fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": "a/b c%ü!~*()'",
+          "tenantSegment": "a%2Fb%20c%25%C3%BC!~*()'",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:a%2Fb%20c%25%C3%BC!~*()':promotion:a1",
+          "promotionIndex": "we:ird prefix:a%2Fb%20c%25%C3%BC!~*()':promotion:index",
+          "fixation": "we:ird prefix:a%2Fb%20c%25%C3%BC!~*()':fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:a%2Fb%20c%25%C3%BC!~*()':fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": "日本",
+          "tenantSegment": "%E6%97%A5%E6%9C%AC",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:%E6%97%A5%E6%9C%AC:promotion:a1",
+          "promotionIndex": "we:ird prefix:%E6%97%A5%E6%9C%AC:promotion:index",
+          "fixation": "we:ird prefix:%E6%97%A5%E6%9C%AC:fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:%E6%97%A5%E6%9C%AC:fixation:index"
+        },
+        {
+          "prefix": "we:ird prefix",
+          "tenant": "😀",
+          "tenantSegment": "%F0%9F%98%80",
+          "spec": "we:ird prefix:spec:k:1",
+          "promotion": "we:ird prefix:%F0%9F%98%80:promotion:a1",
+          "promotionIndex": "we:ird prefix:%F0%9F%98%80:promotion:index",
+          "fixation": "we:ird prefix:%F0%9F%98%80:fixation:sha256:ab",
+          "fixationIndex": "we:ird prefix:%F0%9F%98%80:fixation:index"
+        }
+      ],
+      "fixedKeys": {
+        "lineageSeq": "kohaku:lineage:seq",
+        "lineageEvents": "kohaku:lineage:events",
+        "lineageBySeq": "kohaku:lineage:by-seq",
+        "lineageIndexType": "kohaku:lineage:idx:type:view.composed",
+        "promotionSeq": "kohaku:promotion:seq",
+        "fixationSeq": "kohaku:fixation:seq",
+        "revoked": "kohaku:revoked:jti-1"
+      },
+      "indexValues": [
+        {
+          "event": {
+            "id": "view.composed:-:2",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "system"
+            },
+            "type": "view.composed",
+            "payload": {}
+          },
+          "expected": [
+            {
+              "field": "type",
+              "value": "view.composed"
+            }
+          ]
+        },
+        {
+          "event": {
+            "id": "view.composed:acme:86",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "system"
+            },
+            "type": "view.composed",
+            "payload": {
+              "intentHash": "sha256:a",
+              "specHash": "sha256:s",
+              "correlationId": "c1",
+              "artifactId": "a1"
+            },
+            "tenant": "acme"
+          },
+          "expected": [
+            {
+              "field": "type",
+              "value": "view.composed"
+            },
+            {
+              "field": "tenant",
+              "value": "acme"
+            },
+            {
+              "field": "intentHash",
+              "value": "sha256:a"
+            },
+            {
+              "field": "artifactId",
+              "value": "a1"
+            },
+            {
+              "field": "specHash",
+              "value": "sha256:s"
+            },
+            {
+              "field": "correlationId",
+              "value": "c1"
+            }
+          ]
+        },
+        {
+          "event": {
+            "id": "component.used::52",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "system"
+            },
+            "type": "component.used",
+            "payload": {
+              "artifactId": 42,
+              "intentHash": null,
+              "specHash": [
+                "x"
+              ]
+            },
+            "tenant": ""
+          },
+          "expected": [
+            {
+              "field": "type",
+              "value": "component.used"
+            }
+          ]
+        },
+        {
+          "event": {
+            "id": "intent.fixated:acme:eu:20",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "system"
+            },
+            "type": "intent.fixated",
+            "payload": {
+              "correlationId": ""
+            },
+            "tenant": "acme:eu"
+          },
+          "expected": [
+            {
+              "field": "type",
+              "value": "intent.fixated"
+            },
+            {
+              "field": "tenant",
+              "value": "acme:eu"
+            },
+            {
+              "field": "correlationId",
+              "value": ""
+            }
+          ]
+        }
+      ],
+      "candidates": [
+        {
+          "filter": {},
+          "candidate": null,
+          "exhaustive": null
+        },
+        {
+          "filter": {
+            "limit": 5
+          },
+          "candidate": null,
+          "exhaustive": null
+        },
+        {
+          "filter": {
+            "since": "2026",
+            "limit": 5
+          },
+          "candidate": null,
+          "exhaustive": null
+        },
+        {
+          "filter": {
+            "type": []
+          },
+          "candidate": null,
+          "exhaustive": null
+        },
+        {
+          "filter": {
+            "type": [
+              "a"
+            ]
+          },
+          "candidate": {
+            "field": "type",
+            "values": [
+              "a"
+            ]
+          },
+          "exhaustive": true
+        },
+        {
+          "filter": {
+            "type": [
+              "a",
+              "b"
+            ]
+          },
+          "candidate": {
+            "field": "type",
+            "values": [
+              "a",
+              "b"
+            ]
+          },
+          "exhaustive": true
+        },
+        {
+          "filter": {
+            "type": [
+              "a"
+            ],
+            "tenant": "t"
+          },
+          "candidate": {
+            "field": "type",
+            "values": [
+              "a"
+            ]
+          },
+          "exhaustive": false
+        },
+        {
+          "filter": {
+            "type": [
+              "a",
+              "b"
+            ],
+            "since": "2026-01-01"
+          },
+          "candidate": {
+            "field": "type",
+            "values": [
+              "a",
+              "b"
+            ]
+          },
+          "exhaustive": false
+        },
+        {
+          "filter": {
+            "tenant": "t"
+          },
+          "candidate": {
+            "field": "tenant",
+            "values": [
+              "t"
+            ]
+          },
+          "exhaustive": true
+        },
+        {
+          "filter": {
+            "tenant": ""
+          },
+          "candidate": null,
+          "exhaustive": null
+        },
+        {
+          "filter": {
+            "tenant": "t",
+            "until": "2026-01-01"
+          },
+          "candidate": {
+            "field": "tenant",
+            "values": [
+              "t"
+            ]
+          },
+          "exhaustive": false
+        },
+        {
+          "filter": {
+            "intentHash": "h"
+          },
+          "candidate": {
+            "field": "intentHash",
+            "values": [
+              "h"
+            ]
+          },
+          "exhaustive": true
+        },
+        {
+          "filter": {
+            "intentHash": "h",
+            "artifactId": "a"
+          },
+          "candidate": {
+            "field": "intentHash",
+            "values": [
+              "h"
+            ]
+          },
+          "exhaustive": false
+        },
+        {
+          "filter": {
+            "artifactId": "a1",
+            "specHash": "s1"
+          },
+          "candidate": {
+            "field": "artifactId",
+            "values": [
+              "a1"
+            ]
+          },
+          "exhaustive": false
+        },
+        {
+          "filter": {
+            "correlationId": "c1",
+            "type": [
+              "a"
+            ]
+          },
+          "candidate": {
+            "field": "correlationId",
+            "values": [
+              "c1"
+            ]
+          },
+          "exhaustive": false
+        },
+        {
+          "filter": {
+            "specHash": "s",
+            "tenant": "t",
+            "type": [
+              "a"
+            ]
+          },
+          "candidate": {
+            "field": "specHash",
+            "values": [
+              "s"
+            ]
+          },
+          "exhaustive": false
+        }
+      ]
+    },
+    "postgres": {
+      "schemaVersion": 1,
+      "schemas": [
+        {
+          "schema": "public",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"public\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS public_kohaku_spec_cache_expires_at_idx ON \"public\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"public\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS public_kohaku_lineage_type_idx ON \"public\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS public_kohaku_lineage_tenant_idx ON \"public\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS public_kohaku_lineage_intent_hash_idx ON \"public\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS public_kohaku_lineage_artifact_id_idx ON \"public\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS public_kohaku_lineage_spec_hash_idx ON \"public\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS public_kohaku_lineage_ts_idx ON \"public\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"public\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS public_kohaku_promotion_state_seq_idx ON \"public\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"public\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS public_kohaku_fixation_seq_idx ON \"public\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"public\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS public_kohaku_capability_revocation_expires_at_idx ON \"public\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"public\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'public' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"public\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS public_kohaku_lineage_correlation_id_idx ON \"public\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "public_kohaku_lineage_correlation_id_idx",
+            "addColumnSql": "ALTER TABLE \"public\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'public' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"public\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS public_kohaku_lineage_correlation_id_idx ON \"public\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS public_kohaku_lineage_correlation_id_idx ON \"public\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"public\".\"public_kohaku_lineage_correlation_id_idx\""
+          }
+        },
+        {
+          "schema": "tenant_a",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"tenant_a\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_spec_cache_expires_at_idx ON \"tenant_a\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"tenant_a\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_type_idx ON \"tenant_a\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_tenant_idx ON \"tenant_a\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_intent_hash_idx ON \"tenant_a\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_artifact_id_idx ON \"tenant_a\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_spec_hash_idx ON \"tenant_a\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_ts_idx ON \"tenant_a\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"tenant_a\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_promotion_state_seq_idx ON \"tenant_a\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"tenant_a\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_fixation_seq_idx ON \"tenant_a\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"tenant_a\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_capability_revocation_expires_at_idx ON \"tenant_a\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"tenant_a\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'tenant_a' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"tenant_a\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_correlation_id_idx ON \"tenant_a\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "tenant_a_kohaku_lineage_correlation_id_idx",
+            "addColumnSql": "ALTER TABLE \"tenant_a\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'tenant_a' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"tenant_a\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_correlation_id_idx ON \"tenant_a\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS tenant_a_kohaku_lineage_correlation_id_idx ON \"tenant_a\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"tenant_a\".\"tenant_a_kohaku_lineage_correlation_id_idx\""
+          }
+        },
+        {
+          "schema": "we\"ird",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"we\"\"ird\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_spec_cache_expires_at_idx ON \"we\"\"ird\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"we\"\"ird\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_type_idx ON \"we\"\"ird\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_tenant_idx ON \"we\"\"ird\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_intent_hash_idx ON \"we\"\"ird\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_artifact_id_idx ON \"we\"\"ird\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_spec_hash_idx ON \"we\"\"ird\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_ts_idx ON \"we\"\"ird\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"we\"\"ird\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_promotion_state_seq_idx ON \"we\"\"ird\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"we\"\"ird\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_fixation_seq_idx ON \"we\"\"ird\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"we\"\"ird\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_capability_revocation_expires_at_idx ON \"we\"\"ird\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"we\"\"ird\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'we\"ird' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"we\"\"ird\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_correlation_id_idx ON \"we\"\"ird\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "we_ird_kohaku_lineage_correlation_id_idx",
+            "addColumnSql": "ALTER TABLE \"we\"\"ird\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'we\"ird' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"we\"\"ird\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS we_ird_kohaku_lineage_correlation_id_idx ON \"we\"\"ird\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS we_ird_kohaku_lineage_correlation_id_idx ON \"we\"\"ird\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"we\"\"ird\".\"we_ird_kohaku_lineage_correlation_id_idx\""
+          }
+        },
+        {
+          "schema": "o'brien",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"o'brien\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_spec_cache_expires_at_idx ON \"o'brien\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"o'brien\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_type_idx ON \"o'brien\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_tenant_idx ON \"o'brien\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_intent_hash_idx ON \"o'brien\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_artifact_id_idx ON \"o'brien\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_spec_hash_idx ON \"o'brien\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_ts_idx ON \"o'brien\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"o'brien\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_promotion_state_seq_idx ON \"o'brien\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"o'brien\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_fixation_seq_idx ON \"o'brien\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"o'brien\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_capability_revocation_expires_at_idx ON \"o'brien\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"o'brien\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'o''brien' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"o'brien\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_correlation_id_idx ON \"o'brien\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "o_brien_kohaku_lineage_correlation_id_idx",
+            "addColumnSql": "ALTER TABLE \"o'brien\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'o''brien' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"o'brien\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS o_brien_kohaku_lineage_correlation_id_idx ON \"o'brien\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS o_brien_kohaku_lineage_correlation_id_idx ON \"o'brien\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"o'brien\".\"o_brien_kohaku_lineage_correlation_id_idx\""
+          }
+        },
+        {
+          "schema": "100%_s%s",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"100%_s%s\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_spec_cache_expires_at_idx ON \"100%_s%s\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"100%_s%s\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_type_idx ON \"100%_s%s\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_tenant_idx ON \"100%_s%s\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_intent_hash_idx ON \"100%_s%s\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_artifact_id_idx ON \"100%_s%s\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_spec_hash_idx ON \"100%_s%s\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_ts_idx ON \"100%_s%s\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"100%_s%s\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_promotion_state_seq_idx ON \"100%_s%s\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"100%_s%s\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_fixation_seq_idx ON \"100%_s%s\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"100%_s%s\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_capability_revocation_expires_at_idx ON \"100%_s%s\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"100%_s%s\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = '100%_s%s' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"100%_s%s\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_correlation_id_idx ON \"100%_s%s\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "100__s_s_kohaku_lineage_correlation_id_idx",
+            "addColumnSql": "ALTER TABLE \"100%_s%s\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = '100%_s%s' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"100%_s%s\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS 100__s_s_kohaku_lineage_correlation_id_idx ON \"100%_s%s\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS 100__s_s_kohaku_lineage_correlation_id_idx ON \"100%_s%s\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"100%_s%s\".\"100__s_s_kohaku_lineage_correlation_id_idx\""
+          }
+        },
+        {
+          "schema": "Mixed-Case.😀",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"Mixed-Case.😀\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_spec_cache_expires_at_idx ON \"Mixed-Case.😀\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"Mixed-Case.😀\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_type_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_tenant_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_intent_hash_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_artifact_id_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_spec_hash_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_ts_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"Mixed-Case.😀\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_promotion_state_seq_idx ON \"Mixed-Case.😀\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"Mixed-Case.😀\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_fixation_seq_idx ON \"Mixed-Case.😀\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"Mixed-Case.😀\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_capability_revocation_expires_at_idx ON \"Mixed-Case.😀\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"Mixed-Case.😀\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'Mixed-Case.😀' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"Mixed-Case.😀\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_correlation_id_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "mixed_case____kohaku_lineage_correlation_id_idx",
+            "addColumnSql": "ALTER TABLE \"Mixed-Case.😀\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'Mixed-Case.😀' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"Mixed-Case.😀\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS mixed_case____kohaku_lineage_correlation_id_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS mixed_case____kohaku_lineage_correlation_id_idx ON \"Mixed-Case.😀\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"Mixed-Case.😀\".\"mixed_case____kohaku_lineage_correlation_id_idx\""
+          }
+        },
+        {
+          "schema": "über",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"über\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_spec_cache_expires_at_idx ON \"über\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"über\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_type_idx ON \"über\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_tenant_idx ON \"über\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_intent_hash_idx ON \"über\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_artifact_id_idx ON \"über\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_spec_hash_idx ON \"über\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_ts_idx ON \"über\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"über\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_promotion_state_seq_idx ON \"über\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"über\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_fixation_seq_idx ON \"über\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"über\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS _ber_kohaku_capability_revocation_expires_at_idx ON \"über\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"über\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'über' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"über\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_correlation_id_idx ON \"über\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "_ber_kohaku_lineage_correlation_id_idx",
+            "addColumnSql": "ALTER TABLE \"über\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'über' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"über\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS _ber_kohaku_lineage_correlation_id_idx ON \"über\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS _ber_kohaku_lineage_correlation_id_idx ON \"über\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"über\".\"_ber_kohaku_lineage_correlation_id_idx\""
+          }
+        },
+        {
+          "schema": "sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "sql": "\nCREATE TABLE IF NOT EXISTS \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_spec_cache\" (\n  key text PRIMARY KEY,\n  spec text NOT NULL,\n  expires_at timestamptz NULL\n);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_spec_cache_expires_at_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_spec_cache\" (expires_at) WHERE expires_at IS NOT NULL;\nCREATE TABLE IF NOT EXISTS \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (\n  seq bigserial PRIMARY KEY,\n  id text NOT NULL,\n  ts text COLLATE \"C\" NOT NULL,\n  tenant text NOT NULL DEFAULT '',\n  type text NOT NULL,\n  intent_hash text NULL,\n  artifact_id text NULL,\n  spec_hash text NULL,\n  record text NOT NULL,\n  UNIQUE (id)\n);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_lineage_type_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (type, seq);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_lineage_tenant_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (tenant, seq);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_lineage_intent_hash_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (intent_hash, seq);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_lineage_artifact_id_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (artifact_id, seq);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_lineage_spec_hash_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (spec_hash, seq);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_lineage_ts_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (ts);\nCREATE TABLE IF NOT EXISTS \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_promotion_state\" (\n  tenant text NOT NULL DEFAULT '',\n  artifact_id text NOT NULL,\n  seq bigserial NOT NULL,\n  state text NOT NULL,\n  PRIMARY KEY (tenant, artifact_id)\n);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_promotion_state_seq_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_promotion_state\" (seq);\nCREATE TABLE IF NOT EXISTS \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_fixation\" (\n  tenant text NOT NULL DEFAULT '',\n  intent_hash text NOT NULL,\n  seq bigserial NOT NULL,\n  record text NOT NULL,\n  PRIMARY KEY (tenant, intent_hash)\n);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_fixation_seq_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_fixation\" (seq);\n-- Unlike the five tables above, this one carries no JSON payload column -- just a jti and its own\n-- expiry -- so postgresSchemaSql's doc comment on payload-column typing does not apply to it.\nCREATE TABLE IF NOT EXISTS \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_capability_revocation\" (\n  jti text PRIMARY KEY,\n  expires_at timestamptz NOT NULL\n);\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_kohaku_capability_revocation_expires_at_idx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_capability_revocation\" (expires_at);\n-- Schema versioning (see POSTGRES_SCHEMA_VERSION's doc comment / connection.ts's ready()): a single\n-- row, enforced by the fixed-id primary key + CHECK below rather than an application-level invariant.\nCREATE TABLE IF NOT EXISTS \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_schema_meta\" (\n  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),\n  version integer NOT NULL\n);\nDO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$;\nCREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (correlation_id, seq);\n",
+          "correlation": {
+            "columnName": "correlation_id",
+            "indexName": "sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "addColumnSql": "ALTER TABLE \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL",
+            "guardedAddColumnSql": "DO $kohaku_ddl$ BEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns\n     WHERE table_schema = 'sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\n  ) THEN\n    ALTER TABLE \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\n  END IF;\nEND $kohaku_ddl$",
+            "createIndexSql": "CREATE INDEX IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (correlation_id, seq)",
+            "createIndexConcurrentlySql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ON \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"kohaku_lineage\" (correlation_id, seq)",
+            "dropIndexConcurrentlySql": "DROP INDEX CONCURRENTLY IF EXISTS \"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\".\"sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\""
+          }
+        }
+      ],
+      "correlationColumnValues": [
+        {
+          "input": "c1",
+          "inputUtf16Length": 2,
+          "expected": "c1"
+        },
+        {
+          "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "inputUtf16Length": 256,
+          "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "inputUtf16Length": 257,
+          "expected": "sha256:e8d95cc2b4bc198c54b40bd214df958afb65f5e73d2c2eafe0593cf5c635c1f0"
+        },
+        {
+          "input": "req-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "inputUtf16Length": 4100,
+          "expected": "sha256:ff6c1ea337a63cf60bbb491ce7c8be96b2225c5e08a4346ccdeef5ec10e3c5a7"
+        },
+        {
+          "input": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+          "inputUtf16Length": 256,
+          "expected": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+        },
+        {
+          "input": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+          "inputUtf16Length": 258,
+          "expected": "sha256:f1725ce917cd79b27f8cf381e84926a321c7bafa2130510be9722254f8ad4dff"
+        },
+        {
+          "input": "üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü",
+          "inputUtf16Length": 300,
+          "expected": "sha256:969222e5c9d4ea6630efe52a32662d0793efa5e778c2e17b1e5769b621ae4e86"
+        }
+      ]
+    },
+    "rows": {
+      "lineage": [
+        {
+          "event": {
+            "id": "view.composed:acme:46",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "system"
+            },
+            "type": "view.composed",
+            "payload": {
+              "intentHash": "sha256:a",
+              "correlationId": "c1"
+            },
+            "tenant": "acme"
+          },
+          "text": "{\"id\":\"view.composed:acme:46\",\"ts\":\"2026-01-02T03:04:05.678Z\",\"actor\":{\"kind\":\"system\"},\"type\":\"view.composed\",\"payload\":{\"intentHash\":\"sha256:a\",\"correlationId\":\"c1\"},\"tenant\":\"acme\"}"
+        },
+        {
+          "event": {
+            "id": "component.used:-:2",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "system"
+            },
+            "type": "component.used",
+            "payload": {}
+          },
+          "text": "{\"id\":\"component.used:-:2\",\"ts\":\"2026-01-02T03:04:05.678Z\",\"actor\":{\"kind\":\"system\"},\"type\":\"component.used\",\"payload\":{}}"
+        },
+        {
+          "event": {
+            "id": "intent.fixated:t:118",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "system"
+            },
+            "type": "intent.fixated",
+            "payload": {
+              "note": "quote\" back\\slash\n tab\t ctl\u0001 ü 日本 😀 </script>  ",
+              "nested": {
+                "zzz": 1,
+                "a": [
+                  1,
+                  2,
+                  {
+                    "b": null
+                  }
+                ],
+                "bb": true
+              }
+            },
+            "tenant": "t"
+          },
+          "text": "{\"id\":\"intent.fixated:t:118\",\"ts\":\"2026-01-02T03:04:05.678Z\",\"actor\":{\"kind\":\"system\"},\"type\":\"intent.fixated\",\"payload\":{\"note\":\"quote\\\" back\\\\slash\\n tab\\t ctl\\u0001 ü 日本 😀 </script>  \",\"nested\":{\"zzz\":1,\"a\":[1,2,{\"b\":null}],\"bb\":true}},\"tenant\":\"t\"}"
+        },
+        {
+          "event": {
+            "id": "action.performed:-:47",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "user",
+              "id": "u-1"
+            },
+            "type": "action.performed",
+            "payload": {
+              "n": 1,
+              "f": 1.5,
+              "neg": -2,
+              "big": 9007199254740991
+            }
+          },
+          "text": "{\"id\":\"action.performed:-:47\",\"ts\":\"2026-01-02T03:04:05.678Z\",\"actor\":{\"kind\":\"user\",\"id\":\"u-1\"},\"type\":\"action.performed\",\"payload\":{\"n\":1,\"f\":1.5,\"neg\":-2,\"big\":9007199254740991}}"
+        },
+        {
+          "event": {
+            "id": "component.generated:acme:19",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "model",
+              "model": "m-1"
+            },
+            "type": "component.generated",
+            "payload": {
+              "artifactId": "a1"
+            },
+            "tenant": "acme"
+          },
+          "text": "{\"id\":\"component.generated:acme:19\",\"ts\":\"2026-01-02T03:04:05.678Z\",\"actor\":{\"kind\":\"model\",\"model\":\"m-1\"},\"type\":\"component.generated\",\"payload\":{\"artifactId\":\"a1\"},\"tenant\":\"acme\"}"
+        },
+        {
+          "event": {
+            "id": "view.fallback:-:2",
+            "ts": "2026-01-02T03:04:05.678Z",
+            "actor": {
+              "kind": "model",
+              "id": "m",
+              "model": "claude"
+            },
+            "type": "view.fallback",
+            "payload": {}
+          },
+          "text": "{\"id\":\"view.fallback:-:2\",\"ts\":\"2026-01-02T03:04:05.678Z\",\"actor\":{\"kind\":\"model\",\"id\":\"m\",\"model\":\"claude\"},\"type\":\"view.fallback\",\"payload\":{}}"
+        }
+      ],
+      "promotion": [
+        {
+          "record": {
+            "artifactId": "a1",
+            "status": "candidate",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "data": {}
+          },
+          "text": "{\"artifactId\":\"a1\",\"status\":\"candidate\",\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"data\":{}}"
+        },
+        {
+          "record": {
+            "artifactId": "a2",
+            "status": "approved",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "data": {
+              "verdict": {
+                "ok": true,
+                "notes": "quote\" back\\slash\n tab\t ctl\u0001 ü 日本 😀 </script>  "
+              },
+              "zzz": 1,
+              "a": {
+                "deep2": true,
+                "d": 1
+              }
+            },
+            "tenant": "acme",
+            "revision": "r-1"
+          },
+          "text": "{\"artifactId\":\"a2\",\"status\":\"approved\",\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"data\":{\"verdict\":{\"ok\":true,\"notes\":\"quote\\\" back\\\\slash\\n tab\\t ctl\\u0001 ü 日本 😀 </script>  \"},\"zzz\":1,\"a\":{\"deep2\":true,\"d\":1}},\"tenant\":\"acme\",\"revision\":\"r-1\"}"
+        }
+      ],
+      "fixation": [
+        {
+          "record": {
+            "intentHash": "sha256:ab",
+            "canonical": "sales.trend",
+            "structureHash": "sha256:s",
+            "pinnedSpec": {
+              "kohaku": "0.2",
+              "intent": {
+                "canonical": "sales.quarterly_summary",
+                "params": {
+                  "fiscalYear": 2026,
+                  "groupBy": "region",
+                  "quarter": 3
+                },
+                "hash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5"
+              },
+              "dataVersion": "ledger@2026-06-10T03:12:00Z",
+              "components": [
+                {
+                  "id": "root",
+                  "type": "layout.stack",
+                  "props": {
+                    "direction": "vertical"
+                  },
+                  "children": [
+                    "title",
+                    "chart1",
+                    "table1"
+                  ]
+                },
+                {
+                  "id": "title",
+                  "type": "text.heading",
+                  "props": {
+                    "level": 2,
+                    "text": "FY2026 Q3 Sales (by Region)"
+                  }
+                },
+                {
+                  "id": "chart1",
+                  "type": "presentChart",
+                  "props": {
+                    "kind": "bar",
+                    "x": "region",
+                    "y": "revenue"
+                  },
+                  "data": {
+                    "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3"
+                  }
+                },
+                {
+                  "id": "table1",
+                  "type": "presentSpreadsheet",
+                  "props": {
+                    "editable": false
+                  },
+                  "data": {
+                    "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "on": "table1.rowClick",
+                  "emit": "intent.patch",
+                  "payload": {
+                    "drilldown": "$row.region"
+                  }
+                }
+              ],
+              "provenance": {
+                "tier": "L1",
+                "composedBy": "composer@0.1.0",
+                "model": "claude-fable-5",
+                "cache": "hit"
+              }
+            },
+            "fixatedAt": "2026-01-01T00:00:00.000Z",
+            "approver": {
+              "id": "admin",
+              "name": "Ada",
+              "roles": [
+                "admin"
+              ]
+            }
+          },
+          "text": "{\"intentHash\":\"sha256:ab\",\"canonical\":\"sales.trend\",\"structureHash\":\"sha256:s\",\"pinnedSpec\":{\"kohaku\":\"0.2\",\"intent\":{\"canonical\":\"sales.quarterly_summary\",\"params\":{\"fiscalYear\":2026,\"groupBy\":\"region\",\"quarter\":3},\"hash\":\"sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5\"},\"dataVersion\":\"ledger@2026-06-10T03:12:00Z\",\"components\":[{\"id\":\"root\",\"type\":\"layout.stack\",\"props\":{\"direction\":\"vertical\"},\"children\":[\"title\",\"chart1\",\"table1\"]},{\"id\":\"title\",\"type\":\"text.heading\",\"props\":{\"level\":2,\"text\":\"FY2026 Q3 Sales (by Region)\"}},{\"id\":\"chart1\",\"type\":\"presentChart\",\"props\":{\"kind\":\"bar\",\"x\":\"region\",\"y\":\"revenue\"},\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"}},{\"id\":\"table1\",\"type\":\"presentSpreadsheet\",\"props\":{\"editable\":false},\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"}}],\"events\":[{\"on\":\"table1.rowClick\",\"emit\":\"intent.patch\",\"payload\":{\"drilldown\":\"$row.region\"}}],\"provenance\":{\"tier\":\"L1\",\"composedBy\":\"composer@0.1.0\",\"model\":\"claude-fable-5\",\"cache\":\"hit\"}},\"fixatedAt\":\"2026-01-01T00:00:00.000Z\",\"approver\":{\"id\":\"admin\",\"name\":\"Ada\",\"roles\":[\"admin\"]}}"
+        },
+        {
+          "record": {
+            "intentHash": "sha256:ab",
+            "canonical": "sales.trend",
+            "structureHash": "sha256:s",
+            "pinnedSpec": {
+              "kohaku": "0.2",
+              "intent": {
+                "canonical": "sales.quarterly_summary",
+                "params": {
+                  "fiscalYear": 2026,
+                  "groupBy": "region",
+                  "quarter": 3
+                },
+                "hash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5"
+              },
+              "dataVersion": "ledger@2026-06-10T03:12:00Z",
+              "components": [
+                {
+                  "id": "root",
+                  "type": "layout.stack",
+                  "props": {
+                    "direction": "vertical"
+                  },
+                  "children": [
+                    "title",
+                    "chart1",
+                    "table1"
+                  ]
+                },
+                {
+                  "id": "title",
+                  "type": "text.heading",
+                  "props": {
+                    "level": 2,
+                    "text": "FY2026 Q3 Sales (by Region)"
+                  }
+                },
+                {
+                  "id": "chart1",
+                  "type": "presentChart",
+                  "props": {
+                    "kind": "bar",
+                    "x": "region",
+                    "y": "revenue"
+                  },
+                  "data": {
+                    "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3"
+                  }
+                },
+                {
+                  "id": "table1",
+                  "type": "presentSpreadsheet",
+                  "props": {
+                    "editable": false
+                  },
+                  "data": {
+                    "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "on": "table1.rowClick",
+                  "emit": "intent.patch",
+                  "payload": {
+                    "drilldown": "$row.region"
+                  }
+                }
+              ],
+              "provenance": {
+                "tier": "L1",
+                "composedBy": "composer@0.1.0",
+                "model": "claude-fable-5",
+                "cache": "hit"
+              }
+            },
+            "fixatedAt": "2026-01-01T00:00:00.000Z",
+            "approver": {
+              "id": "admin",
+              "name": "Ada",
+              "roles": [
+                "admin"
+              ]
+            },
+            "catalogFingerprint": "fp1",
+            "tenant": "acme",
+            "revision": "r-9"
+          },
+          "text": "{\"intentHash\":\"sha256:ab\",\"canonical\":\"sales.trend\",\"structureHash\":\"sha256:s\",\"pinnedSpec\":{\"kohaku\":\"0.2\",\"intent\":{\"canonical\":\"sales.quarterly_summary\",\"params\":{\"fiscalYear\":2026,\"groupBy\":\"region\",\"quarter\":3},\"hash\":\"sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5\"},\"dataVersion\":\"ledger@2026-06-10T03:12:00Z\",\"components\":[{\"id\":\"root\",\"type\":\"layout.stack\",\"props\":{\"direction\":\"vertical\"},\"children\":[\"title\",\"chart1\",\"table1\"]},{\"id\":\"title\",\"type\":\"text.heading\",\"props\":{\"level\":2,\"text\":\"FY2026 Q3 Sales (by Region)\"}},{\"id\":\"chart1\",\"type\":\"presentChart\",\"props\":{\"kind\":\"bar\",\"x\":\"region\",\"y\":\"revenue\"},\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"}},{\"id\":\"table1\",\"type\":\"presentSpreadsheet\",\"props\":{\"editable\":false},\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"}}],\"events\":[{\"on\":\"table1.rowClick\",\"emit\":\"intent.patch\",\"payload\":{\"drilldown\":\"$row.region\"}}],\"provenance\":{\"tier\":\"L1\",\"composedBy\":\"composer@0.1.0\",\"model\":\"claude-fable-5\",\"cache\":\"hit\"}},\"fixatedAt\":\"2026-01-01T00:00:00.000Z\",\"approver\":{\"id\":\"admin\",\"name\":\"Ada\",\"roles\":[\"admin\"]},\"catalogFingerprint\":\"fp1\",\"tenant\":\"acme\",\"revision\":\"r-9\"}"
+        }
+      ]
+    }
   }
 }

@@ -59,27 +59,38 @@ from kohaku.spec import (
     ExpectedDeleteRevision,
     ExpectedRevision,
     FixationRecord,
-    LineageActor,
     LineageEventRecord,
     LineageFilter,
     LineagePage,
     LineagePageRequest,
-    Principal,
     PromotionState,
     StorageConflictError,
     UISpec,
     page_lineage_events,
 )
+from kohaku.spec import normalize_tenant as _normalize_tenant
+
+from ._wire import (
+    fixation_from_wire as _fixation_from_wire,
+)
+from ._wire import (
+    fixation_to_wire as _fixation_to_wire,
+)
+from ._wire import (
+    lineage_from_wire as _lineage_from_wire,
+)
+from ._wire import (
+    lineage_to_wire as _lineage_to_wire,
+)
+from ._wire import (
+    promotion_from_wire as _promotion_from_wire,
+)
+from ._wire import (
+    promotion_to_wire as _promotion_to_wire,
+)
 
 _MAX_SPEC_CACHE_ENTRIES = 500
 """Entry cap of the in-memory Spec cache. On overflow, drop the oldest (approximate LRU)."""
-
-
-def _normalize_tenant(tenant: str | None) -> str | None:
-    """None and "" both collapse to None ("unspecified"); any other tenant passes through. Twin of TS's
-    normalizeTenant (spec-core ports/storage.ts): every get / put / list / filter on a tenant goes through
-    this, so "" and None can never be keyed or filtered inconsistently against each other."""
-    return tenant if tenant else None
 
 
 def _fixation_key(tenant: str | None, intent_hash: str) -> str:
@@ -133,105 +144,6 @@ def _plan_fixation_write(
         return False
     _check_expected_revision("fixation", intent_hash, existing, expected)
     return True
-
-
-def _lineage_to_wire(event: LineageEventRecord) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "id": event.id,
-        "ts": event.ts,
-        "actor": {
-            "kind": event.actor.kind,
-            **({"id": event.actor.id} if event.actor.id is not None else {}),
-            **({"model": event.actor.model} if event.actor.model is not None else {}),
-        },
-        "type": event.type,
-        "payload": event.payload,
-    }
-    if event.tenant is not None:
-        out["tenant"] = event.tenant
-    return out
-
-
-def _lineage_from_wire(data: dict[str, Any]) -> LineageEventRecord:
-    actor = data.get("actor") or {}
-    return LineageEventRecord(
-        id=str(data.get("id", "")),
-        ts=str(data.get("ts", "")),
-        actor=LineageActor(
-            kind=actor.get("kind", "system"), id=actor.get("id"), model=actor.get("model")
-        ),
-        type=str(data.get("type", "")),
-        payload=data.get("payload") or {},
-        tenant=data.get("tenant"),
-    )
-
-
-def _promotion_to_wire(state: PromotionState) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "artifactId": state.artifactId,
-        "status": state.status,
-        "updatedAt": state.updatedAt,
-        "data": state.data,
-    }
-    if state.tenant is not None:
-        out["tenant"] = state.tenant
-    if state.revision is not None:
-        out["revision"] = state.revision
-    return out
-
-
-def _promotion_from_wire(data: dict[str, Any]) -> PromotionState:
-    return PromotionState(
-        artifactId=str(data.get("artifactId", "")),
-        status=str(data.get("status", "")),
-        updatedAt=str(data.get("updatedAt", "")),
-        data=data.get("data") or {},
-        tenant=data.get("tenant"),
-        revision=data.get("revision"),
-    )
-
-
-def _fixation_to_wire(record: FixationRecord) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "intentHash": record.intentHash,
-        "canonical": record.canonical,
-        "structureHash": record.structureHash,
-        "pinnedSpec": record.pinnedSpec.to_wire(),
-        "fixatedAt": record.fixatedAt,
-        # TS omits undefined. dataclasses.asdict would explicitly output name/roles' None, making it
-        # wire-incompatible, so, like the other _*_to_wire, we build it omitting None keys.
-        "approver": {
-            "id": record.approver.id,
-            **({"name": record.approver.name} if record.approver.name is not None else {}),
-            **({"roles": record.approver.roles} if record.approver.roles is not None else {}),
-        },
-    }
-    if record.catalogFingerprint is not None:
-        out["catalogFingerprint"] = record.catalogFingerprint
-    if record.tenant is not None:
-        out["tenant"] = record.tenant
-    if record.revision is not None:
-        out["revision"] = record.revision
-    return out
-
-
-def _fixation_from_wire(data: dict[str, Any]) -> FixationRecord:
-    approver = data.get("approver") or {}
-    return FixationRecord(
-        intentHash=str(data.get("intentHash", "")),
-        canonical=str(data.get("canonical", "")),
-        structureHash=str(data.get("structureHash", "")),
-        pinnedSpec=UISpec.model_validate(data["pinnedSpec"]),
-        fixatedAt=str(data.get("fixatedAt", "")),
-        approver=Principal(
-            id=str(approver.get("id", "")),
-            name=approver.get("name"),
-            roles=approver.get("roles"),
-        ),
-        catalogFingerprint=data.get("catalogFingerprint"),
-        tenant=data.get("tenant"),
-        revision=data.get("revision"),
-    )
 
 
 class FileStoragePort:

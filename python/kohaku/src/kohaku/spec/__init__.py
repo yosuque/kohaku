@@ -42,8 +42,13 @@ from .errors import (
     SpecErrorCode,
 )
 from .intent import IntentInput, compute_intent_hash, finalize_intent, normalize_intent
-from .lineage_page import (
+from .lineage_filter import (
     DEFAULT_LINEAGE_LIMIT,
+    LINEAGE_PAYLOAD_INDEX_FIELDS,
+    apply_lineage_limit,
+    matches_lineage_filter,
+)
+from .lineage_page import (
     DEFAULT_LINEAGE_PAGE_SIZE,
     MAX_LINEAGE_PAGE_SIZE,
     LineageCursorError,
@@ -157,6 +162,7 @@ from .ports import (
     VerifyRequest,
     VerifyResult,
     is_single_process,
+    normalize_tenant,
     supports_compare_and_set,
     validate_fixation_record,
     validate_promotion_state,
@@ -215,6 +221,7 @@ __all__ = [
     "EXPLICITLY_DENIED_TAGS",
     "KOHAKU_POLICY_FILE_VERSION",
     "MAX_BIND_VARIANTS",
+    "LINEAGE_PAYLOAD_INDEX_FIELDS",
     "MAX_LINEAGE_PAGE_SIZE",
     "MAX_JSON_OBJECT_DEPTH",
     "MAX_PREDICATE_DEPTH",
@@ -332,6 +339,7 @@ __all__ = [
     "VerifyResult",
     "VisibleWhen",
     "action_payload_hash",
+    "apply_lineage_limit",
     "apply_patch",
     "assert_valid_action_params_schema",
     "cache_key",
@@ -364,7 +372,9 @@ __all__ = [
     "is_single_process",
     "is_storage_conflict_error",
     "merge_policy_sections",
+    "matches_lineage_filter",
     "normalize_intent",
+    "normalize_tenant",
     "normalize_json_value",
     "json_depth_ok",
     "order_components",

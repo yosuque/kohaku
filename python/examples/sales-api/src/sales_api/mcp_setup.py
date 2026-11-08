@@ -36,11 +36,11 @@ from kohaku.intents import IntentToolSource
 from kohaku.lineage import create_view_recorder
 from kohaku.llm import LlmPort
 from kohaku.spec import FixationRecord, JsonObject, SessionContext, UISpec
-from kohaku.storage import FileStoragePort
 
 from .action_effects import sales_action_effects
 from .app import admit_fixation_for_locale, create_app
 from .authz_from_env import create_authz_from_env
+from .storage_from_env import create_storage_from_env
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _RENDERER_PATH = _REPO_ROOT / "apps/sample-mcp/dist/renderer/index.html"
@@ -92,6 +92,10 @@ def make_renderer_html_loader(
     return load
 
 
+async def _noop_close() -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class KohakuMcpSetup:
     """The result of the common setup. Shared by the stdio / HTTP entries."""
@@ -102,6 +106,8 @@ class KohakuMcpSetup:
     data_dir: Path
     snapshot_dir: Path
     """The save directory of snapshot HTML (single source of truth). mcp_http uses it as the origin of /snapshots static serving."""
+    close: Callable[[], Awaitable[None]] = _noop_close
+    """Releases the storage backend connection (a no-op for file / memory). The entry points call it on exit."""
 
 
 async def create_kohaku_mcp_setup(
@@ -109,6 +115,27 @@ async def create_kohaku_mcp_setup(
     llm: LlmPort | None = None,
     data_dir: Path | None = None,
     snapshot_base_url: str | None = None,
+) -> KohakuMcpSetup:
+    """Runs the common setup once and returns a per-session Server factory (see `_build_kohaku_mcp_setup`). If
+    anything fails after the storage backend was created (an unreachable backend, a schema that cannot be migrated,
+    app creation), the backend connection is released before the error propagates."""
+    cleanups: list[Callable[[], Awaitable[None]]] = []
+    try:
+        return await _build_kohaku_mcp_setup(
+            llm=llm, data_dir=data_dir, snapshot_base_url=snapshot_base_url, cleanups=cleanups
+        )
+    except BaseException:
+        for cleanup in cleanups:
+            await cleanup()
+        raise
+
+
+async def _build_kohaku_mcp_setup(
+    *,
+    llm: LlmPort | None,
+    data_dir: Path | None,
+    snapshot_base_url: str | None,
+    cleanups: list[Callable[[], Awaitable[None]]],
 ) -> KohakuMcpSetup:
     """Runs the common setup once and returns a per-session Server factory.
 
@@ -133,10 +160,13 @@ async def create_kohaku_mcp_setup(
         if data_dir is not None
         else Path(os.environ.get("KOHAKU_DATA_DIR", _DEFAULT_DATA_DIR))
     )
-    storage = FileStoragePort(resolved_data_dir)
+    # StoragePort + revocation store by KOHAKU_STORAGE (file by default), exactly as the REST entry does.
+    backend = create_storage_from_env(os.environ, data_dir=resolved_data_dir)
+    cleanups.append(backend.close)
+    storage = backend.storage
     # KOHAKU_AUTHZ selects the AuthzPort (hmac / jwt), exactly as the REST entry does. The MCP profile never resolves
     # a tenant, so its capabilities are tenant-less and `require_capability_tenant` stays off (the default).
-    authz_env = create_authz_from_env(os.environ)
+    authz_env = create_authz_from_env(os.environ, revocation=backend.revocations)
     capability_secret = authz_env.capability_secret
     authz = authz_env.authz
     # Under jwt, the caller's principal comes from each tool call's own HTTP bearer token (McpHostDeps.
@@ -153,6 +183,8 @@ async def create_kohaku_mcp_setup(
     # single-use (design.md #63; without one a token stays replayable until it expires).
     approvals = create_hmac_approval_port(capability_secret, store=create_memory_approval_store())
 
+    # Fail fast on an unreachable backend or a schema that cannot be migrated, before serving.
+    await backend.ready()
     sales = await create_app(llm=llm, storage=storage, authz=authz, approvals=approvals)
     # The MCP side's compose is also recorded to View Lineage (the same recorder as the REST side is built from the shared lineage).
     # This way, usage from MCP also remains as view.composed and merges into the promotion (minUses) / fixation counters.
@@ -244,6 +276,7 @@ async def create_kohaku_mcp_setup(
         llm=llm,
         data_dir=resolved_data_dir,
         snapshot_dir=snapshot_dir,
+        close=backend.close,
     )
 
 

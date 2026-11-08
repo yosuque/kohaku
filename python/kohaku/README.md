@@ -14,7 +14,9 @@ pip install kohaku-ui            # core
 pip install "kohaku-ui[rest]"    # + the REST host (FastAPI)
 pip install "kohaku-ui[mcp]"     # + the MCP host
 pip install "kohaku-ui[llm]"     # + the OpenAI-compatible LLM adapter
-pip install "kohaku-ui[all]"     # + every optional feature set (rest, mcp, llm, claude, gemini)
+pip install "kohaku-ui[redis]"   # + the Redis StoragePort / revocation store (shared backend, data-compatible with TS)
+pip install "kohaku-ui[postgres]" "psycopg[binary]"  # + the PostgreSQL ones (psycopg needs libpq: `[binary]` or a system install)
+pip install "kohaku-ui[all]"     # + every optional feature set (rest, mcp, llm, claude, gemini, evidence, redis, postgres)
 ```
 
 - Protocol: [spec/SPEC.md](https://github.com/yosuque/kohaku/blob/main/spec/SPEC.md)

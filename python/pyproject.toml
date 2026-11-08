@@ -43,6 +43,13 @@ dev = [
     # install time.
     "anthropic>=1.5",
     "google-genai>=1.0",
+    # For testing the shared-backend StoragePort adapters (kohaku.storage.redis / .postgres; the redis /
+    # postgres extras of kohaku-ui). `psycopg[binary]` brings its own libpq so the suite needs no system
+    # install. testcontainers (base package only: the generic DockerContainer, no sqlalchemy/psycopg2 extras)
+    # starts a throwaway backend when no KOHAKU_TEST_*_URL is set -- same resolution order as the TS suites.
+    "redis>=5.2",
+    "psycopg[binary,pool]>=3.2",
+    "testcontainers>=4.9",
 ]
 
 [tool.pytest.ini_options]
@@ -82,7 +89,8 @@ containers = ["kohaku"]
 # siblings within a layer (no mutual imports). spec is the bottom layer, and llm is an independent
 # sibling at the same layer, mechanically guaranteeing "llm does not depend on spec". data_binding
 # sits one above spec because intents / host_* depend on it. registry / intents / lineage / storage
-# are the middle layer used by composer / host_*. composer is above them, with domain_mcp (an MCP server as a
+# are the middle layer used by composer / host_* (storage -- including the optional redis / postgres adapters, TS:
+# storage-memory / storage-redis / storage-postgres -- is a leaf on spec, which the dedicated forbidden contract below makes explicit). composer is above them, with domain_mcp (an MCP server as a
 # DomainPort; depends on spec + intents only, like TS domain-mcp beside composer / semantic-llm) as its sibling. host_core sits one layer
 # above composer: the framework-free shared host core (fixation delivery + self-healing, capability
 # issuance, error-hook helpers) consumed by host_rest and host_mcp as thin adapters — the same
@@ -131,6 +139,29 @@ source_modules = [
 ]
 forbidden_modules = [
     "kohaku.llm",
+]
+
+[[tool.importlinter.contracts]]
+name = "storage depends on spec only (TS: storage-memory / storage-redis / storage-postgres are leaves on spec-core; a Port reference adapter never pulls a host or composer in -- redis / postgres also keep their drivers optional)"
+type = "forbidden"
+source_modules = [
+    "kohaku.storage",
+]
+forbidden_modules = [
+    "kohaku.llm",
+    "kohaku.data_binding",
+    "kohaku.registry",
+    "kohaku.intents",
+    "kohaku.lineage",
+    "kohaku.authz_hmac",
+    "kohaku.authz_jwt",
+    "kohaku.composer",
+    "kohaku.semantic_llm",
+    "kohaku.domain_mcp",
+    "kohaku.host_core",
+    "kohaku.host_rest",
+    "kohaku.host_mcp",
+    "kohaku.evals",
 ]
 
 [[tool.importlinter.contracts]]

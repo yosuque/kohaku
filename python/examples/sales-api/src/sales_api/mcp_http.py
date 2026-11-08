@@ -228,43 +228,54 @@ def main() -> None:
 
     import asyncio
 
-    setup = asyncio.run(create_kohaku_mcp_setup(snapshot_base_url=public_url))
-    app = build_starlette_app(
-        setup, allowed_hosts=allowed_hosts, allowed_origins=allowed_origins, host=host
-    )
+    # One event loop for the whole process: a redis-py client / psycopg pool (KOHAKU_STORAGE=redis|postgres) is bound
+    # to the loop that first uses it, so the setup, its startup reconcile and the uvicorn server share one.
+    async def serve() -> None:
+        setup = await create_kohaku_mcp_setup(snapshot_base_url=public_url)
+        try:
+            app = build_starlette_app(
+                setup, allowed_hosts=allowed_hosts, allowed_origins=allowed_origins, host=host
+            )
 
-    print(
-        f"kohaku-sales-sample MCP server: ready (Streamable HTTP) at http://{host}:{port}{_MCP_PATH}",
-        file=sys.stderr,
-    )
-    print(f"  LLM: {setup.llm.provider} / {setup.llm.model_id}", file=sys.stderr)
-    print(
-        f"  Snapshot serving: {public_url}{_SNAPSHOT_PREFIX}/<file>"
-        " (kohaku_render_snapshot returns this URL)",
-        file=sys.stderr,
-    )
-    print(
-        f"  bind: {host}:{port} (default 127.0.0.1 = local only. For LAN / container exposure,"
-        " override explicitly with KOHAKU_MCP_HTTP_HOST=0.0.0.0)",
-        file=sys.stderr,
-    )
-    print(
-        "  ⚠️ No authentication (demo). Anyone who knows the URL can view and operate the sales data.",
-        file=sys.stderr,
-    )
-    extra_hosts = f"; extra hosts: {', '.join(allowed_hosts)}" if allowed_hosts else ""
-    extra_origins = f"; extra origins: {', '.join(allowed_origins)}" if allowed_origins else ""
-    print(
-        f"  DNS rebinding protection: enabled (Host / Origin: localhost, 127.0.0.1, [::1]{extra_hosts}{extra_origins})",
-        file=sys.stderr,
-    )
-    print(
-        "  Behind a public tunnel the Host is the tunnel's domain: add it with KOHAKU_MCP_ALLOWED_HOSTS=<name>"
-        " (and a browser caller's origin with KOHAKU_MCP_ALLOWED_ORIGINS=<name>)",
-        file=sys.stderr,
-    )
+            print(
+                f"kohaku-sales-sample MCP server: ready (Streamable HTTP) at http://{host}:{port}{_MCP_PATH}",
+                file=sys.stderr,
+            )
+            print(f"  LLM: {setup.llm.provider} / {setup.llm.model_id}", file=sys.stderr)
+            print(
+                f"  Snapshot serving: {public_url}{_SNAPSHOT_PREFIX}/<file>"
+                " (kohaku_render_snapshot returns this URL)",
+                file=sys.stderr,
+            )
+            print(
+                f"  bind: {host}:{port} (default 127.0.0.1 = local only. For LAN / container exposure,"
+                " override explicitly with KOHAKU_MCP_HTTP_HOST=0.0.0.0)",
+                file=sys.stderr,
+            )
+            print(
+                "  ⚠️ No authentication (demo). Anyone who knows the URL can view and operate the sales data.",
+                file=sys.stderr,
+            )
+            extra_hosts = f"; extra hosts: {', '.join(allowed_hosts)}" if allowed_hosts else ""
+            extra_origins = (
+                f"; extra origins: {', '.join(allowed_origins)}" if allowed_origins else ""
+            )
+            print(
+                f"  DNS rebinding protection: enabled (Host / Origin: localhost, 127.0.0.1, [::1]{extra_hosts}{extra_origins})",
+                file=sys.stderr,
+            )
+            print(
+                "  Behind a public tunnel the Host is the tunnel's domain: add it with KOHAKU_MCP_ALLOWED_HOSTS=<name>"
+                " (and a browser caller's origin with KOHAKU_MCP_ALLOWED_ORIGINS=<name>)",
+                file=sys.stderr,
+            )
 
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+            server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+            await server.serve()
+        finally:
+            await setup.close()
+
+    asyncio.run(serve())
 
 
 if __name__ == "__main__":

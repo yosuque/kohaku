@@ -47,6 +47,7 @@ cd python && uv sync && uv run pytest && uv run mypy && uv run ruff check && uv 
 cd python && uv run python -m sales_api            # Python sample REST host (:8790; the default is a deterministic pseudo-LLM. Requires cd python)
 cd python && uv run python -m sales_api.mcp_http   # Python MCP over Streamable HTTP (:8791; stdio is sales_api.mcp_main)
 pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures  # regenerate cross-language canonical-JSON goldens (CI checks for drift)
+cd python && uv run pytest kohaku/tests/storage  # includes the Redis/Postgres adapter suites: backend from KOHAKU_TEST_REDIS_URL / KOHAKU_TEST_POSTGRES_URL, else a throwaway testcontainers container, else skipped (KOHAKU_ADAPTER_TESTS=require forbids the skip, =skip forces it); the TS storage-redis / storage-postgres python-interop tests drive the Python adapters from python/.venv
 pnpm --filter @kohaku-ui/registry run export-core-catalog           # re-export the core catalog JSON (CI checks for drift)
 ```
 

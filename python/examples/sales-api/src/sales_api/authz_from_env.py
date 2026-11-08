@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Literal
 from kohaku.authz_hmac import create_hmac_authz_port
 from kohaku.spec import AuthzPort, CapabilityRevocationStore
 
+from .storage_from_env import storage_kind_from_env
+
 if TYPE_CHECKING:
     from kohaku.authz_jwt import JwtIdentityResolver
 
@@ -68,12 +70,16 @@ def create_authz_from_env(
     """
     capability_secret = capability_secret_from_env(env)
     kind = env.get("KOHAKU_AUTHZ", "hmac")
-    # The fixed fallback is a demo convenience only. Once authz leaves the single-process, header-based demo
-    # shape -- JWT-verified identity -- a capability token signed with a secret every clone of this repo also
-    # knows is a real forgery risk, not a quickstart nicety, so refuse to start rather than run on it.
-    if capability_secret == DEFAULT_CAPABILITY_SECRET and kind == "jwt":
+    # The fixed fallback is a demo convenience only. Once either storage or authz leaves the single-process,
+    # header-based demo shape -- a shared redis/postgres backend, or JWT-verified identity -- a capability token
+    # signed with a secret every clone of this repo also knows is a real forgery risk, not a quickstart nicety, so
+    # refuse to start rather than run on it.
+    if capability_secret == DEFAULT_CAPABILITY_SECRET and (
+        kind == "jwt" or storage_kind_from_env(env) in ("redis", "postgres")
+    ):
         raise ValueError(
-            "KOHAKU_CAPABILITY_SECRET must be set to a real secret when KOHAKU_AUTHZ=jwt"
+            "KOHAKU_CAPABILITY_SECRET must be set to a real secret when "
+            "KOHAKU_STORAGE=redis|postgres or KOHAKU_AUTHZ=jwt"
         )
     if kind == "hmac":
         return AuthzFromEnv(

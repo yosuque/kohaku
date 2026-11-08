@@ -14,11 +14,8 @@ import json
 import math
 from typing import Any
 
+from .lineage_filter import matches_lineage_filter
 from .ports import LineageEventRecord, LineagePage, LineagePageRequest
-
-DEFAULT_LINEAGE_LIMIT = 200
-"""Default tail-window size for `StoragePort.list_lineage` when `LineageFilter.limit` is omitted (twin of
-packages/spec-core/src/lineage-filter.ts's DEFAULT_LINEAGE_LIMIT)."""
 
 DEFAULT_LINEAGE_PAGE_SIZE = 500
 """LineagePageRequest.pageSize's default when omitted."""
@@ -89,29 +86,6 @@ def decode_seq_cursor(cursor: str) -> int:
     return int(seq)
 
 
-def _matches(event: LineageEventRecord, req: LineagePageRequest) -> bool:
-    """The per-event predicate `page_lineage_events` applies (mirrors FileStoragePort.list_lineage's own
-    inline filtering -- kept duplicated rather than factored into a shared helper, matching that method's
-    existing style, since Python has no dedicated lineage-filter module to share it from)."""
-    if req.type is not None and event.type not in req.type:
-        return False
-    if req.tenant is not None and event.tenant != req.tenant:
-        return False
-    if req.intentHash is not None and event.payload.get("intentHash") != req.intentHash:
-        return False
-    if req.artifactId is not None and event.payload.get("artifactId") != req.artifactId:
-        return False
-    if req.specHash is not None and event.payload.get("specHash") != req.specHash:
-        return False
-    if req.correlationId is not None and event.payload.get("correlationId") != req.correlationId:
-        return False
-    if req.since is not None and event.ts < req.since:
-        return False
-    if req.until is not None and event.ts > req.until:
-        return False
-    return True
-
-
 def page_lineage_events(events: list[LineageEventRecord], req: LineagePageRequest) -> LineagePage:
     """`StoragePort.page_lineage` for an adapter that already keeps its whole lineage log as a plain
     append-ordered list (port of TS lineage-page.ts's pageLineageArray). `seq` is 1-based position in
@@ -119,7 +93,7 @@ def page_lineage_events(events: list[LineageEventRecord], req: LineagePageReques
     append writes the line and appends to the list in lockstep, and a restart reloads the list in file
     order).
 
-    Scans forward from `req.cursor` (or the start), applying every predicate `req` carries (`_matches`),
+    Scans forward from `req.cursor` (or the start), applying every predicate `req` carries (`matches_lineage_filter`),
     and collects up to `page_size` matches (default DEFAULT_LINEAGE_PAGE_SIZE, clamped to
     MAX_LINEAGE_PAGE_SIZE by clamp_lineage_page_size; also floored at 1 so a `page_size` of 0 or less can never produce a page whose
     `nextCursor` fails to advance, which would otherwise strand a caller looping on `nextCursor` forever).
@@ -135,7 +109,7 @@ def page_lineage_events(events: list[LineageEventRecord], req: LineagePageReques
     has_more = False
     for i in range(after_seq, len(events)):
         event = events[i]
-        if not _matches(event, req):
+        if not matches_lineage_filter(event, req):
             continue
         if len(matches) == page_size:
             has_more = True

@@ -150,7 +150,9 @@ python/
 │  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
 │  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
 │  │  ├─ evals/            # ← packages/evals (judge / schema extractor / golden / FixtureLlm / distillation dataset export)
-│  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
+│  │  ├─ storage/          # ← packages/storage-memory (file.py: FileStoragePort / MemoryStoragePort) +
+│  │  │                    #   storage-redis (redis/) + storage-postgres (postgres/): one module per TS file,
+│  │  │                    #   the drivers are the optional `redis` / `postgres` extras; depends on spec only
 │  │  ├─ authz_hmac/       # ← packages/authz-hmac (HMAC capability AuthzPort with jti revocation + the
 │  │  │                    #   approval-token ApprovalPort; one module per TS file, depends on spec only)
 │  │  ├─ authz_jwt/        # ← packages/authz-jwt (bearer-JWT identity resolver + the JWT AuthzPort whose
@@ -281,6 +283,26 @@ forward-paging extension `page_lineage` (design.md #53), checked at call sites w
 `hasattr(storage, "page_lineage")` probe rather than the `isinstance`-against-a-`runtime_checkable`-Protocol
 mechanism `put_promotion_states` uses — see `kohaku.spec.ports.StoragePort`'s comment on `page_lineage` for
 why.
+
+**`kohaku.storage.redis` / `kohaku.storage.postgres` (the Python ports of `storage-redis` / `storage-postgres`)**:
+the production-shaped `StoragePort` + `CapabilityRevocationStore` adapters for several host instances sharing one
+backend. Install the driver with the extra (`pip install 'kohaku-ui[redis]'`; `pip install
+'kohaku-ui[postgres]'` plus `psycopg[binary]` unless libpq is installed) — `kohaku.storage` itself never imports
+them. They are **data-compatible with the TypeScript adapters**: the Redis key layout and sorted-set indexes, the
+Postgres DDL / `POSTGRES_SCHEMA_VERSION` / advisory-lock migration, and the stored JSON text are the same, so a
+TypeScript host and a Python host can serve one Redis or one database (pinned by the `storageLayout` cross-language
+golden and by the `python-interop` tests, which run the Python adapter against the same backend as the TS one). Both
+declare the optional compare-and-set (`supports_compare_and_set`; `expected_revision` →
+`StorageConflictError`): Redis with WATCH / MULTI / EXEC on a connection redis-py pins to the transaction, Postgres
+with one conditional statement and no DDL change. A redis-py client / psycopg pool is bound to the event loop that
+first uses it, so build the port and serve from one loop (`sales_api.__main__` does). `examples/sales-api` selects the
+backend with the TS sample's variables: `KOHAKU_STORAGE=file|memory|redis|postgres`, `KOHAKU_REDIS_URL`
+(+ `KOHAKU_STORAGE_KEY_PREFIX`), `KOHAKU_POSTGRES_URL` (+ `KOHAKU_POSTGRES_SCHEMA`), and refuses the public demo
+`KOHAKU_CAPABILITY_SECRET` next to a shared backend. The Python storage suite
+(`kohaku/tests/storage/_contract.py`, the mirror of `@kohaku-ui/port-contracts`' `describeStoragePortContract`) runs
+against memory / file / redis / postgres; the Redis / Postgres cases resolve their backend from
+`KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL`, else a throwaway testcontainers container, else skip
+(`KOHAKU_ADAPTER_TESTS=require` forbids the skip, as in CI's `adapters` job; `=skip` forces it).
 
 **`kohaku explain` / DevTools (design.md #54/#55)**: `ComposeTrace.cacheKeyParts` (the `cache_key()`
 call's own components, matching TS byte-for-byte) and the same correlation id described above now also reach
@@ -723,9 +745,8 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
-  the `storage-redis` / `storage-postgres` production adapters;
-  and `admin-react`. None of these are exercised
-  by the conformance suite yet, so the CONFORMANT status above does not cover them.
+  `admin-react`. It is not exercised
+  by the conformance suite yet, so the CONFORMANT status above does not cover it.
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile

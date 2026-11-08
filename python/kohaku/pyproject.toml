@@ -36,6 +36,12 @@ gemini = ["google-genai>=1.0"]
 # Ed25519 signing/verification for Compliance Evidence Packs (kohaku.lineage.evidence). Symmetric with
 # the TS side's WebCrypto usage -- Python has no built-in Ed25519, so this is a real added dependency.
 evidence = ["cryptography>=43"]
+# Shared-backend StoragePort / CapabilityRevocationStore reference adapters (kohaku.storage.redis / .postgres),
+# symmetric with the TS storage-redis / storage-postgres packages whose drivers are peers too. redis-py's asyncio
+# client (`aclose()` needs >= 5.0.1) and psycopg 3 with its separate connection-pool distribution. psycopg needs
+# libpq: install `psycopg[binary]` (or a system libpq) alongside -- the extra deliberately does not pick for you.
+redis = ["redis>=5.2"]
+postgres = ["psycopg[pool]>=3.2"]
 # JWT / OIDC identity resolution (kohaku.authz_jwt). Symmetric with the TS side's `jose` dependency. The
 # `crypto` extra is needed for the asymmetric algorithms a JWKS carries (RS256 / ES256 / EdDSA). Floor 2.14.0
 # (released 2026-09-11, past ADR-0002's 7-day cooldown), per ADR-0002's security-fix exception. Per PyJWT's
@@ -46,7 +52,7 @@ evidence = ["cryptography>=43"]
 # were not opened. The unknown-`kid` cooldown and the cache are this module's own (identity.py), not PyJWKClient's.
 jwt =["PyJWT[crypto]>=2.14.0"]
 # Convenience bundle: every optional feature set, for demos and quickstarts that don't want to pick individually.
-all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence,jwt]"]
+all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence,jwt,redis,postgres]"]
 
 [build-system]
 requires = ["hatchling"]

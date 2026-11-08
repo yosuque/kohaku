@@ -86,9 +86,16 @@ describe.skipIf(backend.mode === "skip")("createRedisStoragePort: compare-and-se
   });
 
   it("closes the dedicated compare-and-set connection of an injected-client port, and leaves the injected client connected", async () => {
-    const client = new Redis(url);
-    const clientsBefore = async () =>
-      Number(/connected_clients:(\d+)/.exec(await client.info("clients"))?.[1]);
+    // Count only this test's connections: a unique connection name is inherited by `duplicate()`, so the
+    // dedicated compare-and-set connection carries it too. The server-wide `connected_clients` figure is
+    // shared with every other suite using the same Redis (Python storage + interop run in parallel) and
+    // made this test flaky.
+    const connectionName = `cas-close-${Math.random().toString(36).slice(2)}`;
+    const client = new Redis(url, { connectionName });
+    const clientsBefore = async () => {
+      const list = String(await client.call("CLIENT", "LIST"));
+      return list.split("\n").filter((line) => line.includes(` name=${connectionName} `)).length;
+    };
     try {
       const port = createRedisStoragePort({ client, keyPrefix: uniquePrefix() });
       const baseline = await clientsBefore();

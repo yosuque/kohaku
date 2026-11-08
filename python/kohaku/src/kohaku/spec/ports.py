@@ -623,6 +623,15 @@ def validate_promotion_state(raw: object) -> PromotionState | None:
     )
 
 
+def normalize_tenant(tenant: str | None) -> str | None:
+    """`None` and `""` both collapse to `None` ("unspecified"); any other tenant passes through unchanged.
+    Every StoragePort tenant parameter (on `PromotionState` / `FixationRecord` / `LineageFilter` and the
+    get / put / list methods) treats an empty-string tenant as equivalent to omitting it; adapters MUST
+    normalize with this helper before using a tenant to key or filter a record, so `""` and `None` can never be
+    keyed or filtered inconsistently against each other. Twin of TS's normalizeTenant."""
+    return tenant if tenant else None
+
+
 class _Unset(Enum):
     """The type of `UNSET`. A single-member enum so `expected_revision is UNSET` narrows for mypy."""
 
