@@ -60,4 +60,17 @@ describe("diffDraft (field-level diff between the suggested draft and the human-
     expect(diff.changed).toEqual([]);
     expect(diff.unchanged).toContain("paramsJsonSchema");
   });
+  it("treats an explicit null as a value distinct from an absent field (only absent compares as empty)", () => {
+    const base: ComponentDraft = {
+      componentType: "x.y",
+      version: "1.0.0",
+      intentName: "x.y",
+      description: "d",
+    };
+    const withNull = { ...base, paramsJsonSchema: null } as ComponentDraft;
+    expect(diffDraft(base, withNull).changed).toEqual([
+      { field: "paramsJsonSchema", suggested: undefined, final: null },
+    ]);
+    expect(diffDraft(withNull, { ...withNull }).changed).toEqual([]);
+  });
 });

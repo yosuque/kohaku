@@ -149,7 +149,7 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation);
 │  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
 │  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
-│  │  ├─ evals/            # ← packages/evals (judge / golden / FixtureLlm / distillation dataset export)
+│  │  ├─ evals/            # ← packages/evals (judge / schema extractor / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ authz_hmac/       # ← packages/authz-hmac (HMAC capability AuthzPort with jti revocation + the
 │  │  │                    #   approval-token ApprovalPort; one module per TS file, depends on spec only)
@@ -670,14 +670,8 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
-  the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the
-  `acknowledged` payload field) and their rubric variants; the analytics `review` block and
-  the `schemaSuggested` / `schemaEdited` counters (the analytics `usage` rows, `l2ByIntent` and
-  `schemaEditsByComponent`, by contrast, are mirrored: `summarize_usage` and `summarize_lineage`,
-  design.md #74 / #73; the `review` block stays unported); rubric 0.4 on the TS side (Python's
-  `kohaku.evals.judge.l2_promotion_rubric` is still at version "0.3", missing
-  `suggestion_fidelity`); the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
-  `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
+  the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
+  and `admin-react`. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant

@@ -8,12 +8,16 @@ Environment variables:
   claude / gemini adapters require the optional extras `kohaku-ui[claude]` / `kohaku-ui[gemini]`)
 - KOHAKU_CAPABILITY_SECRET (default dev-secret-change-me)
 - KOHAKU_DATA_DIR (default python/examples/sales-api/.data)
+- KOHAKU_PROMOTION_SCHEMA_SUGGEST (default on; `0` is the kill switch): LLM auto-extraction of the promotion
+  schema (advisory prefill in Admin > Promotions)
+- KOHAKU_PROMOTION_SCHEMA_SUGGEST_TIMEOUT_MS (default 20000): per-call extraction budget
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from kohaku.authz_hmac import (
@@ -21,6 +25,8 @@ from kohaku.authz_hmac import (
     create_hmac_authz_port,
     create_memory_approval_store,
 )
+from kohaku.evals import SchemaExtractor, create_schema_extractor
+from kohaku.lineage import schema_edit_examples
 from kohaku.llm import LlmPort, create_llm_from_env
 from kohaku.storage import FileStoragePort
 
@@ -34,6 +40,44 @@ def _create_llm() -> LlmPort:
         # The deterministic pseudo LLM (for demos / conformance). To use a real LLM, set KOHAKU_LLM_PROVIDER.
         return create_deterministic_fake_llm()
     return create_llm_from_env()
+
+
+def schema_suggest_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether the promotion schema suggester is wired. On by default; KOHAKU_PROMOTION_SCHEMA_SUGGEST=0 is the
+    kill switch (every LLM-wiring env var carries one so a deployment can shed non-essential LLM spend without
+    shedding compose itself). Mirrors TS sample-api's schemaSuggestEnabled."""
+    source = os.environ if env is None else env
+    return source.get("KOHAKU_PROMOTION_SCHEMA_SUGGEST") != "0"
+
+
+_DEFAULT_SCHEMA_SUGGEST_TIMEOUT_MS = 20_000
+
+
+def schema_suggest_timeout_ms(env: Mapping[str, str] | None = None) -> int:
+    """Parses KOHAKU_PROMOTION_SCHEMA_SUGGEST_TIMEOUT_MS as a positive integer; any other value falls back to
+    the default. Mirrors TS sample-api's schemaSuggestTimeoutMs."""
+    source = os.environ if env is None else env
+    raw = source.get("KOHAKU_PROMOTION_SCHEMA_SUGGEST_TIMEOUT_MS")
+    try:
+        parsed = int(raw) if raw is not None else 0
+    except ValueError:
+        return _DEFAULT_SCHEMA_SUGGEST_TIMEOUT_MS
+    return parsed if parsed > 0 else _DEFAULT_SCHEMA_SUGGEST_TIMEOUT_MS
+
+
+def _create_schema_extractor(llm: LlmPort, storage: FileStoragePort) -> SchemaExtractor | None:
+    """Opt-in at the entry point so the FakeLlm-scripted tests keep their exact response order. The extractor
+    learns from earlier reviewer corrections of its own proposals (component.schemaEdited -> few-shot examples,
+    design.md #73): schema_edit_examples reads the same lineage the host writes. Built once per process but told
+    the tenant on every call: an extraction for a tenant reuses only that tenant's records, and one with no
+    tenant only the tenant-less records."""
+    if not schema_suggest_enabled():
+        return None
+    return create_schema_extractor(
+        llm=llm,
+        timeout_ms=schema_suggest_timeout_ms(),
+        examples=schema_edit_examples(storage, limit=2),
+    )
 
 
 def main() -> None:
@@ -59,7 +103,15 @@ def main() -> None:
     approvals = create_hmac_approval_port(capability_secret, store=create_memory_approval_store())
     # create_app is async because it performs startup reconcile (snapshot authority -> projection). The app is
     # assembled in a separate event loop before uvicorn.run (reconcile is only storage read/write and independent of uvicorn).
-    sales = asyncio.run(create_app(llm=llm, storage=storage, authz=authz, approvals=approvals))
+    sales = asyncio.run(
+        create_app(
+            llm=llm,
+            storage=storage,
+            authz=authz,
+            approvals=approvals,
+            schema_extractor=_create_schema_extractor(llm, storage),
+        )
+    )
 
     port = int(os.environ.get("PORT", "8790"))
     print(f"kohaku sample sales-api (Python): http://localhost:{port}")

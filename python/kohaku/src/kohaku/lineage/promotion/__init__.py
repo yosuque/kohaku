@@ -1,5 +1,6 @@
 """kohaku.lineage.promotion — the L2 -> L1 promotion state machine and service."""
 
+from .examples import SchemaEditExample, SchemaEditExamplesProvider, schema_edit_examples
 from .machine import (
     ComponentDraft,
     JudgeResult,
@@ -27,6 +28,7 @@ from .machine import (
 )
 from .service import (
     DEFAULT_PROMOTION_POLICY,
+    DEFAULT_SUGGEST_CONCURRENCY,
     ArtifactNotFoundError,
     JudgeContext,
     PromotionCandidate,
@@ -39,15 +41,23 @@ from .service import (
     Promotions,
     PublishContext,
     ReconcileSummary,
+    SuggestContext,
+    SuggestSchema,
     UnpublishContext,
     ValidatePublishContext,
     create_promotions,
 )
+from .suggestion import DRAFT_DIFF_FIELDS, DraftDiff, DraftDiffField, DraftFieldChange, diff_draft
 
 __all__ = [
     "DEFAULT_PROMOTION_POLICY",
+    "DEFAULT_SUGGEST_CONCURRENCY",
+    "DRAFT_DIFF_FIELDS",
     "ArtifactNotFoundError",
     "ComponentDraft",
+    "DraftDiff",
+    "DraftDiffField",
+    "DraftFieldChange",
     "JudgeContext",
     "JudgeResult",
     "JudgeStart",
@@ -72,7 +82,11 @@ __all__ = [
     "ReviewReject",
     "ReviewRequestChanges",
     "ReviewStart",
+    "SchemaEditExample",
+    "SchemaEditExamplesProvider",
     "SchemaPropose",
+    "SuggestContext",
+    "SuggestSchema",
     "TransitionError",
     "Unpublish",
     "UnpublishContext",
@@ -80,8 +94,10 @@ __all__ = [
     "Withdraw",
     "component_draft_from_wire",
     "create_promotions",
+    "diff_draft",
     "is_terminal",
     "may_have_projection",
     "query_template_from_wire",
+    "schema_edit_examples",
     "transition",
 ]
