@@ -86,11 +86,13 @@ containers = ["kohaku"]
 # above composer: the framework-free shared host core (fixation delivery + self-healing, capability
 # issuance, error-hook helpers) consumed by host_rest and host_mcp as thin adapters — the same
 # relationship renderer-core has with renderer-react/renderer-wc on the TS side. host_rest / host_mcp /
-# evals are at the top.
+# evals are at the top. semantic_llm (the default SemanticPort, TS: semantic-llm) is an independent sibling of
+# composer: it depends on spec + intents + llm only, and nothing in the framework depends on it (it is a
+# starting point a product wires in, e.g. the sales sample).
 layers = [
     "host_rest | host_mcp | evals",
     "host_core",
-    "composer",
+    "composer | semantic_llm",
     "registry | intents | lineage | storage",
     "data_binding",
     "llm | spec",
@@ -109,7 +111,7 @@ modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "only composer / evals / host_core may import llm (no inflow from lower packages)"
+name = "only composer / evals / host_core / semantic_llm may import llm (no inflow from lower packages)"
 type = "forbidden"
 source_modules = [
     "kohaku.spec",

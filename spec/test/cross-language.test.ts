@@ -54,6 +54,14 @@ import {
 // Relative (not "@kohaku-ui/llm") import, same reasoning as generate-cross-language-fixtures.ts's own llm import.
 import { normalizeVendorBaseUrl } from "../../packages/llm/src/base-url.js";
 import type { LlmProvider } from "../../packages/llm/src/env.js";
+// Relative (not "@kohaku-ui/semantic-llm") import, same reasoning as the composer import above.
+import {
+  buildNormalizeSystemPrompt,
+  buildNormalizeUserPrompt,
+  defaultOutputLocale,
+  normalizeGuiAction,
+} from "../../packages/semantic-llm/src/index.js";
+import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
 
 /**
  * Cross-language golden (TS side). Pins that the TS implementation reproduces the fixture
@@ -87,6 +95,19 @@ interface Fixture {
     designBrief: string[];
     promptRevision: string;
   };
+  semanticGui: (SemanticGuiCase & {
+    output?: { canonical: string; params: JsonObject };
+    error?: string;
+  })[];
+  semanticPrompts: {
+    rules: string[];
+    catalogDoc: string;
+    locale: string;
+    text: string;
+    system: string;
+    user: string;
+  }[];
+  semanticLocale: { tag: string | null; label: string }[];
   llmBaseUrl: {
     provider: LlmProvider;
     baseUrl: string;
@@ -231,6 +252,50 @@ describe("cross-language golden (prompt fragments)", () => {
 
   it("PROMPT_REVISION reproduces the fixture (catches an accidental, unbumped prompt change)", () => {
     expect(PROMPT_REVISION).toBe(fixture.promptFragments.promptRevision);
+  });
+});
+
+describe("cross-language golden (semantic-llm, deterministic pieces)", () => {
+  it("normalizeGuiAction reproduces the fixture (outputs and thrown messages)", async () => {
+    expect(fixture.semanticGui.length).toBeGreaterThan(0);
+    const catalog = createSemanticGuiCatalog();
+    for (const c of fixture.semanticGui) {
+      const current =
+        c.current != null
+          ? {
+              ...c.current,
+              hash: await computeIntentHash({ canonical: c.current.canonical, params: c.current.params }),
+            }
+          : undefined;
+      const input = {
+        kind: "gui" as const,
+        action: c.action,
+        params: c.params,
+        ...(current != null ? { current } : {}),
+      };
+      if (c.error != null) {
+        expect(() => normalizeGuiAction(input, catalog), c.name).toThrow(c.error);
+      } else {
+        expect(normalizeGuiAction(input, catalog), c.name).toEqual(c.output);
+      }
+    }
+  });
+
+  it("buildNormalizeSystemPrompt / buildNormalizeUserPrompt reproduce the fixture byte-for-byte", () => {
+    expect(fixture.semanticPrompts.length).toBeGreaterThan(0);
+    for (const c of fixture.semanticPrompts) {
+      expect(buildNormalizeSystemPrompt(c.rules)).toBe(c.system);
+      expect(buildNormalizeUserPrompt(c.catalogDoc, c.locale, c.text)).toBe(c.user);
+    }
+  });
+});
+
+describe("cross-language golden (semantic-llm, default outputLocale)", () => {
+  it('defaultOutputLocale reproduces the fixture (BCP-47-like tags pass, everything else is "und")', () => {
+    expect(fixture.semanticLocale.length).toBeGreaterThan(0);
+    for (const c of fixture.semanticLocale) {
+      expect(defaultOutputLocale(c.tag ?? undefined), JSON.stringify(c.tag)).toBe(c.label);
+    }
   });
 });
 
