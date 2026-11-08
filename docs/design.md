@@ -912,10 +912,14 @@ in place of `tasks/update`).
 
 - **Tasks are bound to their creator**: `TaskStore.create` takes an `owner`, and `get` / `requestCancel` answer exactly
   like an unknown id for any other owner (a leaked task id alone does not reveal the task, return its completed
-  result — which carries the bearer write capability in `_meta` — or cancel it). The owner is the key the rate limiter
-  would use for the call (`rateLimitKey`, else the resolved principal's id, else the session id, else `"anonymous"`),
-  so the binding is only as strong as that key: without `resolvePrincipal` / `rateLimitKey`, callers that share a
-  connection (or, on stateless HTTP and stdio in TS, everyone) share an owner. A still-working task whose `ttlMs`
+  result — which carries the bearer write capability in `_meta` — or cancel it). The owner is the resolved principal's id
+  when `resolvePrincipal` is wired and resolved a caller-specific id (not the default principal's, which a resolver
+  returns for a guest and which would merge every guest into one owner), else `rateLimitKey`, else the session id, else `"anonymous"` — deliberately not
+  the rate-limit key first, because an IP-based `rateLimitKey` is shared by distinct authenticated principals behind
+  one NAT, who could then read (and cancel) each other's tasks. Without `resolvePrincipal` the principal is the
+  constant anonymous one, so it is only consulted when wired; the binding is then only as strong as the remaining
+  key: without `resolvePrincipal` / `rateLimitKey`, callers that share a connection (or, on stateless HTTP and stdio
+  in TS, everyone) share an owner. A still-working task whose `ttlMs`
   elapses is aborted when purged, and the id echoed in the unknown-task error is capped at 128 characters. Identical
   in the Python port.
 - **Python port** (`kohaku.host_mcp.tasks`, wired in `host_mcp/server.py`): the same design, with
