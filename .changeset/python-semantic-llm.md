@@ -1,5 +1,0 @@
----
-"@kohaku-ui/semantic-llm": minor
----
-
-Python port (`kohaku-ui` on PyPI): new `kohaku.semantic_llm` subpackage, the port of this package. `create_llm_semantic_port` (GUI actions mapped deterministically, NL questions mapped onto an Intent catalog through the LLM's structured output, `fallback_intent`, `max_question_chars`, `on_normalized`, a per-tenant catalog resolver, `validate_intent`) and the mutable `IntentCatalog` / `create_intent_catalog` with a `revision` counter replace the private copy that lived in `examples/sales-api`, which is now a thin configuration of the library port (so its NL prompt gains the TS `USER_QUESTION` delimiter block and its 2000-character question limit). The deterministic GUI mapping and the prompt builders are pinned against the TypeScript output by the cross-language golden fixture (`semanticGui` / `semanticPrompts`). The TypeScript `@kohaku-ui/semantic-llm` is unchanged: it carries no code change in this entry and is listed only because a changeset must name an npm package, and the fixed group moves npm and PyPI to the same version. See `python/README.md`.

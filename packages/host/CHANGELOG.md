@@ -1,5 +1,37 @@
 # @kohaku-ui/host
 
+## 0.6.0
+
+### Minor Changes
+
+- [#127](https://github.com/yosuque/kohaku/pull/127) [`687d437`](https://github.com/yosuque/kohaku/commit/687d437df3117305fc9c69bc33142ff1ad4ff55a) Thanks [@yosuque](https://github.com/yosuque)! - `StoragePort` gains an optional **compare-and-set**, so several host instances sharing one redis / postgres no longer silently lose each other's promotion-state and fixation updates (SPEC Appendix 12, REST-CONF-001 [Draft], design.md [#79](https://github.com/yosuque/kohaku/issues/79)).
+  
+  - **spec-core**: `PromotionState.revision?` (also in `PromotionStateSchema` / `spec/schemas`), `StoragePort.supportsCompareAndSet?: true`, a four-state `expectedRevision` option on `putPromotionState`, `putFixation` and `deleteFixation` (omitted = unconditional, `null` = must not exist, `""` = must exist and carry no `revision`, any other string = must equal), the new `StorageConflictError` (`code: "STORAGE_CONFLICT"`) a mismatch throws without writing, and the `CONFLICT` `HostErrorCode`, plus the `singleProcess` marker. Adapters that do not declare the extension may keep ignoring the option, so existing adapters and fake ports stay valid. The batch `putPromotionStates` stays unconditional, so on a port that declares the extension the lineage service writes bulk nominations one candidate at a time, conditional on the revision the scan loaded, and skips a candidate that lost the race (no `component.nominated` for it) instead of rolling back an approve another instance recorded.
+  - **storage-memory / storage-redis / storage-postgres**: memory, redis and postgres declare it. The file port honors `expectedRevision` (against the snapshot re-read inside its in-process lock) but does **not** declare `supportsCompareAndSet` — its lock does not span processes, so two processes sharing a data directory can still lose updates — and both it and memory mark themselves `singleProcess: true`. redis uses `WATCH` / `MULTI` / `EXEC` (no Lua) on a dedicated connection it opens lazily from the shared client (offline queue and auto-resend off; a reconnect between WATCH and EXEC is refused as a conflict; close() closes it, even for an injected client; the ACL needs `WATCH` / `UNWATCH`); postgres uses one conditional `UPDATE` / `INSERT ... ON CONFLICT DO NOTHING` / `DELETE` on the payload's JSON `revision` (SQLSTATE `40001` also maps to the conflict), with no schema change. `@kohaku-ui/port-contracts` gets an opt-in `requireCompareAndSet` case group.
+  - **lineage**: every promotion snapshot write now carries a fresh `revision` and is conditional on the one the candidate was loaded with; `act()` re-reads the stored revision right before recording its audit event and throws `StorageConflictError` if it moved. Fixation `unfixate` / `invalidate` / `refreshFingerprint` / `replace` pass the revision they read (`fixate` stays an unconditional human overwrite). The persisted promotion state now has a `revision` key.
+  - **host-core / host-rest / host-mcp-apps**: `StorageConflictError` is answered with `409 CONFLICT` (REST also reports it to `onError` under `storage.conflict`; the self-heal `invalidate` / `refreshFingerprint` treat a lost race as a silent no-op) and the fixed message `the resource was modified concurrently; reload and retry` (`STORAGE_CONFLICT_MESSAGE`; a new `conflict` kind of `classifyHostError`), never retried inside the host; MCP returns the same message as a tool error; `applyCatalogMigration` reports a lost race as a skipped step.
+  - **host**: `createKohakuHost` warns once when a custom `storage` declares neither `supportsCompareAndSet` nor `singleProcess`.
+  - **Upgrade note**: a record written before revisions existed is unversioned and is guarded too (a writer that read it expects `""`, "present, no revision"); an old-version writer can still overwrite unconditionally, so upgrade every writer before relying on the extension. A recorded `component.reviewed` approve whose state write lost the race was not applied.
+  - Python port (`kohaku-ui` on PyPI): the same, with `UNSET` meaning "no expectation" (and `""` the unversioned-record state) and keyword-only `expected_revision` parameters on the `StoragePort` Protocol methods (a custom Python port with the old signatures now fails type checking; at runtime it keeps working).
+
+### Patch Changes
+
+- [#113](https://github.com/yosuque/kohaku/pull/113) [`f4a51cf`](https://github.com/yosuque/kohaku/commit/f4a51cfe7caad84c8269201a880d10b14a401c68) Thanks [@yosuque](https://github.com/yosuque)! - `createMcpHttpServer` (`@kohaku-ui/host/mcp-http`) no longer crashes the process on a request-target the URL parser rejects (for example `GET //`, `//[` or `//x:99999`, which parse as protocol-relative references). The URL was parsed outside any error handling whenever `path` or `routes` was set, so the throw became an unhandled rejection. Such a request is now answered with 400 and a JSON-RPC `-32600` `Invalid Request` error.
+- Updated dependencies [[`8274641`](https://github.com/yosuque/kohaku/commit/82746415eb6e7188590d6523fab94e1d41b167fe), [`1d36145`](https://github.com/yosuque/kohaku/commit/1d36145aaaa7d536139bd9c3e2fe9fdbbddcb2f6), [`a6d485e`](https://github.com/yosuque/kohaku/commit/a6d485ef80f441f12ff6340748c8965bb6e578d2), [`0aad4eb`](https://github.com/yosuque/kohaku/commit/0aad4ebd9645542e65da006fabc6fb7cbf850bee), [`2e2cc38`](https://github.com/yosuque/kohaku/commit/2e2cc38451e56bd569e7d8f885bf04ba873b95b7), [`05f2c6d`](https://github.com/yosuque/kohaku/commit/05f2c6d6f51a86e237a285a8e83e353571733a92), [`0d7d372`](https://github.com/yosuque/kohaku/commit/0d7d372a05ab7307d455dd0020fecd25e028fc9f), [`4e28451`](https://github.com/yosuque/kohaku/commit/4e284512c2db9a0e2ac0bd8ab118689fbebe5c10), [`ad4ee22`](https://github.com/yosuque/kohaku/commit/ad4ee22db5d73dcaee0527dc037740325504be85), [`fe69027`](https://github.com/yosuque/kohaku/commit/fe690270abbd5f93c7fbd34fbf11cfc2a9dc2eb7), [`8a7ae32`](https://github.com/yosuque/kohaku/commit/8a7ae3289494017a47d400974140e1bfa809f795), [`f4912b4`](https://github.com/yosuque/kohaku/commit/f4912b47606c8e7595c1bf8642d8a84608f50e75), [`8fb2d04`](https://github.com/yosuque/kohaku/commit/8fb2d0419712e14951821934bfe489c558a87c07), [`b9261af`](https://github.com/yosuque/kohaku/commit/b9261af8790bd7cb184ba846f1c6324037c66947), [`e4ae97d`](https://github.com/yosuque/kohaku/commit/e4ae97d43bc90c75370da22ec5f13ed83ce22a0a), [`235333e`](https://github.com/yosuque/kohaku/commit/235333edc2277461e59ac7c2b38e0e3d2262722a), [`156e8fb`](https://github.com/yosuque/kohaku/commit/156e8fbfe2e87bcf31bb457d1d194cdf5f7946c1), [`7878e0e`](https://github.com/yosuque/kohaku/commit/7878e0ee6f57c9100f8e6d9c39e22ac39be11c58), [`8d50be6`](https://github.com/yosuque/kohaku/commit/8d50be647b2cc19d7fce639803c31169f4a6a49d), [`687d437`](https://github.com/yosuque/kohaku/commit/687d437df3117305fc9c69bc33142ff1ad4ff55a)]:
+  - @kohaku-ui/lineage@0.6.0
+  - @kohaku-ui/host-core@0.6.0
+  - @kohaku-ui/host-rest@0.6.0
+  - @kohaku-ui/authz-hmac@0.6.0
+  - @kohaku-ui/spec-core@0.6.0
+  - @kohaku-ui/host-mcp-apps@0.6.0
+  - @kohaku-ui/data-binding@0.6.0
+  - @kohaku-ui/registry@0.6.0
+  - @kohaku-ui/intents@0.6.0
+  - @kohaku-ui/semantic-llm@0.6.0
+  - @kohaku-ui/composer@0.6.0
+  - @kohaku-ui/llm@0.6.0
+  - @kohaku-ui/storage-memory@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

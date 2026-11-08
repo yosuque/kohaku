@@ -1,5 +1,15 @@
 # @kohaku-ui/evals
 
+## 0.6.0
+
+### Patch Changes
+
+- [#123](https://github.com/yosuque/kohaku/pull/123) [`235333e`](https://github.com/yosuque/kohaku/commit/235333edc2277461e59ac7c2b38e0e3d2262722a) Thanks [@yosuque](https://github.com/yosuque)! - Python port (`kohaku-ui` on PyPI): the promotion-review features that previously existed only in TypeScript are now ported. `kohaku.lineage` records `component.schemaSuggested` / `component.schemaEdited` (with `acknowledged`), takes the `suggest_schema` / `suggest_concurrency` hook on `create_promotions`, carries `suggestion` on promotion candidates and accepts `approve(..., acknowledged_suggestion=...)` (wired to `POST /promotions/:id/approve`'s `acknowledgedSuggestion`); `summarize_lineage` gains the `review` block (`acceptedAsIs` included) and the `schemaSuggested` / `schemaEdited` counters; `schema_edit_examples` supplies reviewer-corrected few-shot examples. `kohaku.evals` moves its L2 promotion rubric to version 0.4 (`suggestion_fidelity`, the `no-schema` variant, `l2_promotion_rubric_v0_3`, `JudgeInput.draft` / `.suggestion`) and adds `create_schema_extractor` (extractor version 0.2). The judge's system and user prompts are pinned byte for byte against the TypeScript judge by a new `judgePrompts` cross-language golden. The TypeScript packages carry no code change in this entry (a doc comment on `l2PromotionRubricV0_3` no longer calls the Python rubric stale) and are listed only because a changeset must name an npm package, and the fixed group moves npm and PyPI to the same version. See `python/README.md`.
+- Updated dependencies [[`a6d485e`](https://github.com/yosuque/kohaku/commit/a6d485ef80f441f12ff6340748c8965bb6e578d2), [`0aad4eb`](https://github.com/yosuque/kohaku/commit/0aad4ebd9645542e65da006fabc6fb7cbf850bee), [`0d7d372`](https://github.com/yosuque/kohaku/commit/0d7d372a05ab7307d455dd0020fecd25e028fc9f), [`4e28451`](https://github.com/yosuque/kohaku/commit/4e284512c2db9a0e2ac0bd8ab118689fbebe5c10), [`ad4ee22`](https://github.com/yosuque/kohaku/commit/ad4ee22db5d73dcaee0527dc037740325504be85), [`fe69027`](https://github.com/yosuque/kohaku/commit/fe690270abbd5f93c7fbd34fbf11cfc2a9dc2eb7), [`8fb2d04`](https://github.com/yosuque/kohaku/commit/8fb2d0419712e14951821934bfe489c558a87c07), [`8d50be6`](https://github.com/yosuque/kohaku/commit/8d50be647b2cc19d7fce639803c31169f4a6a49d), [`687d437`](https://github.com/yosuque/kohaku/commit/687d437df3117305fc9c69bc33142ff1ad4ff55a)]:
+  - @kohaku-ui/spec-core@0.6.0
+  - @kohaku-ui/composer@0.6.0
+  - @kohaku-ui/llm@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

@@ -1,5 +1,12 @@
 # @kohaku-ui/otel
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies [[`4e28451`](https://github.com/yosuque/kohaku/commit/4e284512c2db9a0e2ac0bd8ab118689fbebe5c10), [`ad4ee22`](https://github.com/yosuque/kohaku/commit/ad4ee22db5d73dcaee0527dc037740325504be85)]:
+  - @kohaku-ui/composer@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

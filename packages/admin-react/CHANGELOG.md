@@ -1,5 +1,25 @@
 # @kohaku-ui/admin-react
 
+## 0.6.0
+
+### Minor Changes
+
+- [#118](https://github.com/yosuque/kohaku/pull/118) [`8274641`](https://github.com/yosuque/kohaku/commit/82746415eb6e7188590d6523fab94e1d41b167fe) Thanks [@yosuque](https://github.com/yosuque)! - A successful `POST /approvals` now records an `action.approvalIssued` lineage event (SPEC LIN-ACT-001, design.md [#72](https://github.com/yosuque/kohaku/issues/72)), so an auditor can see that an approval was minted and an approver's inbox can tell "issued, not yet used" from "not yet approved".
+  
+  - The event's **actor is the approver** (the one `action.*` event whose actor is not the requester). Its payload is `{ action, payloadHash, requesterId, approverId, ttlSeconds, expiresAt }`; it carries no token id (`jti`) or anything the token could be rebuilt from. `expiresAt` is computed by the host as issue time + `ttlSeconds` (the `ApprovalPort` does not report its own expiry), so it is advisory: it differs from the real expiry when the port's own default TTL differs from `DEFAULT_APPROVAL_TTL_SECONDS` or when the port clamps the lifetime.
+  - Recording is fail-open and happens only after issuance succeeded; a recorder failure is reported to `onError` (`approvals.audit`) and the response stays 200. `ActionAuditRecorder.approvalIssued` (and lineage's `RestActionAuditRecorder.approvalIssued`) is **optional**, so a custom recorder keeps working unchanged; `createActionAuditRecorder` (lineage) implements it. MCP is unchanged (it has no issuance tool).
+  - **Evidence packs**: `action.approvalIssued` is now listed in `approvals.jsonl`, so the `approvals` count and `manifest` hash of a pack built over a window that contains one differ from before.
+  - `@kohaku-ui/admin-react`: the Approvals tab reads the new event (`PendingApproval.issued`) and shows "Issued by … — recorded expiry in …" as information only (the recorded expiry is the requested TTL and advisory, so it never disables Approve; only a token minted in the current page session does). Settlement is still decided by `action.approved` alone; an expired issuance is ignored. `derivePendingApprovals` takes an optional `{ now }`. New `AdminMessages.approvals.issuedBy` (a custom `AdminMessages` object must add it); `approveDisabledIssued` now describes the page-session case only.
+  - Python port (`kohaku-ui` on PyPI): the same event, recorder method, evidence inclusion and `POST /approvals` recording.
+
+### Patch Changes
+
+- Updated dependencies [[`a6d485e`](https://github.com/yosuque/kohaku/commit/a6d485ef80f441f12ff6340748c8965bb6e578d2), [`0aad4eb`](https://github.com/yosuque/kohaku/commit/0aad4ebd9645542e65da006fabc6fb7cbf850bee), [`0d7d372`](https://github.com/yosuque/kohaku/commit/0d7d372a05ab7307d455dd0020fecd25e028fc9f), [`ad4ee22`](https://github.com/yosuque/kohaku/commit/ad4ee22db5d73dcaee0527dc037740325504be85), [`8d50be6`](https://github.com/yosuque/kohaku/commit/8d50be647b2cc19d7fce639803c31169f4a6a49d), [`687d437`](https://github.com/yosuque/kohaku/commit/687d437df3117305fc9c69bc33142ff1ad4ff55a)]:
+  - @kohaku-ui/spec-core@0.6.0
+  - @kohaku-ui/client@0.6.0
+  - @kohaku-ui/renderer-core@0.6.0
+  - @kohaku-ui/sandbox@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

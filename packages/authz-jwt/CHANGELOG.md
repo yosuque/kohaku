@@ -1,5 +1,33 @@
 # @kohaku-ui/authz-jwt
 
+## 0.6.0
+
+### Minor Changes
+
+- [#122](https://github.com/yosuque/kohaku/pull/122) [`a6d485e`](https://github.com/yosuque/kohaku/commit/a6d485ef80f441f12ff6340748c8965bb6e578d2) Thanks [@yosuque](https://github.com/yosuque)! - Capability tokens can now carry a signed `tenant` (SPEC CAP-TEN-001 issuance / CAP-TEN-002 data plane, [Draft]), which fixes `KOHAKU_AUTHZ=jwt` on the REST data plane: `/binding/*` used to resolve no tenant, so an `"approve"`-tier Action could never run (its approval token is bound to the approver's tenant), audit records had no tenant, and the rate limit shared one anonymous bucket.
+  
+  - `spec-core`: `AuthzPort.issueCapability(…, { ttlSeconds?, tenant? })`, `VerifyResult.tenant?` and `InvocationContext.tenant?` (all optional).
+  - `authz-hmac`: the HMAC payload gains an optional `tenant` claim (an older verifier ignores it) and `createHmacAuthzPort({ requireTenant })` refuses tenant-less tokens, like `requireJti`.
+  - `authz-jwt`: `createJwtAuthzPort({ requireCapabilityTenant })` passes it through (distinct from the inherited `requireTenant`, which governs the bearer JWT's own claim).
+  - `host-core`: `issueCapabilityForSpec`, `issueCapabilityForRefs` and `issueSpecCapabilitySafely` take `options.tenant`.
+  - `host-rest`: compose, events, the stream and the promotion preview bind the resolved tenant. `/binding/resolve` and `/binding/action` treat the capability's tenant as authoritative: it reaches `DomainPort.invoke` as `InvocationContext.tenant`, scopes the approval binding and audit records, and a different `deps.tenant` is `403 CAPABILITY_DENIED`. A capability without a tenant still falls back to `deps.tenant`. Behaviour change: the `/binding/*` rate limit now runs inside the handlers after the capability verified, keyed by `(capability tenant, capability sub, routeClass)`, so requests that fail verification no longer consume or hit the limiter.
+  
+  Also in this change:
+  
+  - `host-mcp-apps`'s `${prefix}_resolve_binding` and `${prefix}_action` carry a tenant a verified capability binds (for example one minted by REST) through to `domain.invoke`, the approval binding and the audit; MCP still resolves and issues no tenant. (`@kohaku-ui/host-mcp-apps`: minor.)
+  - The tenant claim is at most 256 characters with no control characters; `issueCapability` throws on an invalid one and `verify` treats it, or an explicit `null`, as a malformed payload.
+  - `/binding/action` checks for the bearer before parsing the body.
+  - Observability: `/binding/*` 429s and `onRateLimited` (now with `tenant` set) concern verified token holders only; unauthenticated floods show up as 401, 403 or 400, and are bounded only by the body limit, HMAC verification and (with revocation) a store lookup, so put a coarse IP or route limiter in front of the host.
+  - Rollout: enable `requireTenant` / `requireCapabilityTenant` only after every issuing host is upgraded (older tokens are tenant-less for up to the TTL).
+  - Python: custom `AuthzPort`s should add `tenant: str | None = None` to `issue_capability` (the value may be ignored). The Protocol now requires it, so the old signature fails mypy; at runtime the REST host degrades to tenant-less issuance for such a port and reports once through `on_error` (`capability.tenant_unsupported`).
+
+### Patch Changes
+
+- [#126](https://github.com/yosuque/kohaku/pull/126) [`1d36145`](https://github.com/yosuque/kohaku/commit/1d36145aaaa7d536139bd9c3e2fe9fdbbddcb2f6) Thanks [@yosuque](https://github.com/yosuque)! - `@kohaku-ui/authz-jwt`: the default claim mapping now rejects a bearer JWT whose tenant claim is over 256 UTF-16 code units or contains a control character, with a new `JwtIdentityError` code `INVALID_TENANT` (a 401 in the sample hosts). Such a tenant used to pass identity resolution and then fail at capability issuance as a 500. `@kohaku-ui/authz-hmac` exports the `isValidTenantClaim` rule so both packages apply the identical check.
+- Updated dependencies [[`1d36145`](https://github.com/yosuque/kohaku/commit/1d36145aaaa7d536139bd9c3e2fe9fdbbddcb2f6), [`a6d485e`](https://github.com/yosuque/kohaku/commit/a6d485ef80f441f12ff6340748c8965bb6e578d2), [`0aad4eb`](https://github.com/yosuque/kohaku/commit/0aad4ebd9645542e65da006fabc6fb7cbf850bee), [`0d7d372`](https://github.com/yosuque/kohaku/commit/0d7d372a05ab7307d455dd0020fecd25e028fc9f), [`ad4ee22`](https://github.com/yosuque/kohaku/commit/ad4ee22db5d73dcaee0527dc037740325504be85), [`f4912b4`](https://github.com/yosuque/kohaku/commit/f4912b47606c8e7595c1bf8642d8a84608f50e75), [`8d50be6`](https://github.com/yosuque/kohaku/commit/8d50be647b2cc19d7fce639803c31169f4a6a49d), [`687d437`](https://github.com/yosuque/kohaku/commit/687d437df3117305fc9c69bc33142ff1ad4ff55a)]:
+  - @kohaku-ui/authz-hmac@0.6.0
+  - @kohaku-ui/spec-core@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes
