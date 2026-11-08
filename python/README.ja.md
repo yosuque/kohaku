@@ -149,6 +149,8 @@ python/
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
 │  │  ├─ authz_hmac/       # ← packages/authz-hmac(jti 失効つきの HMAC capability AuthzPort と、approval
 │  │  │                    #   トークンの ApprovalPort。TS のファイルごとに 1 モジュール、依存先は spec のみ)
+│  │  ├─ authz_jwt/        # ← packages/authz-jwt(bearer JWT の identity resolver と、capability を
+│  │  │                    #   authz_hmac に委ねる JWT AuthzPort。extra `jwt` が必要。依存先は spec + authz_hmac)
 │  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
 │  │  │                    #   (← intent.ts)+ allowed_actions.py(← allowed-actions.ts)+
 │  │  │                    #   action_effects.py(← action-effects.ts)+ view_recorder.py
@@ -519,7 +521,33 @@ capability と approval のトークン一式を固定して、Python の port �
 `generate_jti` を**テスト専用**の注入点として受け取る(TS は壁時計と `randomBytes` を直接参照する)。本番では
 決して設定しないこと(乱数でない `generate_jti` は jti が衝突して失効と 1 回限りの承認を壊し、ずれた `now` は
 あらゆる期限をずらす)。TS と同じく、ファクトリは秘密鍵を必須とし、開発用の fallback を与えるのは sales
-サンプルの入口だけである(`KOHAKU_CAPABILITY_SECRET`)。`python/examples/sales-api` の
+サンプルの入口だけである(`KOHAKU_CAPABILITY_SECRET`)。
+
+JWT / OIDC の identity 側は `kohaku.authz_jwt` である(TS の `packages/authz-jwt` のミラー。extra `jwt`
+(`pip install 'kohaku-ui[jwt]'`)で PyJWT を `crypto` extra 付きで入れる。依存先は `kohaku.spec` と
+`kohaku.authz_hmac` のみ)。`create_jwt_identity_resolver(JwtSecretKey(secret) | JwtJwksKey(jwks) | JwtJwksUrlKey(url),
+issuer=, audience=, clock_tolerance_seconds=, algorithms=, claims=JwtClaimNames(...), map_claims=, require_tenant=)` は
+bearer トークンを検証し、`sub / name / roles / tenant` を `Principal` とテナントに写す(`resolve(token)` /
+`from_authorization_header(header)`。失敗は `JwtIdentityError` のコード `MISSING_TOKEN / INVALID_TOKEN /
+MISSING_SUBJECT / MISSING_TENANT / INVALID_TENANT`。256 UTF-16 コードユニットを超える、または制御文字を含む
+tenant クレームは `INVALID_TENANT` で、`authz_hmac` が capability に tenant を束縛するときの規則と同じ)。
+構築時の規則は TS と同じである(32 バイト以上の secret、JWKS では
+`audience` 必須、JWKS の URL は `https:` かローカルの `http:` のみ)。`create_jwt_authz_port(key,
+capability_secret=, ..., require_capability_tenant=False)` はその resolver(`.identity`)を、`authz_hmac` の
+capability トークンと組み合わせる。capability は全面的に `authz_hmac` に委譲するので、TS が発行した capability
+はここで検証でき、逆も成り立つ。トークンには jose と同じ判定が返る。JWKS の鍵選択は jose と同じで
+(`kty` / `crv` / `alg` / `use` / `key_ops` / `kid` による絞り込み、残った候補をすべて試す、`kid` の無い
+トークンも許す)、鍵は `PyJWK` として PyJWT に渡すのでヘッダの `alg` が鍵に束縛され、`exp` / `nbf` / `iat` は
+JSON の数値でなければならず、PyJWT が既定で足す検査(`sub` / `jti` の型、未来の `iat`、audience 未設定時の
+`aud`)は切ってある。リモートの JWKS は PyJWT の `PyJWKClient` で取得する(取得だけを担当。http(s) 以外の
+スキームとリダイレクトを拒否する。イベントループの外で実行、タイムアウト 5 秒)。キャッシュはこのモジュール自身が
+jose と同じ方針で持つ: 10 分間信頼し、未知の `kid` による再取得は 30 秒に 1 回まで、並行する解決は進行中の
+取得を 1 つ共有する。リダイレクトを拒否する最初のリリースが `PyJWT` 2.14.0 なので、下限を `>=2.14.0` にしている。
+sales サンプルの `KOHAKU_AUTHZ=jwt` モード(`KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` /
+`KOHAKU_JWT_AUDIENCE` / `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_REQUIRE_TENANT` / `KOHAKU_DEMO_ADMIN_ROUTES`。
+TS サンプルと同じ)は REST 入口と MCP 入口の両方で動く(MCP プロファイルは各ツール呼び出しの主体を、その
+呼び出し自身の HTTP bearer トークンから、fail-closed で解決する。stdio には HTTP リクエストが無いので、jwt では
+stdio の呼び出しはすべて `MISSING_TOKEN` で失敗する)。`python/examples/sales-api` の
 `annotate`(`"confirm"` tier)と `publish`(`"approve"` tier)operation、および
 `sales_api_tests/test_governed_actions.py` は、TS サンプル自身の統制された Action デモを写している(全体の
 手順は[ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。
@@ -625,7 +653,7 @@ failed catalog/structure validation」という文言とは別物にし、この
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):**
-  `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、
+  `storage-redis` / `storage-postgres` の本番アダプタ、
   `admin-react`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
 

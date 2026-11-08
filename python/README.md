@@ -153,6 +153,8 @@ python/
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ authz_hmac/       # ← packages/authz-hmac (HMAC capability AuthzPort with jti revocation + the
 │  │  │                    #   approval-token ApprovalPort; one module per TS file, depends on spec only)
+│  │  ├─ authz_jwt/        # ← packages/authz-jwt (bearer-JWT identity resolver + the JWT AuthzPort whose
+│  │  │                    #   capabilities are authz_hmac's; needs the `jwt` extra; depends on spec + authz_hmac)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
 │  │  │                    #   (← intent.ts) + allowed_actions.py (← allowed-actions.ts) +
 │  │  │                    #   action_effects.py (← action-effects.ts) + view_recorder.py
@@ -555,7 +557,32 @@ revocation-store contract suites (`python/kohaku/tests/authz_hmac/_contract.py`)
 `now` and `generate_jti` (TS reads the wall clock and `randomBytes` directly) as **test-only** injection points so
 tests and the golden can pin them: never set them in production (a non-random `generate_jti` collides jti values,
 which breaks revocation and single-use approvals, and a skewed `now` shifts every expiry). As in TS the factories
-require a secret; only the sales sample's entry points supply a dev fallback (`KOHAKU_CAPABILITY_SECRET`). `python/examples/sales-api`'s
+require a secret; only the sales sample's entry points supply a dev fallback (`KOHAKU_CAPABILITY_SECRET`).
+
+The JWT / OIDC identity side is `kohaku.authz_jwt` (the mirror of TS's `packages/authz-jwt`; install the `jwt` extra,
+`pip install 'kohaku-ui[jwt]'`, which pulls PyJWT with its `crypto` extra; depends on `kohaku.spec` and
+`kohaku.authz_hmac` only). `create_jwt_identity_resolver(JwtSecretKey(secret) | JwtJwksKey(jwks) | JwtJwksUrlKey(url),
+issuer=, audience=, clock_tolerance_seconds=, algorithms=, claims=JwtClaimNames(...), map_claims=, require_tenant=)`
+verifies a bearer token and maps `sub / name / roles / tenant` to a `Principal` + tenant (`resolve(token)` /
+`from_authorization_header(header)`, failing with `JwtIdentityError` codes `MISSING_TOKEN / INVALID_TOKEN /
+MISSING_SUBJECT / MISSING_TENANT / INVALID_TENANT`; a tenant claim over 256 UTF-16 code units or holding a control
+character is `INVALID_TENANT`, the rule `authz_hmac` applies when binding a tenant into a capability); the same
+construction-time rules as TS apply (a secret of at least 32 bytes, `audience` mandatory for a JWKS, `https:` or local
+`http:` JWKS URLs only). `create_jwt_authz_port(key,
+capability_secret=, ..., require_capability_tenant=False)` pairs that resolver (`.identity`) with `authz_hmac`'s
+capability tokens, which it delegates to entirely, so a TS-issued capability verifies in it and the reverse. A token
+gets the same verdict as under jose: JWKS key selection is jose's (`kty` / `crv` / `alg` / `use` / `key_ops` / `kid`
+filter, every candidate tried, a token without `kid` allowed), the key is handed to PyJWT as a `PyJWK` so the header
+`alg` is bound to it, `exp` / `nbf` / `iat` must be JSON numbers, and PyJWT's extra default checks (`sub` / `jti` type,
+`iat` in the future, `aud` when none is configured) are switched off. A remote JWKS is fetched with PyJWT's
+`PyJWKClient` (the fetcher only: it refuses non-http(s) schemes and redirects; run off the event loop, 5 s timeout)
+under this module's own jose-style cache: trusted for 10 minutes, refetched at most once per 30 seconds on an unknown
+`kid`, and concurrent resolutions share one in-flight fetch. The first release with the redirect refusal is
+`PyJWT` 2.14.0, hence the `>=2.14.0` floor. The sales sample's `KOHAKU_AUTHZ=jwt` mode (`KOHAKU_JWT_SECRET` /
+`KOHAKU_JWT_JWKS_URL` / `KOHAKU_JWT_AUDIENCE` / `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_REQUIRE_TENANT` /
+`KOHAKU_DEMO_ADMIN_ROUTES`, as in the TS sample) works on both the REST entry and the MCP entries (the MCP profile
+resolves each tool call's principal from that call's own HTTP bearer token, fail-closed; stdio has no HTTP request, so
+every stdio call fails with `MISSING_TOKEN` under jwt). `python/examples/sales-api`'s
 `annotate` (`"confirm"` tier) and `publish` (`"approve"` tier) operations, and
 `sales_api_tests/test_governed_actions.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
@@ -670,7 +697,7 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
-  the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
+  the `storage-redis` / `storage-postgres` production adapters;
   and `admin-react`. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
 
