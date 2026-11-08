@@ -56,7 +56,7 @@ async function makeApp() {
       return [];
     },
   };
-  const llm = new FakeLlm({ objects: [trendDraft()] });
+  const llm = new FakeLlm({ objects: [trendDraft(), trendDraft()] });
   const built = await createApp({ llm, storage, authz: createHmacAuthzPort("test-secret") });
   return { app: built.app, llm };
 }
@@ -134,5 +134,29 @@ describe("L1 filter injection in the sample API", () => {
     expect(await resolveStatus(app, skeletonCap, variant)).toBe(403);
     expect(await resolveStatus(app, finalCap, variant)).toBe(200);
     expect(llm.calls).toHaveLength(1);
+  });
+
+  it("a Japanese session gets Japanese filter labels (session.locale reaches describeFilters) and is cached separately", async () => {
+    const { app } = await makeApp();
+    const compose = async (locale: string) => {
+      const res = await app.request("/api/kohaku/compose", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: { canonical: "sales.trend", params: {} },
+          session: { surface: "web", locale },
+        }),
+      });
+      expect(res.status).toBe(200);
+      return (await res.json()) as { spec: UISpec };
+    };
+    const labels = (spec: UISpec): Record<string, unknown> =>
+      Object.fromEntries(
+        spec.components.filter((c) => c.type === "control.select").map((c) => [c.id, c.props["label"]]),
+      );
+    const ja = await compose("ja");
+    expect(labels(ja.spec)).toEqual({ "filter-granularity": "粒度", "filter-metric": "指標" });
+    const en = await compose("en");
+    expect(labels(en.spec)).toEqual({ "filter-granularity": "Granularity", "filter-metric": "Metric" });
   });
 });

@@ -37,6 +37,7 @@ _REF = "query://sales/summary?fy=2026&groupBy=region&q=3"
 GROUP_BY = FilterDescriptor(
     param="groupBy",
     queryParam="groupBy",
+    paths=["summary"],
     label="Group by",
     options=[
         FilterOption("region", "By region"),
@@ -103,7 +104,9 @@ def _ctx(
 
 
 def _describe(descriptors: list[FilterDescriptor]) -> _DescribeFilters:
-    async def describe(intent: Intent, *, tenant: str | None = None) -> list[FilterDescriptor]:
+    async def describe(
+        intent: Intent, *, tenant: str | None = None, locale: str | None = None
+    ) -> list[FilterDescriptor]:
         return descriptors
 
     return describe
@@ -158,7 +161,9 @@ def test_is_off_by_default_no_injection_no_trace_filters_and_describe_filters_ne
     async def run() -> None:
         called = 0
 
-        async def describe(intent: Intent, *, tenant: str | None = None) -> list[FilterDescriptor]:
+        async def describe(
+            intent: Intent, *, tenant: str | None = None, locale: str | None = None
+        ) -> list[FilterDescriptor]:
             nonlocal called
             called += 1
             return [GROUP_BY]
@@ -207,10 +212,14 @@ def test_delivers_the_spec_as_generated_without_describe_filters_or_with_none_or
     tmp_path: Any,
 ) -> None:
     async def run() -> None:
-        async def empty(intent: Intent, *, tenant: str | None = None) -> list[FilterDescriptor]:
+        async def empty(
+            intent: Intent, *, tenant: str | None = None, locale: str | None = None
+        ) -> list[FilterDescriptor]:
             return []
 
-        async def boom(intent: Intent, *, tenant: str | None = None) -> list[FilterDescriptor]:
+        async def boom(
+            intent: Intent, *, tenant: str | None = None, locale: str | None = None
+        ) -> list[FilterDescriptor]:
             raise RuntimeError("boom")
 
         for i, semantic in enumerate((_Semantic(), _Semantic(empty), _Semantic(boom))):
@@ -231,6 +240,7 @@ def test_falls_back_to_the_uninjected_spec_and_records_the_reason_when_the_varia
         many = FilterDescriptor(
             param="groupBy",
             queryParam="groupBy",
+            paths=["summary"],
             label="Group by",
             options=[
                 FilterOption("region", "region"),
@@ -250,7 +260,7 @@ def test_falls_back_to_the_uninjected_spec_and_records_the_reason_when_the_varia
     asyncio.run(run())
 
 
-def test_passes_the_resolved_tenant_to_describe_filters_and_no_locale(tmp_path: Any) -> None:
+def test_passes_the_resolved_tenant_and_session_locale_to_describe_filters(tmp_path: Any) -> None:
     async def run() -> None:
         seen: list[dict[str, Any]] = []
 
@@ -260,10 +270,183 @@ def test_passes_the_resolved_tenant_to_describe_filters_and_no_locale(tmp_path: 
 
         await compose(
             _INPUT,
-            _ctx(tmp_path, ComposePolicy(l1Filters=True), semantic=_Semantic(describe)),
+            _ctx(tmp_path / "a", ComposePolicy(l1Filters=True), semantic=_Semantic(describe)),
             ComposeOptions(session=SessionContext(surface="web", tenant="acme", locale="ja")),
         )
-        assert seen == [{"tenant": "acme"}]
+        await compose(
+            _INPUT,
+            _ctx(tmp_path / "b", ComposePolicy(l1Filters=True), semantic=_Semantic(describe)),
+        )
+        assert seen == [{"tenant": "acme", "locale": "ja"}, {"tenant": None, "locale": None}]
+
+    asyncio.run(run())
+
+
+_WIDENED = replace(GROUP_BY, options=[*GROUP_BY.options, FilterOption("weekday", "By weekday")])
+
+
+def test_changing_options_labels_or_paths_yields_a_different_cache_key(tmp_path: Any) -> None:
+    async def run() -> None:
+        keys: set[str] = set()
+        for i, d in enumerate(
+            (
+                GROUP_BY,
+                _WIDENED,
+                replace(GROUP_BY, label="Group by (renamed)"),
+                replace(GROUP_BY, paths=["summary", "trend"]),
+            )
+        ):
+            result = await compose(
+                _INPUT,
+                _ctx(
+                    tmp_path / str(i),
+                    ComposePolicy(l1Filters=True),
+                    semantic=_Semantic(_describe([d])),
+                ),
+            )
+            keys.add(result.trace.cacheKey)
+        assert len(keys) == 4
+        off = await compose(
+            _INPUT,
+            _ctx(tmp_path / "off", ComposePolicy(), semantic=_Semantic(_describe([GROUP_BY]))),
+        )
+        assert off.trace.cacheKey not in keys
+        same_a = await compose(_INPUT, _ctx(tmp_path / "sa", ComposePolicy(l1Filters=True)))
+        same_b = await compose(
+            _INPUT,
+            _ctx(
+                tmp_path / "sb",
+                ComposePolicy(l1Filters=True),
+                semantic=_Semantic(_describe([replace(GROUP_BY)])),
+            ),
+        )
+        assert same_a.trace.cacheKey == same_b.trace.cacheKey
+
+    asyncio.run(run())
+
+
+def _bind_values(spec: UISpec) -> list[str] | None:
+    for c in spec.components:
+        if c.data is not None and c.data.bind is not None:
+            return list(c.data.bind["groupBy"].values)
+    return None
+
+
+def test_tenant_specific_descriptors_do_not_share_a_cached_spec(tmp_path: Any) -> None:
+    async def run() -> None:
+        async def describe(
+            intent: Intent, *, tenant: str | None = None, locale: str | None = None
+        ) -> list[FilterDescriptor]:
+            return [GROUP_BY if tenant == "narrow" else _WIDENED]
+
+        base = _ctx(tmp_path, ComposePolicy(l1Filters=True), semantic=_Semantic(describe))
+        wide = await compose(
+            _INPUT,
+            base,
+            ComposeOptions(session=SessionContext(surface="web", tenant="wide")),
+        )
+        narrow = await compose(
+            _INPUT,
+            replace(base, llm=FakeLlm(objects=[_draft()])),
+            ComposeOptions(session=SessionContext(surface="web", tenant="narrow")),
+        )
+        # The narrow tenant is a miss that regenerates; it never receives the wide tenant's authorized range.
+        assert narrow.trace.cache == "miss"
+        assert narrow.trace.cacheKey != wide.trace.cacheKey
+        assert "weekday" in (_bind_values(wide.spec) or [])
+        assert "weekday" not in (_bind_values(narrow.spec) or [])
+        again = await compose(
+            _INPUT,
+            replace(base, llm=FakeLlm(objects=[])),
+            ComposeOptions(session=SessionContext(surface="web", tenant="narrow")),
+        )
+        assert again.trace.cache == "hit"
+        assert _bind_values(again.spec) == _bind_values(narrow.spec)
+
+    asyncio.run(run())
+
+
+def test_session_locales_are_cached_separately_and_carry_their_own_labels(tmp_path: Any) -> None:
+    async def run() -> None:
+        async def describe(
+            intent: Intent, *, tenant: str | None = None, locale: str | None = None
+        ) -> list[FilterDescriptor]:
+            return [replace(GROUP_BY, label="集計軸") if locale == "ja" else GROUP_BY]
+
+        base = _ctx(tmp_path, ComposePolicy(l1Filters=True), semantic=_Semantic(describe))
+        en = await compose(
+            _INPUT, base, ComposeOptions(session=SessionContext(surface="web", locale="en"))
+        )
+        ja = await compose(
+            _INPUT,
+            replace(base, llm=FakeLlm(objects=[_draft()])),
+            ComposeOptions(session=SessionContext(surface="web", locale="ja")),
+        )
+        assert ja.trace.cache == "miss"
+        assert ja.trace.cacheKey != en.trace.cacheKey
+
+        def label(spec: UISpec) -> object:
+            return next(c for c in spec.components if c.type == "control.select").props["label"]
+
+        assert label(en.spec) == "Group by"
+        assert label(ja.spec) == "集計軸"
+
+    asyncio.run(run())
+
+
+def test_l1_filters_max_variants_caps_the_injection_and_joins_the_cache_key_only_when_not_64(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        # 3 options x 2 data components = 6 variants.
+        tight = await compose(
+            _INPUT, _ctx(tmp_path / "t", ComposePolicy(l1Filters=True, l1FiltersMaxVariants=5))
+        )
+        assert tight.trace.filters is not None
+        assert tight.trace.filters.injected == []
+        assert tight.trace.filters.skipped == "variant-limit"
+        assert tight.spec.state is None
+        roomy = await compose(
+            _INPUT, _ctx(tmp_path / "r", ComposePolicy(l1Filters=True, l1FiltersMaxVariants=6))
+        )
+        assert roomy.trace.filters is not None and roomy.trace.filters.injected == ["groupBy"]
+        dflt = await compose(_INPUT, _ctx(tmp_path / "d", ComposePolicy(l1Filters=True)))
+        explicit = await compose(
+            _INPUT, _ctx(tmp_path / "e", ComposePolicy(l1Filters=True, l1FiltersMaxVariants=64))
+        )
+        assert explicit.trace.cacheKey == dflt.trace.cacheKey
+        assert roomy.trace.cacheKey != dflt.trace.cacheKey
+        assert tight.trace.cacheKey != roomy.trace.cacheKey
+
+    asyncio.run(run())
+
+
+def test_records_skipped_invalid_at_compose_level_when_the_generated_root_cannot_host_controls(
+    tmp_path: Any,
+) -> None:
+    async def run() -> None:
+        # A single-component screen: the root is the chart itself (no children), so there is nowhere to put a control.
+        leaf_root = {
+            "components": [
+                {
+                    "id": "root",
+                    "type": "presentChart",
+                    "props": {"kind": "bar", "x": "region", "y": "revenue"},
+                    "data": {"$ref": _REF},
+                }
+            ],
+            "events": [],
+        }
+        result = await compose(
+            _INPUT,
+            _ctx(tmp_path, ComposePolicy(l1Filters=True), llm=FakeLlm(objects=[leaf_root])),
+        )
+        assert result.spec.provenance.fallback is None
+        assert result.spec.provenance.tier == "L1"
+        assert result.spec.state is None
+        assert result.trace.filters is not None
+        assert result.trace.filters.injected == []
+        assert result.trace.filters.skipped == "invalid"
 
     asyncio.run(run())
 
@@ -323,9 +506,9 @@ def test_compose_stream_converges_on_the_injected_spec_in_its_single_final_patch
         patches = [e for e in events if isinstance(e, StreamPatchEvent)]
         last = patches[-1]
         assert last.spec.state == {"groupBy": "region"}
-        # Exactly the last patch is marked final (the host attaches the bind-variant capability to it).
-        assert [p.final for p in patches].count(True) == 1
-        assert last.final is True
+        # Exactly the last patch is marked converged (the host attaches the bind-variant capability to it).
+        assert [p.converged for p in patches].count(True) == 1
+        assert last.converged is True
         assert isinstance(events[-1], StreamDoneEvent)
 
     asyncio.run(run())

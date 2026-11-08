@@ -9,6 +9,7 @@ import { type FilterDescriptor, SPEC_VERSION, type UISpec } from "@kohaku-ui/spe
 const REGION: FilterDescriptor = {
   param: "region",
   queryParam: "geo",
+  paths: ["summary"],
   label: "Region",
   options: [
     { value: "japan", label: "Japan" },
@@ -19,6 +20,7 @@ const REGION: FilterDescriptor = {
 const GROUP_BY: FilterDescriptor = {
   param: "groupBy",
   queryParam: "groupBy",
+  paths: ["summary"],
   label: "Group by",
   options: [
     { value: "region", label: "By region" },
@@ -28,6 +30,7 @@ const GROUP_BY: FilterDescriptor = {
 const WIDE: FilterDescriptor = {
   param: "region",
   queryParam: "geo",
+  paths: ["summary"],
   label: "Region",
   options: Array.from({ length: 130 }, (_, i) => ({
     value: i === 0 ? "europe" : `r${i}`,
@@ -58,7 +61,43 @@ export interface InjectFiltersCase {
   name: string;
   spec: UISpec;
   descriptors: FilterDescriptor[];
+  /** `ComposePolicy.l1FiltersMaxVariants`; omitted = the default (64). */
+  maxVariants?: number;
 }
+
+/** REGION with a duplicated option value (first wins). */
+const REGION_DUP_OPTIONS: FilterDescriptor = {
+  ...REGION,
+  options: [
+    { value: "europe", label: "Europe" },
+    { value: "japan", label: "Japan" },
+    { value: "europe", label: "Europe again" },
+  ],
+};
+
+/** 32 options x 2 data components = 64 variants (the default cap), 33 x 2 = 66 (over it). */
+function regionWithOptions(n: number): FilterDescriptor {
+  return {
+    ...REGION,
+    options: Array.from({ length: n }, (_, i) => ({
+      value: i === 0 ? "europe" : `r${i}`,
+      label: `Region ${i}`,
+    })),
+  };
+}
+
+const withOwnBind: UISpec = (() => {
+  const base = l1Spec(REF);
+  return {
+    ...base,
+    state: { own: "europe" },
+    components: base.components.map((c) =>
+      c.id === "table1"
+        ? { ...c, data: { $ref: REF, bind: { geo: { $state: "own", values: ["europe", "japan"] } } } }
+        : c,
+    ),
+  };
+})();
 
 export const INJECT_FILTERS_CASES: InjectFiltersCase[] = [
   { name: "one filter, two data components", spec: l1Spec(REF), descriptors: [REGION] },
@@ -95,6 +134,48 @@ export const INJECT_FILTERS_CASES: InjectFiltersCase[] = [
     spec: { ...l1Spec(REF), state: { region: "japan" } },
     descriptors: [REGION],
   },
+  {
+    name: "a component on another path is not bound and does not count",
+    spec: l1Spec(REF, "query://sales/trend?geo=europe&groupBy=region"),
+    descriptors: [REGION],
+  },
+  {
+    name: "no data component reads a path the descriptors govern",
+    spec: l1Spec(REF),
+    descriptors: [
+      { ...REGION, paths: ["trend"] },
+      { ...GROUP_BY, paths: [] },
+    ],
+  },
+  {
+    name: "a component already bound on the query param is left alone",
+    spec: withOwnBind,
+    descriptors: [REGION],
+  },
+  {
+    name: "duplicate option values are de-duplicated, first wins",
+    spec: l1Spec(REF),
+    descriptors: [REGION_DUP_OPTIONS],
+  },
+  {
+    name: "a second descriptor for the same param, and one rebinding the same queryParam, are ignored",
+    spec: l1Spec(REF),
+    descriptors: [REGION, { ...REGION, label: "Other" }, { ...GROUP_BY, param: "area", queryParam: "geo" }],
+  },
+  {
+    name: "a Spec that cannot carry state / bind (kohaku 0.1) fails validation",
+    spec: { ...l1Spec(REF), kohaku: "0.1" },
+    descriptors: [REGION],
+  },
+  { name: "64 variants fit the default cap", spec: l1Spec(REF), descriptors: [regionWithOptions(32)] },
+  { name: "66 variants exceed the default cap", spec: l1Spec(REF), descriptors: [regionWithOptions(33)] },
+  {
+    name: "an explicit cap admits 66 variants",
+    spec: l1Spec(REF),
+    descriptors: [regionWithOptions(33)],
+    maxVariants: 66,
+  },
+  { name: "an explicit cap rejects 6 variants", spec: l1Spec(REF), descriptors: [REGION], maxVariants: 5 },
 ];
 
 export interface PolicyFingerprintCase {
@@ -106,7 +187,10 @@ export interface PolicyFingerprintCase {
     allowL2?: boolean;
     effort?: { l1?: "low" | "medium" | "high"; l2?: "low" | "medium" | "high" };
     l1Filters?: boolean;
+    l1FiltersMaxVariants?: number;
   };
+  /** The descriptors `describeFilters` returned for the compose; their hash is the fingerprint's third input. */
+  descriptors?: FilterDescriptor[];
 }
 
 export const POLICY_FINGERPRINT_CASES: PolicyFingerprintCase[] = [
@@ -116,6 +200,25 @@ export const POLICY_FINGERPRINT_CASES: PolicyFingerprintCase[] = [
   { name: "l1Filters true with an output language", policy: { outputLanguage: "Japanese", l1Filters: true } },
   { name: "output language alone", policy: { outputLanguage: "Japanese" } },
   { name: "allowL2 true with l1Filters true", policy: { allowL2: true, l1Filters: true } },
+  { name: "l1FiltersMaxVariants 64 is the default", policy: { l1Filters: true, l1FiltersMaxVariants: 64 } },
+  { name: "l1FiltersMaxVariants 32", policy: { l1Filters: true, l1FiltersMaxVariants: 32 } },
+  { name: "l1FiltersMaxVariants without l1Filters is ignored", policy: { l1FiltersMaxVariants: 32 } },
+  { name: "l1Filters true with descriptors", policy: { l1Filters: true }, descriptors: [REGION] },
+  {
+    name: "l1Filters true with other descriptors",
+    policy: { l1Filters: true },
+    descriptors: [REGION, GROUP_BY],
+  },
+  {
+    name: "l1Filters true with the same options relabelled",
+    policy: { l1Filters: true },
+    descriptors: [{ ...REGION, label: "地域" }],
+  },
+  {
+    name: "l1Filters false ignores descriptors",
+    policy: { l1Filters: false },
+    descriptors: [REGION],
+  },
   {
     name: "refConstraint validate with effort",
     policy: { refConstraint: "validate", effort: { l1: "low" } },

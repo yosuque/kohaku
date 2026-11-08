@@ -11,6 +11,7 @@ import { injectFilters } from "../src/post/inject-filters.js";
 const REGION: FilterDescriptor = {
   param: "region",
   queryParam: "geo",
+  paths: ["summary"],
   label: "Region",
   options: [
     { value: "japan", label: "Japan" },
@@ -21,6 +22,7 @@ const REGION: FilterDescriptor = {
 const GROUP_BY: FilterDescriptor = {
   param: "groupBy",
   queryParam: "groupBy",
+  paths: ["summary"],
   label: "Group by",
   options: [
     { value: "region", label: "By region" },
@@ -99,6 +101,7 @@ describe("injectFilters", () => {
     const big: FilterDescriptor = {
       param: "region",
       queryParam: "geo",
+      paths: ["summary"],
       label: "Region",
       options: Array.from({ length: 130 }, (_, i) => ({
         value: i === 0 ? "europe" : `r${i}`,
@@ -183,5 +186,101 @@ describe("injectFilters", () => {
     const before = JSON.stringify(input);
     injectFilters(input, [REGION, GROUP_BY]);
     expect(JSON.stringify(input)).toBe(before);
+  });
+
+  it("binds only the data components whose $ref path is one of the descriptor's paths", () => {
+    const input = l1Spec(REF, "query://sales/trend?geo=europe&groupBy=region");
+    const out = injectFilters(input, [REGION]);
+    expect(out.injected).toEqual(["region"]);
+    const byId = new Map(out.spec.components.map((c) => [c.id, c]));
+    expect(byId.get("chart1")?.data?.bind).toBeDefined();
+    // The table reads another path (trend) that happens to carry the same query parameter name: untouched.
+    expect(byId.get("table1")?.data).toEqual({ $ref: "query://sales/trend?geo=europe&groupBy=region" });
+    // Only the governed component counts for the current value / variants.
+    expect(collectCapabilityScopes(out.spec).filter((s) => s.kind === "read")).toHaveLength(4);
+  });
+
+  it("injects nothing when no data component reads a path the descriptor governs", () => {
+    const out = injectFilters(l1Spec(REF), [
+      { ...REGION, paths: ["trend"] },
+      { ...GROUP_BY, paths: [] },
+    ]);
+    expect(out.injected).toEqual([]);
+    expect(out.skipped).toBeUndefined();
+  });
+
+  it("leaves a component already bound on the query param to its own declaration (the filter is skipped)", () => {
+    const input = l1Spec(REF);
+    input.components[2] = {
+      ...input.components[2]!,
+      data: { $ref: REF, bind: { geo: { $state: "own", values: ["europe", "japan"] } } },
+    };
+    const withState: UISpec = { ...input, state: { own: "europe" } };
+    expect(injectFilters(withState, [REGION]).injected).toEqual([]);
+  });
+
+  it("skips a descriptor whose queryParam is in the reserved `_` namespace", () => {
+    const reserved: FilterDescriptor = { ...REGION, queryParam: "_limit" };
+    expect(injectFilters(l1Spec("query://sales/summary?_limit=europe"), [reserved]).injected).toEqual([]);
+  });
+
+  it("de-duplicates options by value (first wins) for both the control and the bind values", () => {
+    const dup: FilterDescriptor = {
+      ...REGION,
+      options: [
+        { value: "europe", label: "Europe" },
+        { value: "japan", label: "Japan" },
+        { value: "europe", label: "Europe again" },
+      ],
+    };
+    const out = injectFilters(l1Spec(REF), [dup]);
+    const control = out.spec.components.find((c) => c.id === "filter-region");
+    expect(control?.props["options"]).toEqual([
+      { value: "europe", label: "Europe" },
+      { value: "japan", label: "Japan" },
+    ]);
+    expect(out.spec.components.find((c) => c.id === "chart1")?.data?.bind).toEqual({
+      geo: { $state: "region", values: ["europe", "japan"] },
+    });
+  });
+
+  it("ignores a second descriptor for the same param, and one that rebinds the same queryParam on an overlapping path", () => {
+    const sameParam = injectFilters(l1Spec(REF), [REGION, { ...REGION, label: "Other" }]);
+    expect(sameParam.injected).toEqual(["region"]);
+    const sameQueryParam = injectFilters(l1Spec(REF), [
+      REGION,
+      { ...GROUP_BY, param: "area", queryParam: "geo" },
+    ]);
+    expect(sameQueryParam.injected).toEqual(["region"]);
+  });
+
+  it("is idempotent: a second pass finds the ids taken and injects nothing", () => {
+    const once = injectFilters(l1Spec(REF), [REGION, GROUP_BY]);
+    const twice = injectFilters(once.spec, [REGION, GROUP_BY]);
+    expect(twice.injected).toEqual([]);
+    expect(twice.spec).toBe(once.spec);
+  });
+
+  it("returns invalid when the injected Spec fails structural validation (kohaku 0.1 cannot carry state / bind)", () => {
+    const legacy: UISpec = { ...l1Spec(REF), kohaku: "0.1" };
+    const out = injectFilters(legacy, [REGION]);
+    expect(out.skipped).toBe("invalid");
+    expect(out.spec).toBe(legacy);
+  });
+
+  it("caps the variants at maxVariants (default 64, never above spec-core's 256)", () => {
+    const opts = (n: number): FilterDescriptor => ({
+      ...REGION,
+      options: Array.from({ length: n }, (_, i) => ({ value: i === 0 ? "europe" : `r${i}`, label: `r${i}` })),
+    });
+    // 2 data components x 32 values = 64: at the default cap.
+    expect(injectFilters(l1Spec(REF), [opts(32)]).injected).toEqual(["region"]);
+    // 2 x 33 = 66 > 64.
+    expect(injectFilters(l1Spec(REF), [opts(33)]).skipped).toBe("variant-limit");
+    // An explicit cap changes the answer both ways.
+    expect(injectFilters(l1Spec(REF), [opts(33)], { maxVariants: 66 }).injected).toEqual(["region"]);
+    expect(injectFilters(l1Spec(REF), [opts(3)], { maxVariants: 5 }).skipped).toBe("variant-limit");
+    // ...but never above MAX_BIND_VARIANTS (2 x 130 = 260).
+    expect(injectFilters(l1Spec(REF), [opts(130)], { maxVariants: 10_000 }).skipped).toBe("variant-limit");
   });
 });

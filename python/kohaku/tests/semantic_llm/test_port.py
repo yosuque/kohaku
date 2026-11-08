@@ -420,6 +420,7 @@ class TestDescribeFilters:
             FilterDescriptor(
                 param="groupBy",
                 queryParam="by",
+                paths=["summary"],
                 label="Group by",
                 options=[FilterOption("region", "region"), FilterOption("product", "product")],
             )

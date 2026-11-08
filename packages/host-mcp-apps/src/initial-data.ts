@@ -320,21 +320,24 @@ export async function preresolveInitialData(
       if (variant !== initial) secondaryRefs.push(variant);
     }
   }
+  // Dedup while preserving the initial-then-secondary priority order (the budget loop below walks this same
+  // order), so a ref shared by several components/variants is resolved exactly once regardless of concurrency.
+  // The non-initial refs are de-duplicated (and exclude every initial ref) BEFORE the cap below, so the cap counts
+  // distinct refs rather than repeats.
+  const orderedRefs = [...new Set(initialRefs)];
+  const seenRefs = new Set<string>(orderedRefs);
+  const distinctSecondary: string[] = [];
+  for (const ref of secondaryRefs) {
+    if (seenRefs.has(ref)) continue;
+    seenRefs.add(ref);
+    distinctSecondary.push(ref);
+  }
   // Bound the eager fan-out: a Spec can carry up to MAX_BIND_VARIANTS (256) variants (ComposePolicy.l1Filters
   // injects them), and pre-resolving all of them would cost that many upstream calls on every compose even
   // though the 100,000-char budget could embed only a few. Beyond the cap a variant is simply resolved on
-  // demand (kohaku_resolve_binding), exactly like any ref that did not fit the budget.
-  secondaryRefs.length = Math.min(secondaryRefs.length, PRERESOLVE_MAX_SECONDARY_REFS);
-
-  // Dedup while preserving the initial-then-secondary priority order (the budget loop below walks this same
-  // order), so a ref shared by several components/variants is resolved exactly once regardless of concurrency.
-  const orderedRefs: string[] = [];
-  const seenRefs = new Set<string>();
-  for (const ref of [...initialRefs, ...secondaryRefs]) {
-    if (seenRefs.has(ref)) continue;
-    seenRefs.add(ref);
-    orderedRefs.push(ref);
-  }
+  // demand (kohaku_resolve_binding), exactly like any ref that did not fit the budget. Applies regardless of
+  // l1Filters (a hand-written or promoted Spec with a wide data.bind is capped the same way).
+  orderedRefs.push(...distinctSecondary.slice(0, PRERESOLVE_MAX_SECONDARY_REFS));
 
   const session = createReadGuardSession(ctx);
   const resolved = await resolveRefsBounded(

@@ -373,12 +373,12 @@ kohaku のスキーマ段階の `data.$ref` 偽造防止(TS `docs/design.md` §1
 
 `ComposePolicy(l1Filters=True)`(既定 `False`)で、L1 で生成した Spec への決定的なフィルタ注入を有効にする。TS の `ComposePolicy.l1Filters`(design.md #78)と対応する:
 
-- `kohaku.intents`: `IntentDef.filters(params, locale=None)` が、Intent の `facets` と `queries[].paramMap` から `FilterDescriptor`(`kohaku.spec`)を導出する。
-- `kohaku.semantic_llm`: 既定のポートが任意の `describe_filters(intent, *, tenant=None, locale=None)` を実装する。composer は `getattr` で探す(`SupportsDescribeFilters`)。キャッシュキーがロケールを含まないので、ロケールは渡さない。
-- `kohaku.composer.inject_filters.inject_filters` が後処理(`normalize_ids` の後、`canonical_props` の前。L1 のみ)。出力は、言語間の golden(`cross-language-canonical.json` の `l1Filters`)で TS とバイト単位で一致することを固定している。`policy_fingerprint` のバイト列も同様(`l1Filters` は `True` のときだけ、欠けたキーとして入る)。
-- `kohaku.host_rest` の `/compose/stream`: 最後の patch が置き換えの `capability` を運ぶ(`StreamPatchEvent.final`)。`kohaku.host_mcp` は、先読みする初期でない bind の変種を最大 32 にする。`examples/sales-api` で有効。
+- `kohaku.intents`: `IntentDef.filters(locale=None)` が、Intent の `facets` と `queries[].paramMap` から `FilterDescriptor`(`kohaku.spec`。`param`・`queryParam`・`paths`・`label`・`options`)を導出する。query param が `fixedParams` のキーでもある、または同じ path で別の Intent param と共有されているフィルタは除外する。
+- `kohaku.semantic_llm`: 既定のポートが任意の `describe_filters(intent, *, tenant=None, locale=None)` を実装する。composer は `getattr` で探し(`SupportsDescribeFilters`)、セッションのテナントとロケールを渡す。
+- `kohaku.composer.inject_filters.inject_filters` が後処理(`normalize_ids` の後、`canonical_props` の前。L1 のみ。`max_variants` の既定は 64 = `ComposePolicy.l1FiltersMaxVariants`)。descriptor のハッシュ(`filter_descriptors_hash`)と上限が `policy_fingerprint` に入る(`l1Filters` は `True` のときだけ、欠けたキーとして入る)ので、別のロケールやテナント固有の選択肢は別々にキャッシュされる。`inject_filters` の出力、descriptor のハッシュ、fingerprint のバイト列は、言語間の golden(`cross-language-canonical.json` の `l1Filters`)で TS とバイト単位で一致することを固定している。
+- `kohaku.host_rest` の `/compose/stream`: 最後の patch(`StreamPatchEvent.converged`)が置き換えの `capability` と `actions` を運ぶ。`kohaku.host_mcp` は、ポリシーによらず、先読みする初期でない bind の変種を最大 32 にする。`examples/sales-api` で有効。
 
-Python の名前に関する注: ポリシーのフィールドは `l1_filters` ではなく `l1Filters`(camelCase。`ComposePolicy` のワイヤに近いフィールドと同じ)。
+Python の名前に関する注: ポリシーのフィールドは `l1_filters` ではなく `l1Filters` / `l1FiltersMaxVariants`(camelCase。`ComposePolicy` のワイヤに近いフィールドと同じ)。
 
 ## 推論エフォート / ティアごとの LLM(TS と対称)
 

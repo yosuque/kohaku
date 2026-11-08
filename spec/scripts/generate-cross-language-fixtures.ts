@@ -59,7 +59,7 @@ import {
 } from "../../packages/composer/src/design-system.js";
 // Relative, same reasoning: inject-filters.ts imports only spec-core; policy-fingerprint.ts imports only
 // spec-core at runtime (its llm / context imports are type-only and erased).
-import { policyFingerprint } from "../../packages/composer/src/policy-fingerprint.js";
+import { filterDescriptorsHash, policyFingerprint } from "../../packages/composer/src/policy-fingerprint.js";
 import { injectFilters } from "../../packages/composer/src/post/inject-filters.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
 // Relative rather than "@kohaku-ui/lineage": spec does not declare a dependency on lineage either
@@ -464,12 +464,13 @@ async function main(): Promise<void> {
   // ComposePolicy.l1Filters: composer's deterministic filter injection and the policyFingerprint bytes it
   // contributes to the cache key. Inputs live in test/l1-filters-cases.ts (shared with the TS test); the Python
   // port reads them back out of this fixture and must reproduce the outputs exactly.
-  const injectFiltersCases = INJECT_FILTERS_CASES.map(({ name, spec: input, descriptors }) => {
-    const out = injectFilters(input, descriptors);
+  const injectFiltersCases = INJECT_FILTERS_CASES.map(({ name, spec: input, descriptors, maxVariants }) => {
+    const out = injectFilters(input, descriptors, maxVariants != null ? { maxVariants } : {});
     return {
       name,
       spec: input,
       descriptors,
+      ...(maxVariants != null ? { maxVariants } : {}),
       expected: {
         spec: out.spec,
         injected: out.injected,
@@ -478,11 +479,15 @@ async function main(): Promise<void> {
     };
   });
   const policyFingerprintCases = await Promise.all(
-    POLICY_FINGERPRINT_CASES.map(async ({ name, policy }) => ({
-      name,
-      policy,
-      fingerprint: await policyFingerprint(policy),
-    })),
+    POLICY_FINGERPRINT_CASES.map(async ({ name, policy, descriptors }) => {
+      const descriptorsHash = await filterDescriptorsHash(descriptors);
+      return {
+        name,
+        policy,
+        ...(descriptors != null ? { descriptors, descriptorsHash: descriptorsHash ?? null } : {}),
+        fingerprint: await policyFingerprint(policy, undefined, descriptorsHash),
+      };
+    }),
   );
 
   const exampleSpec = parseSpec(

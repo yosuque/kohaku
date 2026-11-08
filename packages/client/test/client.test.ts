@@ -945,16 +945,22 @@ describe("readComposeStream SSE framing", () => {
 
   it("surfaces a patch event's optional replacement capability (typed event too)", async () => {
     const wire = [
-      'event: patch\ndata: {"patch":{"upsert":[]},"capability":"cap-final"}\n\n',
+      'event: patch\ndata: {"patch":{"upsert":[]},"capability":"cap-final","actions":{"annotate":{"tier":"auto"}}}\n\n',
       'event: patch\ndata: {"patch":{"upsert":[]}}\n\n',
     ];
     const events = await collect(readComposeStream(sseStream(wire)));
-    expect(events[0]).toEqual({ kind: "patch", patch: { upsert: [] }, capability: "cap-final" });
+    expect(events[0]).toEqual({
+      kind: "patch",
+      patch: { upsert: [] },
+      capability: "cap-final",
+      actions: { annotate: { tier: "auto" } },
+    });
     expect(events[1]).toEqual({ kind: "patch", patch: { upsert: [] } });
     expect(toComposeStreamEvent(events[0]!)).toEqual({
       kind: "patch",
       patch: { upsert: [] },
       capability: "cap-final",
+      actions: { annotate: { tier: "auto" } },
     });
   });
 

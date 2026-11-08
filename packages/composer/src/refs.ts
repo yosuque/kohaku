@@ -71,6 +71,7 @@ export async function resolveRefs(
   intent: CanonicalIntent,
   ctx: ComposeContext,
   tenant?: string,
+  locale?: string,
 ): Promise<ResolvedRefs> {
   // Propagate tenant to resolveQuery to correctly resolve per-tenant promoted Intents.
   // A resolveQuery failure is wrapped as SEMANTIC_FAILED here (fixation.ts's materializeFixation shares
@@ -101,13 +102,18 @@ export async function resolveRefs(
     );
   }
 
-  // Intent-declared filters for L1 injection (ComposePolicy.l1Filters). No locale is passed: the composed Spec
-  // is cached under a locale-free key, so descriptor labels must not vary by caller. A failure only means
-  // "no filters" (an optional enhancement must not fail the compose), like describeShape above.
+  // Intent-declared filters for L1 injection (ComposePolicy.l1Filters). The session's locale selects the label
+  // language; prepareCompose folds a hash of the returned descriptors into the cache key, so Specs for
+  // different locales / tenant option lists are cached separately. A failure only means "no filters" (an
+  // optional enhancement must not fail the compose), like describeShape above.
   let descriptors: FilterDescriptor[] | undefined;
   if (ctx.policy?.l1Filters === true && ctx.semantic.describeFilters != null) {
     try {
-      descriptors = await ctx.semantic.describeFilters(intent, tenant != null ? { tenant } : undefined);
+      const describeCtx = { ...(tenant != null ? { tenant } : {}), ...(locale != null ? { locale } : {}) };
+      descriptors = await ctx.semantic.describeFilters(
+        intent,
+        Object.keys(describeCtx).length > 0 ? describeCtx : undefined,
+      );
     } catch {
       descriptors = undefined;
     }

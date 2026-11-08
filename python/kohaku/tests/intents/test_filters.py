@@ -72,16 +72,18 @@ def test_derives_a_descriptor_per_string_select_facet_mapping_query_param_throug
     definition = _summary()
     filters = definition.to_intent_def().filters
     assert filters is not None
-    assert filters({}) == [
+    assert filters() == [
         FilterDescriptor(
             param="groupBy",
             queryParam="groupBy",
+            paths=["summary"],
             label="Group by",
             options=[FilterOption("region", "By region"), FilterOption("product", "By product")],
         ),
         FilterDescriptor(
             param="region",
             queryParam="geo",
+            paths=["summary"],
             label="Region",
             options=[
                 FilterOption("japan", "Japan"),
@@ -93,6 +95,7 @@ def test_derives_a_descriptor_per_string_select_facet_mapping_query_param_throug
         FilterDescriptor(
             param="metric",
             queryParam="m",
+            paths=["summary"],
             label="Metric",
             options=[FilterOption("revenue", "revenue"), FilterOption("units", "units")],
         ),
@@ -112,13 +115,13 @@ def test_excludes_numeric_param_and_control_number_facets() -> None:
     )
     filters = definition.to_intent_def().filters
     assert filters is not None
-    assert filters({}) == []
+    assert filters() == []
 
 
 def test_applies_the_locale_overlay_to_facet_and_option_labels_falling_back_to_canonical() -> None:
     filters = _summary().to_intent_def().filters
     assert filters is not None
-    out = {f.param: f for f in filters({}, "ja")}
+    out = {f.param: f for f in filters("ja")}
     assert out["groupBy"].label == "集計軸"
     assert out["region"].label == "Region"
     assert out["region"].options[0] == FilterOption("japan", "日本")
@@ -148,7 +151,7 @@ def test_skips_ambiguous_and_unmapped_params() -> None:
     filters = definition.to_intent_def().filters
     assert filters is not None
     # groupBy maps to g1 and g2 (ambiguous); region is in no paramMap at all.
-    assert filters({}) == []
+    assert filters() == []
 
 
 def test_absent_when_queries_is_a_callback() -> None:
@@ -171,3 +174,52 @@ def test_absent_when_queries_is_a_callback() -> None:
 def test_does_not_change_to_facet_view_output() -> None:
     view = _summary().to_facet_view()
     assert [f.key for f in view.facets] == ["fiscalYear", "groupBy", "region", "metric"]
+
+
+def test_falls_back_from_a_regional_tag_to_its_primary_subtag_then_to_canonical() -> None:
+    filters = _summary().to_intent_def().filters
+    assert filters is not None
+    jp = {f.param: f for f in filters("ja-JP")}
+    assert jp["groupBy"].label == "集計軸"
+    assert jp["region"].options[0] == FilterOption("japan", "日本")
+    fr = {f.param: f for f in filters("fr-CA")}
+    assert fr["groupBy"].label == "Group by"
+
+
+def test_collects_every_template_path_and_excludes_filters_whose_query_param_is_fixed_or_shared() -> (
+    None
+):
+    definition = define_intent(
+        IntentSpec(
+            canonical="sales.paths",
+            description="Paths",
+            source="sales",
+            params=object_schema(
+                {
+                    "groupBy": group_by.enum().default("region"),
+                    "region": region.enum().optional(),
+                    "other": EnumField(values=("a", "b")).default("a"),
+                    "fixedClash": EnumField(values=("x", "y")).default("x"),
+                }
+            ),
+            examples=[],
+            facets=[
+                FacetSpec(param="groupBy", label="Group by", options=group_by),
+                FacetSpec(param="region", label="Region", options=region),
+                FacetSpec(param="other", label="Other"),
+                FacetSpec(param="fixedClash", label="Fixed clash"),
+            ],
+            queries=[
+                QueryTemplate(path="a", paramMap={"groupBy": "g", "region": "geo", "other": "geo"}),
+                QueryTemplate(
+                    path="b", paramMap={"groupBy": "g"}, fixedParams={"mode": "full", "clash": "1"}
+                ),
+                QueryTemplate(path="c", paramMap={"fixedClash": "clash"}),
+            ],
+        )
+    )
+    filters = definition.to_intent_def().filters
+    assert filters is not None
+    # groupBy governs a and b; region/other both map "geo" on path a (two params, one queryParam => both
+    # excluded); fixedClash's queryParam is a fixed parameter of path b (excluded).
+    assert [(f.param, f.paths) for f in filters()] == [("groupBy", ["a", "b"])]

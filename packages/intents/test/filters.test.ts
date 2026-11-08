@@ -41,11 +41,12 @@ function summary(overrides: { facets?: Parameters<typeof defineIntent>[0]["facet
 describe("IntentDef.filters", () => {
   it("derives a descriptor per string-valued select facet, mapping queryParam through paramMap", () => {
     const def = summary().toIntentDef();
-    const filters = def.filters?.({});
+    const filters = def.filters?.();
     expect(filters).toEqual([
       {
         param: "groupBy",
         queryParam: "groupBy",
+        paths: ["summary"],
         label: "Group by",
         options: [
           { value: "region", label: "By region" },
@@ -55,6 +56,7 @@ describe("IntentDef.filters", () => {
       {
         param: "region",
         queryParam: "geo",
+        paths: ["summary"],
         label: "Region",
         options: [
           { value: "japan", label: "Japan" },
@@ -66,6 +68,7 @@ describe("IntentDef.filters", () => {
       {
         param: "metric",
         queryParam: "m",
+        paths: ["summary"],
         label: "Metric",
         options: [
           { value: "revenue", label: "revenue" },
@@ -82,12 +85,12 @@ describe("IntentDef.filters", () => {
         { param: "groupBy", label: "Group by", control: "number", options: groupBy },
       ],
     }).toIntentDef();
-    expect(def.filters?.({})).toEqual([]);
+    expect(def.filters?.()).toEqual([]);
   });
 
   it("applies the locale overlay to the facet label and the option labels, falling back to canonical", () => {
     const def = summary().toIntentDef();
-    const filters = def.filters?.({}, "ja") ?? [];
+    const filters = def.filters?.("ja") ?? [];
     expect(filters.find((f) => f.param === "groupBy")?.label).toBe("集計軸");
     expect(filters.find((f) => f.param === "region")?.label).toBe("Region");
     expect(filters.find((f) => f.param === "region")?.options[0]).toEqual({ value: "japan", label: "日本" });
@@ -114,7 +117,45 @@ describe("IntentDef.filters", () => {
       ],
     }).toIntentDef();
     // groupBy maps to g1 and g2 (ambiguous); region is in no paramMap at all.
-    expect(def.filters?.({})).toEqual([]);
+    expect(def.filters?.()).toEqual([]);
+  });
+
+  it("falls back from a regional tag to its primary subtag (ja-JP -> ja) and then to canonical", () => {
+    const def = summary().toIntentDef();
+    const jp = def.filters?.("ja-JP") ?? [];
+    expect(jp.find((f) => f.param === "groupBy")?.label).toBe("集計軸");
+    expect(jp.find((f) => f.param === "region")?.options[0]).toEqual({ value: "japan", label: "日本" });
+    const fr = def.filters?.("fr-CA") ?? [];
+    expect(fr.find((f) => f.param === "groupBy")?.label).toBe("Group by");
+  });
+
+  it("collects every template path that maps the param, and excludes a filter whose queryParam is fixed or shared", () => {
+    const def = defineIntent({
+      canonical: "sales.paths",
+      description: "Paths",
+      source: "sales",
+      params: z.object({
+        groupBy: groupBy.enum().default("region"),
+        region: region.enum().optional(),
+        other: z.enum(["a", "b"]).default("a"),
+        fixedClash: z.enum(["x", "y"]).default("x"),
+      }),
+      examples: [],
+      facets: [
+        { param: "groupBy", label: "Group by", options: groupBy },
+        { param: "region", label: "Region", options: region },
+        { param: "other", label: "Other" },
+        { param: "fixedClash", label: "Fixed clash" },
+      ],
+      queries: [
+        { path: "a", paramMap: { groupBy: "g", region: "geo", other: "geo" } },
+        { path: "b", paramMap: { groupBy: "g" }, fixedParams: { mode: "full", clash: "1" } },
+        { path: "c", paramMap: { fixedClash: "clash" } },
+      ],
+    }).toIntentDef();
+    // groupBy governs a and b; region/other both map "geo" on path a (two params, one queryParam => both
+    // excluded); fixedClash's queryParam is a fixed parameter of path b (excluded).
+    expect(def.filters?.().map((f) => [f.param, f.paths])).toEqual([["groupBy", ["a", "b"]]]);
   });
 
   it("is absent when queries is a callback (no paramMap to read the query param from)", () => {

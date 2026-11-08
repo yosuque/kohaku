@@ -182,7 +182,7 @@ class LlmSemanticPort:
         def_ = self._catalog_for(tenant).get(intent.canonical)
         if def_ is None or def_.filters is None:
             return []
-        return def_.filters(intent.params, locale)
+        return def_.filters(locale)
 
     async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput:
         """Validates and normalizes a directly-specified Intent (backs `kohaku.host_core.intent.resolve_intent`'s

@@ -1,6 +1,7 @@
 import type { LlmPort } from "@kohaku-ui/llm";
-import { canonicalStringify, sha256Hex } from "@kohaku-ui/spec-core";
+import { canonicalStringify, type FilterDescriptor, sha256Hex } from "@kohaku-ui/spec-core";
 import type { ComposeContext, ComposePolicy } from "./context.js";
+import { DEFAULT_L1_FILTERS_MAX_VARIANTS } from "./post/inject-filters.js";
 
 // The policy-fingerprint machinery (the ComposePolicy fields that change prompt content, folded into the
 // cache key's 7th component) lives here; context.ts keeps the policy/context types and entry resolution.
@@ -103,7 +104,21 @@ export function tierLlmFingerprintMaterial(ctx: ComposeContext): TierLlmFingerpr
 type PolicyFingerprintExtractor = (
   policy: ComposePolicy,
   tierLlm: TierLlmFingerprintMaterial | undefined,
+  filtersHash: string | undefined,
 ) => unknown;
+
+/**
+ * A short canonical hash (16 hex characters) of the `FilterDescriptor`s `describeFilters` returned for a compose:
+ * the canonical JSON of the whole array in order (the order is the control order), including `paths`, `options`
+ * and `label`s. prepareCompose feeds it to {@link policyFingerprint} when `ComposePolicy.l1Filters` is on, so the
+ * authorized value range and label language are part of the Spec cache key (undefined for no descriptors).
+ */
+export async function filterDescriptorsHash(
+  descriptors: readonly FilterDescriptor[] | undefined,
+): Promise<string | undefined> {
+  if (descriptors == null || descriptors.length === 0) return undefined;
+  return (await sha256Hex(canonicalStringify(descriptors))).slice(0, 16);
+}
 
 function fingerprintOutputLanguage(policy: ComposePolicy): unknown {
   return policy.outputLanguage ?? null;
@@ -170,10 +185,24 @@ function fingerprintTierGate(policy: ComposePolicy): unknown {
  * `l1Filters` participates **only when `true`**, as an ABSENT key otherwise (`undefined`, never `null` -- this
  * row was added after callers already depend on the material's bytes; see policyFingerprint's doc). It
  * changes the delivered Spec (filter controls and binds are injected) for the same Intent and model, so a
- * cache entry composed without it must not be served to a policy that wants it, and vice versa.
+ * cache entry composed without it must not be served to a policy that wants it, and vice versa. When on, the
+ * material is `true` alone, or an object with only the parts that are not at their default: `maxVariants`
+ * (`l1FiltersMaxVariants` when not 64) and `descriptors` (the hash of the descriptors actually used for the
+ * injection -- the authorized range and labels, so another locale or a tenant-specific option list never
+ * shares an entry).
  */
-function fingerprintL1Filters(policy: ComposePolicy): unknown {
-  return policy.l1Filters === true ? true : undefined;
+function fingerprintL1Filters(
+  policy: ComposePolicy,
+  _tierLlm: TierLlmFingerprintMaterial | undefined,
+  filtersHash: string | undefined,
+): unknown {
+  if (policy.l1Filters !== true) return undefined;
+  const maxVariants =
+    policy.l1FiltersMaxVariants != null && policy.l1FiltersMaxVariants !== DEFAULT_L1_FILTERS_MAX_VARIANTS
+      ? policy.l1FiltersMaxVariants
+      : undefined;
+  if (maxVariants == null && filtersHash == null) return true;
+  return { maxVariants, descriptors: filtersHash };
 }
 
 function fingerprintFewShotId(policy: ComposePolicy): unknown {
@@ -234,10 +263,11 @@ export const FINGERPRINTED: ReadonlyArray<readonly [string, PolicyFingerprintExt
 export async function policyFingerprint(
   policy: ComposePolicy,
   tierLlm?: TierLlmFingerprintMaterial,
+  filtersHash?: string,
 ): Promise<string> {
   const material: Record<string, unknown> = {};
   for (const [key, extract] of FINGERPRINTED) {
-    material[key] = extract(policy, tierLlm);
+    material[key] = extract(policy, tierLlm, filtersHash);
   }
   if (Object.values(material).every((value) => value == null)) {
     return "";

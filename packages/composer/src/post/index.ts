@@ -6,6 +6,8 @@ import type { PostProcessContext, PostRule } from "./types.js";
 /** `ComposePolicy.l1Filters` injection request for {@link postProcess} (L1 only; see inject-filters.ts). */
 export interface FilterInjection {
   descriptors: readonly FilterDescriptor[];
+  /** `ComposePolicy.l1FiltersMaxVariants` (default 64). */
+  maxVariants?: number;
   /** Receives the injection outcome (for ComposeTrace.filters); called once, only when descriptors is non-empty. */
   report?: (result: InjectFiltersResult) => void;
 }
@@ -30,7 +32,9 @@ export function postProcess(
     rules.push(rule);
     if (rule === normalizeIds && filters != null && filters.descriptors.length > 0) {
       rules.push((acc) => {
-        const result = injectFilters(acc, filters.descriptors);
+        const result = injectFilters(acc, filters.descriptors, {
+          ...(filters.maxVariants != null ? { maxVariants: filters.maxVariants } : {}),
+        });
         filters.report?.(result);
         return result.spec;
       });

@@ -42,7 +42,7 @@ def _trend_draft() -> dict[str, Any]:
 
 
 def _make() -> tuple[TestClient, FakeLlm]:
-    llm = FakeLlm(objects=[_trend_draft()])
+    llm = FakeLlm(objects=[_trend_draft(), _trend_draft()])
     app = asyncio.run(
         create_app(
             llm=llm, storage=MemoryStoragePort(), authz=create_hmac_authz_port("test-secret")
@@ -113,3 +113,25 @@ def test_compose_stream_final_patch_capability_covers_the_filter_variants() -> N
     assert _resolve_status(client, skeleton_cap, variant) == 403
     assert _resolve_status(client, final_cap, variant) == 200
     assert len(llm.calls) == 1
+
+
+def test_a_japanese_session_gets_japanese_filter_labels_and_is_cached_separately() -> None:
+    client, _ = _make()
+
+    def labels(locale: str) -> dict[str, object]:
+        res = client.post(
+            "/api/kohaku/compose",
+            json={
+                "intent": {"canonical": "sales.trend", "params": {}},
+                "session": {"surface": "web", "locale": locale},
+            },
+        )
+        assert res.status_code == 200
+        return {
+            c["id"]: c["props"]["label"]
+            for c in res.json()["spec"]["components"]
+            if c["type"] == "control.select"
+        }
+
+    assert labels("ja") == {"filter-granularity": "粒度", "filter-metric": "指標"}
+    assert labels("en") == {"filter-granularity": "Granularity", "filter-metric": "Metric"}

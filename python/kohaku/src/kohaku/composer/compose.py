@@ -53,6 +53,7 @@ from .context import (
     ComposePolicy,
     OnDraftPartial,
     ResolvedRefs,
+    filter_descriptors_hash,
     policy_fingerprint,
     tier_llm_fingerprint_material,
 )
@@ -268,7 +269,9 @@ async def prepare_compose(
 
     # 2. Deterministic query resolution (reference-passing handles) + dataVersion composition.
     tenant = opts.session.tenant if opts.session is not None else None
-    refs = await _resolve_refs(intent, ctx, tenant)
+    refs = await _resolve_refs(
+        intent, ctx, tenant, opts.session.locale if opts.session is not None else None
+    )
 
     # 3. Cache key (generatorVersion is appended as a trailing component only when given; policyFingerprint
     # is a derived 7th component — see context.py's policy_fingerprint doc — likewise omitted (empty
@@ -282,7 +285,11 @@ async def prepare_compose(
         # show a "-" placeholder for a component that in fact contributed a real segment to the cache key.
         specVersion=SPEC_VERSION,
         generatorVersion=policy.generatorVersion,
-        policyFingerprint=policy_fingerprint(policy, tier_llm_fingerprint_material(ctx)),
+        policyFingerprint=policy_fingerprint(
+            policy,
+            tier_llm_fingerprint_material(ctx),
+            filter_descriptors_hash(refs.descriptors),
+        ),
     )
     key = cache_key(key_parts)
 
@@ -620,7 +627,11 @@ def _build_spec_from_outcome(
             assembled,
             refs,
             ctx,
-            FilterInjection(descriptors=descriptors, report=filter_report.append)
+            FilterInjection(
+                descriptors=descriptors,
+                max_variants=policy.l1FiltersMaxVariants,
+                report=filter_report.append,
+            )
             if descriptors is not None
             else None,
         )
@@ -1191,7 +1202,9 @@ async def recompose(
     return result, diff_spec(prev, result.spec)
 
 
-async def _resolve_refs(intent: Intent, ctx: ComposeContext, tenant: str | None) -> ResolvedRefs:
+async def _resolve_refs(
+    intent: Intent, ctx: ComposeContext, tenant: str | None, locale: str | None = None
+) -> ResolvedRefs:
     try:
         resolved = await ctx.semantic.resolve_query(intent, tenant=tenant)
     except Exception as e:
@@ -1221,14 +1234,15 @@ async def _resolve_refs(intent: Intent, ctx: ComposeContext, tenant: str | None)
 
     await asyncio.gather(*(_shape(h) for h in handles))
 
-    # Intent-declared filters for L1 injection (ComposePolicy.l1Filters). No locale is passed: the composed
-    # Spec is cached under a locale-free key, so descriptor labels must not vary by caller. A failure only
-    # means "no filters" (an optional enhancement must not fail the compose), like describe_shape above.
+    # Intent-declared filters for L1 injection (ComposePolicy.l1Filters). The session's locale selects the label
+    # language; prepare_compose folds a hash of the returned descriptors into the cache key, so Specs for
+    # different locales / tenant option lists are cached separately. A failure only means "no filters" (an
+    # optional enhancement must not fail the compose), like describe_shape above.
     descriptors: list[FilterDescriptor] | None = None
     describe_filters = getattr(ctx.semantic, "describe_filters", None)
     if ctx.policy is not None and ctx.policy.l1Filters is True and describe_filters is not None:
         try:
-            described = await describe_filters(intent, tenant=tenant)
+            described = await describe_filters(intent, tenant=tenant, locale=locale)
             descriptors = list(described) if len(described) > 0 else None
         except Exception:  # noqa: BLE001,S110
             descriptors = None

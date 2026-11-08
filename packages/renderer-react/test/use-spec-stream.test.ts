@@ -170,6 +170,21 @@ describe("useSpecStream: consumer hook", () => {
     expect(result.current.spec?.components.map((c) => c.id)).toEqual(["root", "h1"]);
   });
 
+  it("a patch without a capability keeps the capability already held (skeleton's, then the replacement)", async () => {
+    const extra = { baseIntentHash: HASH };
+    const stream = toStream([
+      frame("spec", { spec: skeleton(), capability: "cap-1", final: false }),
+      frame("patch", { patch: extra }),
+      frame("patch", { patch: finalPatch(), capability: "cap-final" }),
+      frame("patch", { patch: extra }),
+      frame("done", { specHash: "sha256:final", tier: "L1", cache: "miss" }),
+    ]);
+    const { result } = renderHook(() => useSpecStream());
+    act(() => result.current.start(() => Promise.resolve(fakeResponse(stream))));
+    await waitFor(() => expect(result.current.phase).toBe("done"));
+    expect(result.current.capability).toBe("cap-final");
+  });
+
   it("parses a patch event's optional capability on the wire", async () => {
     const events = await collect(
       toStream([frame("patch", { patch: {}, capability: "c" }), frame("patch", { patch: {} })]),

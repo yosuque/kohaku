@@ -306,21 +306,24 @@ async def _preresolve_initial_data(
             if variant != initial:
                 secondary_refs.append(variant)
 
-    # Bound the eager fan-out: a Spec can carry up to MAX_BIND_VARIANTS (256) variants (ComposePolicy.l1Filters
-    # injects them), and pre-resolving all of them would cost that many upstream calls on every compose even
-    # though the 100,000-char budget could embed only a few. Beyond the cap a variant is simply resolved on
-    # demand (kohaku_resolve_binding), exactly like any ref that did not fit the budget.
-    del secondary_refs[PRERESOLVE_MAX_SECONDARY_REFS:]
-
     # Dedup while preserving the initial-then-secondary priority order (the budget loop below walks this same
     # order), so a ref shared by several components/variants is resolved exactly once regardless of concurrency.
-    ordered_refs: list[str] = []
-    seen_refs: set[str] = set()
-    for ref in [*initial_refs, *secondary_refs]:
+    # The non-initial refs are de-duplicated (and exclude every initial ref) BEFORE the cap below, so the cap
+    # counts distinct refs rather than repeats.
+    ordered_refs = list(dict.fromkeys(initial_refs))
+    seen_refs = set(ordered_refs)
+    distinct_secondary: list[str] = []
+    for ref in secondary_refs:
         if ref in seen_refs:
             continue
         seen_refs.add(ref)
-        ordered_refs.append(ref)
+        distinct_secondary.append(ref)
+    # Bound the eager fan-out: a Spec can carry up to MAX_BIND_VARIANTS (256) variants (ComposePolicy.l1Filters
+    # injects them), and pre-resolving all of them would cost that many upstream calls on every compose even
+    # though the 100,000-char budget could embed only a few. Beyond the cap a variant is simply resolved on
+    # demand (kohaku_resolve_binding), exactly like any ref that did not fit the budget. Applies regardless of
+    # l1Filters (a hand-written or promoted Spec with a wide data.bind is capped the same way).
+    ordered_refs.extend(distinct_secondary[:PRERESOLVE_MAX_SECONDARY_REFS])
 
     session = _create_read_guard_session(pctx)
     resolved = await _resolve_refs_bounded(

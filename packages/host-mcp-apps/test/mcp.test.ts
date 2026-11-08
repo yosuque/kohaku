@@ -3258,11 +3258,22 @@ describe("initial-data preresolution of a wide bind fan-out (L1 filter injection
               dataVersion: "x",
               state: { region: "r0" },
               components: [
-                { id: "root", type: "layout.stack", props: {}, children: ["c"] },
+                { id: "root", type: "layout.stack", props: {}, children: ["c", "c2"] },
+                // Two components over the same ref: the first has 20 variants, the second 40 (a superset). The cap
+                // must count DISTINCT refs, so the repeats of the first component's variants do not eat into it.
                 {
                   id: "c",
                   type: "presentChart",
                   props: { kind: "line", x: "month", y: "revenue" },
+                  data: {
+                    $ref: "query://sales/trend?granularity=month&metric=revenue&region=r0",
+                    bind: { region: { $state: "region", values: WIDE_VALUES.slice(0, 20) } },
+                  },
+                },
+                {
+                  id: "c2",
+                  type: "presentSpreadsheet",
+                  props: {},
                   data: {
                     $ref: "query://sales/trend?granularity=month&metric=revenue&region=r0",
                     bind: { region: { $state: "region", values: WIDE_VALUES } },
@@ -3356,6 +3367,7 @@ describe("L1 filter injection over MCP (ComposePolicy.l1Filters)", () => {
             {
               param: "region",
               queryParam: "region",
+              paths: ["trend"],
               label: "Region",
               options: ["us", "eu", "jp"].map((v) => ({ value: v, label: v })),
             },

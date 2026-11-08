@@ -36,11 +36,22 @@ def _wide_bind_spec(intent: Intent, handles: Any) -> UISpec:
             "dataVersion": "x",
             "state": {"region": "r0"},
             "components": [
-                {"id": "root", "type": "layout.stack", "props": {}, "children": ["c"]},
+                {"id": "root", "type": "layout.stack", "props": {}, "children": ["c", "c2"]},
+                # Two components over the same ref: the first has 20 variants, the second 40 (a superset). The cap
+                # must count DISTINCT refs, so the repeats of the first component's variants do not eat into it.
                 {
                     "id": "c",
                     "type": "presentChart",
                     "props": {"kind": "line", "x": "month", "y": "revenue"},
+                    "data": {
+                        "$ref": _WIDE_REF,
+                        "bind": {"region": {"$state": "region", "values": _WIDE_VALUES[:20]}},
+                    },
+                },
+                {
+                    "id": "c2",
+                    "type": "presentSpreadsheet",
+                    "props": {},
                     "data": {
                         "$ref": _WIDE_REF,
                         "bind": {"region": {"$state": "region", "values": _WIDE_VALUES}},
@@ -97,6 +108,7 @@ class _FilterSemantic(_Semantic):
             FilterDescriptor(
                 param="region",
                 queryParam="region",
+                paths=["trend"],
                 label="Region",
                 options=[FilterOption(v, v) for v in ("us", "eu", "jp")],
             )

@@ -520,7 +520,7 @@ async def _compose_stream_body(
         # refs instead (issue_capability_for_refs). bind (two-way binding, [Draft]) is not opened up to the
         # model, so a skeleton never needs bind variants. The one way an L1 Spec gains bind is
         # ComposePolicy.l1Filters (composer-injected, after generation): in that case the final convergence
-        # patch (compose_stream's `final=True`) carries a replacement `capability` issued from the finalized
+        # patch (compose_stream's `converged=True`) carries a replacement `capability` issued from the finalized
         # Spec (below). A generated Spec without bind still keeps the skeleton's read-only capability
         # (documented limitation — only a final:true spec event, or a bind-bearing final patch, carries
         # action.invoke write scopes over the stream).
@@ -555,20 +555,26 @@ async def _compose_stream_body(
                     ev_spec_payload["actions"] = to_jsonable(ev_actions)
                 yield _sse("spec", ev_spec_payload)
             elif isinstance(ev, StreamPatchEvent):
-                # The convergence patch to the finalized Spec (compose_stream marks it `final`) is where
+                # The convergence patch to the finalized Spec (compose_stream marks it `converged`) is where
                 # what only the finalized Spec determines can be delivered. The skeleton's refs-based
                 # capability cannot cover the bind variants an L1 Spec gains from ComposePolicy.l1Filters (the
                 # filters are injected after generation), so a replacement capability is issued from the
-                # finalized Spec itself -- the same rule as the final:true fast path -- and rides this patch.
-                # Only when the Spec declares data.bind: any other stream keeps its single, skeleton-time
-                # capability (no behavior change).
+                # finalized Spec itself -- the same rule as the final:true fast path, hence it also carries
+                # every write scope a non-stream /compose of that Spec would (intersected with
+                # list_operations) -- and rides this patch, together with the Governed Actions `actions`
+                # manifest of the finalized Spec (the non-stream response carries both, and the skeleton's
+                # manifest is empty). Only when the Spec declares data.bind: any other stream keeps its
+                # single, skeleton-time capability and manifest (no behavior change).
                 patch_payload: dict[str, Any] = {"patch": ev.patch.to_wire()}
-                if ev.final and any(
+                if ev.converged and any(
                     c.data is not None and c.data.bind is not None for c in ev.spec.components
                 ):
                     patch_payload["capability"] = await issue_capability_for_spec(
                         ev.spec, principal, deps, "compose/stream", request_id, session.tenant
                     )
+                    patch_actions = await _actions_for(deps, ev.spec, "compose/stream", request_id)
+                    if patch_actions is not None:
+                        patch_payload["actions"] = to_jsonable(patch_actions)
                 yield _sse("patch", patch_payload)
             else:
                 final = ev.result

@@ -46,7 +46,7 @@ import {
   designKitPromptFragment,
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
-import { policyFingerprint } from "../../packages/composer/src/policy-fingerprint.js";
+import { filterDescriptorsHash, policyFingerprint } from "../../packages/composer/src/policy-fingerprint.js";
 import { injectFilters } from "../../packages/composer/src/post/inject-filters.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
 // Relative (not "@kohaku-ui/domain-mcp") import, same reasoning as the composer import above: spec does not
@@ -161,9 +161,16 @@ interface Fixture {
       name: string;
       spec: UISpec;
       descriptors: FilterDescriptor[];
+      maxVariants?: number;
       expected: { spec: UISpec; injected: string[]; skipped?: string };
     }[];
-    policyFingerprint: { name: string; policy: PolicyFingerprintCase["policy"]; fingerprint: string }[];
+    policyFingerprint: {
+      name: string;
+      policy: PolicyFingerprintCase["policy"];
+      descriptors?: FilterDescriptor[];
+      descriptorsHash?: string | null;
+      fingerprint: string;
+    }[];
   };
 }
 
@@ -456,7 +463,11 @@ describe("cross-language golden (composer, L1 filter injection)", () => {
   it("injectFilters reproduces the fixture byte-for-byte (canonical JSON of the resulting Spec)", () => {
     expect(fixture.l1Filters.inject.length).toBeGreaterThan(0);
     for (const c of fixture.l1Filters.inject) {
-      const out = injectFilters(c.spec, c.descriptors);
+      const out = injectFilters(
+        c.spec,
+        c.descriptors,
+        c.maxVariants != null ? { maxVariants: c.maxVariants } : {},
+      );
       expect(out.injected, c.name).toEqual(c.expected.injected);
       expect(out.skipped, c.name).toBe(c.expected.skipped);
       expect(canonicalStringify(out.spec), c.name).toBe(canonicalStringify(c.expected.spec));
@@ -470,12 +481,26 @@ describe("cross-language golden (composer, L1 filter injection)", () => {
   it("policyFingerprint reproduces the fixture (l1Filters folds in only when true)", async () => {
     expect(fixture.l1Filters.policyFingerprint.length).toBeGreaterThan(0);
     for (const c of fixture.l1Filters.policyFingerprint) {
-      expect(await policyFingerprint(c.policy), c.name).toBe(c.fingerprint);
+      const hash = await filterDescriptorsHash(c.descriptors);
+      if (c.descriptors != null) expect(hash ?? null, c.name).toBe(c.descriptorsHash);
+      expect(await policyFingerprint(c.policy, undefined, hash), c.name).toBe(c.fingerprint);
     }
     // l1Filters:false is indistinguishable from unset.
     const byName = new Map(fixture.l1Filters.policyFingerprint.map((c) => [c.name, c.fingerprint]));
     expect(byName.get("l1Filters false is the default")).toBe(byName.get("empty policy"));
     expect(byName.get("l1Filters true")).not.toBe(byName.get("empty policy"));
+    // The default cap and a policy-off descriptor list contribute nothing; a changed cap / descriptor set / label does.
+    expect(byName.get("l1FiltersMaxVariants 64 is the default")).toBe(byName.get("l1Filters true"));
+    expect(byName.get("l1FiltersMaxVariants without l1Filters is ignored")).toBe(byName.get("empty policy"));
+    expect(byName.get("l1Filters false ignores descriptors")).toBe(byName.get("empty policy"));
+    const distinct = [
+      "l1Filters true",
+      "l1FiltersMaxVariants 32",
+      "l1Filters true with descriptors",
+      "l1Filters true with other descriptors",
+      "l1Filters true with the same options relabelled",
+    ].map((n) => byName.get(n));
+    expect(new Set(distinct).size).toBe(distinct.length);
   });
 });
 

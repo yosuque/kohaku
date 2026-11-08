@@ -128,7 +128,7 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
     ): Promise<FilterDescriptor[]> {
       // An unknown Intent has no filters (resolveQuery is what reports it); an Intent defined without facets
       // or on the callback path has no `filters` derivation, which is the same "no filters" answer.
-      return catalogFor(ctx?.tenant).get(intent.canonical)?.filters?.(intent.params, ctx?.locale) ?? [];
+      return catalogFor(ctx?.tenant).get(intent.canonical)?.filters?.(ctx?.locale) ?? [];
     },
     async validateIntent(intent: IntentInput, ctx: SessionContext): Promise<IntentInput> {
       const catalog = catalogFor(ctx.tenant);

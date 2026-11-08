@@ -284,6 +284,7 @@ describe("createLlmSemanticPort describeFilters", () => {
       {
         param: "groupBy",
         queryParam: "by",
+        paths: ["summary"],
         label: "Group by",
         options: [
           { value: "region", label: "region" },

@@ -32,7 +32,11 @@ import { resolveEntryContext } from "./context.js";
 import { ComposeError } from "./errors.js";
 import { buildFallbackSpec } from "./fallback.js";
 import { fireObserverHook, reportComposeError } from "./observer.js";
-import { policyFingerprint, tierLlmFingerprintMaterial } from "./policy-fingerprint.js";
+import {
+  filterDescriptorsHash,
+  policyFingerprint,
+  tierLlmFingerprintMaterial,
+} from "./policy-fingerprint.js";
 import type { ResolvedRefs } from "./refs.js";
 import { resolveRefs } from "./refs.js";
 import { runGeneration } from "./single-flight.js";
@@ -227,12 +231,16 @@ export async function prepareCompose(
   }
 
   // 2. Deterministic query resolution (reference-passing handles) + dataVersion synthesis. tenant is used to resolve per-tenant promoted Intents.
-  const refs = await resolveRefs(intent, ctx, opts.session?.tenant);
+  const refs = await resolveRefs(intent, ctx, opts.session?.tenant, opts.session?.locale);
 
   // 3. Cache key (generatorVersion is added as the trailing component only when specified; policyFingerprint
   // is a derived 7th component — see policy-fingerprint.ts's policyFingerprint doc — that is likewise omitted (empty
   // string) whenever the policy touches none of its fingerprinted fields, keeping the key unchanged).
-  const pf = await policyFingerprint(policy, tierLlmFingerprintMaterial(ctx));
+  const pf = await policyFingerprint(
+    policy,
+    tierLlmFingerprintMaterial(ctx),
+    await filterDescriptorsHash(refs.descriptors),
+  );
   const keyParts: CacheKeyParts = {
     intentHash: intent.hash,
     dataVersion: refs.dataVersion,
@@ -434,6 +442,9 @@ function buildSpecFromOutcome(
       descriptors != null
         ? {
             descriptors,
+            ...(prepared.policy.l1FiltersMaxVariants != null
+              ? { maxVariants: prepared.policy.l1FiltersMaxVariants }
+              : {}),
             report: (r) => {
               filters = { injected: r.injected, ...(r.skipped != null ? { skipped: r.skipped } : {}) };
             },

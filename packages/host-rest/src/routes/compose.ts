@@ -442,21 +442,26 @@ async function streamGenerated(
         }),
       });
     } else if (ev.kind === "patch") {
-      // The convergence patch to the finalized Spec (composeStream marks it `final`) is where what only the
+      // The convergence patch to the finalized Spec (composeStream marks it `converged`) is where what only the
       // finalized Spec determines can be delivered. The skeleton's refs-based capability cannot cover the
       // bind variants an L1 Spec gains from ComposePolicy.l1Filters (the filters are injected after generation),
       // so a replacement capability is issued from the finalized Spec itself -- the same rule as the
-      // final:true fast path -- and rides this patch. Only when the Spec declares data.bind: any other
-      // stream keeps its single, skeleton-time capability (no behavior change).
-      const replacement =
-        ev.final === true && ev.spec.components.some((c) => c.data?.bind != null)
-          ? await issueSpecCapability(ev.spec, principal, ctx, call, session.tenant)
-          : undefined;
+      // final:true fast path, hence it also carries every write scope a non-stream /compose of that Spec would
+      // (intersected with DomainPort.listOperations()) -- and rides this patch, together with the Governed
+      // Actions `actions` manifest of the finalized Spec (the non-stream response carries both, and the
+      // skeleton's manifest is empty). Only when the Spec declares data.bind: any other stream keeps its
+      // single, skeleton-time capability and manifest (no behavior change).
+      const replace = ev.converged === true && ev.spec.components.some((c) => c.data?.bind != null);
+      const replacement = replace
+        ? await issueSpecCapability(ev.spec, principal, ctx, call, session.tenant)
+        : undefined;
+      const replacementActions = replace ? await actionsFor(ctx, ev.spec, call) : undefined;
       await stream.writeSSE({
         event: "patch",
         data: JSON.stringify({
           patch: ev.patch,
           ...(replacement != null ? { capability: replacement } : {}),
+          ...(replacementActions != null ? { actions: replacementActions } : {}),
         }),
       });
     } else {

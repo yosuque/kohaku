@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -24,6 +24,7 @@ from kohaku.spec import (
 
 from .budget import ComposeBudget
 from .design_system import DesignKitVocabulary, DesignSystemGuide
+from .inject_filters import DEFAULT_L1_FILTERS_MAX_VARIANTS
 from .prompt import FewShotExample
 from .trace import ComposeTrace, TraceInput
 
@@ -173,15 +174,26 @@ class ComposePolicy:
     `ComposePolicy.l1Filters`). When True, the composer asks `SemanticPort.describe_filters` for the Intent's
     filters (derived from its facet declarations, never from the model) and, after a successful L1
     generation, adds a `control.select` + `state` + `state.set` event + `data.bind` per filter whose query
-    param appears in a generated component's `$ref` (`inject_filters.py`). Changing a filter then
-    re-resolves the data with no recompose and no model call. Skipped (the Spec is delivered as generated)
-    when the Intent has no filters, the SemanticPort does not implement `describe_filters`, the bind
-    variants would exceed MAX_BIND_VARIANTS, or the injected Spec would not validate; the reason is recorded
-    in `ComposeTrace.filters`.
+    param appears in the `$ref` of a generated component reading one of the filter's paths
+    (`inject_filters.py`). Changing a filter then re-resolves the data with no recompose and no model call.
+    Skipped (the Spec is delivered as generated) when the Intent has no filters, the SemanticPort does not
+    implement `describe_filters`, the bind variants would exceed `l1FiltersMaxVariants`, or the injected Spec
+    would not validate; the reason is recorded in `ComposeTrace.filters`.
 
-    Participates in `policy_fingerprint` only when True, as an absent key (it changes the delivered Spec for
-    the same Intent and model; the generation prompt is unchanged). Filter labels are canonical (the Spec
-    cache key is locale-free, so no session locale is used)."""
+    Limits: a selected value cannot be cleared back to "all" (`data.bind.values` has no empty value, same as
+    the L0 cross-filter), and an Intent whose current value for a filter is empty gets no control for it.
+
+    Participates in `policy_fingerprint` only when True, as an absent key, together with a hash of the
+    descriptors `describe_filters` returned (labels, options, paths): Specs whose authorized range or label
+    language differ -- another locale (`session.locale` is passed through), a tenant-specific option list --
+    are cached separately. The generation prompt is unchanged."""
+    l1FiltersMaxVariants: int | None = None
+    """The most bind variants (the sum over data components of the product of their bound params' value
+    counts) one filter injection may create; exceeding it delivers the Spec as generated
+    (`trace.filters.skipped == "variant-limit"`). None means the default, 64: each variant is a read scope in
+    the capability, and 256 scopes are about 35 KB, which exceeds Node's 16 KiB header limit (a TS host's
+    `/binding/resolve` would answer 431). Never above MAX_BIND_VARIANTS (256). Participates in
+    `policy_fingerprint` only when `l1Filters` is on and the value is not 64."""
 
 
 def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
@@ -209,12 +221,14 @@ def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
 
 
 def _fp_output_language(
-    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
 ) -> object:
     return policy.outputLanguage
 
 
-def _fp_design_system(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+def _fp_design_system(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
+) -> object:
     design_system = policy.designSystem
     if design_system is None:
         return None
@@ -238,7 +252,9 @@ def _fp_design_system(policy: ComposePolicy, tier_llm: TierLlmFingerprintMateria
     }
 
 
-def _fp_few_shot_id(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+def _fp_few_shot_id(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
+) -> object:
     few_shot = policy.fewShot
     if few_shot is None:
         return None
@@ -246,7 +262,7 @@ def _fp_few_shot_id(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial 
 
 
 def _fp_select_components_id(
-    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
 ) -> object:
     select_components = policy.selectComponents
     if select_components is None:
@@ -260,19 +276,23 @@ def _fp_select_components_id(
 
 
 def _fp_ref_constraint(
-    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
 ) -> object:
     return "validate" if policy.refConstraint == "validate" else None
 
 
-def _fp_effort(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+def _fp_effort(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
+) -> object:
     effort = policy.effort
     if effort is None:
         return None
     return {"l1": effort.l1, "l2": effort.l2}
 
 
-def _fp_tier_gate(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+def _fp_tier_gate(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
+) -> object:
     """Whether `allowL2`/`routeTier` (the "tier gate") diverge from their conventional defaults
     (`allowL2` False, `routeTier` None) — closes SPEC CMP-DET-002's cache-isolation gap: neither field
     was part of `policy_fingerprint` before this row existed, so two sessions differing only in
@@ -304,14 +324,45 @@ def _fp_tier_gate(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | 
     return {"allowL2": allow_l2, "routeTierId": route_tier_id}
 
 
-def _fp_l1_filters(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+def _fp_l1_filters(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
+) -> object:
     """`l1Filters` participates only when True, as an ABSENT key (`UNDEFINED`, never `None`) otherwise: like
-    `_fp_tier_gate`, this row was added after callers already depend on the material's bytes. Port of TS's
-    `fingerprintL1Filters`."""
-    return True if policy.l1Filters is True else UNDEFINED
+    `_fp_tier_gate`, this row was added after callers already depend on the material's bytes. When on, the
+    material is `True` alone, or a dict with only the parts that are not at their default: `maxVariants`
+    (`l1FiltersMaxVariants` when not 64) and `descriptors` (the hash of the descriptors actually used for the
+    injection -- the authorized range and labels, so another locale or a tenant-specific option list never
+    shares an entry). Port of TS's `fingerprintL1Filters`."""
+    if policy.l1Filters is not True:
+        return UNDEFINED
+    max_variants: object = (
+        policy.l1FiltersMaxVariants
+        if policy.l1FiltersMaxVariants is not None
+        and policy.l1FiltersMaxVariants != DEFAULT_L1_FILTERS_MAX_VARIANTS
+        else UNDEFINED
+    )
+    if max_variants is UNDEFINED and filters_hash is None:
+        return True
+    return {
+        "maxVariants": max_variants,
+        "descriptors": filters_hash if filters_hash is not None else UNDEFINED,
+    }
 
 
-def _fp_tier_llm(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+def filter_descriptors_hash(descriptors: Sequence[FilterDescriptor] | None) -> str | None:
+    """A short canonical hash (16 hex characters) of the `FilterDescriptor`s `describe_filters` returned for a
+    compose: the canonical JSON of the whole list in order (the order is the control order), including `paths`,
+    `options` and `label`s. prepare_compose feeds it to `policy_fingerprint` when `ComposePolicy.l1Filters` is on,
+    so the authorized value range and label language are part of the Spec cache key (None for no descriptors).
+    Port of TS's `filterDescriptorsHash`."""
+    if descriptors is None or len(descriptors) == 0:
+        return None
+    return sha256_hex(canonical_stringify([d.to_wire() for d in descriptors]))[:16]
+
+
+def _fp_tier_llm(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None, filters_hash: str | None
+) -> object:
     if tier_llm is None:
         return None
     return {
@@ -329,7 +380,7 @@ def _fp_tier_llm(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | N
 
 
 _FINGERPRINTED: list[
-    tuple[str, Callable[[ComposePolicy, TierLlmFingerprintMaterial | None], object]]
+    tuple[str, Callable[[ComposePolicy, TierLlmFingerprintMaterial | None, str | None], object]]
 ] = [
     ("outputLanguage", _fp_output_language),
     ("designSystem", _fp_design_system),
@@ -351,7 +402,9 @@ to fingerprint another field; do not hand-sync a guard condition and a dict lite
 
 
 def policy_fingerprint(
-    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None = None
+    policy: ComposePolicy,
+    tier_llm: TierLlmFingerprintMaterial | None = None,
+    filters_hash: str | None = None,
 ) -> str:
     """Canonical fingerprint (16 hex characters) of the ComposePolicy fields that change prompt content but
     were, until now, only enforced by the operational convention of bumping generatorVersion by hand.
@@ -414,7 +467,7 @@ def policy_fingerprint(
     empty-string-iff-nothing-set invariant is a cross-language contract.
     """
     material: dict[str, object] = {
-        key: extract(policy, tier_llm) for key, extract in _FINGERPRINTED
+        key: extract(policy, tier_llm, filters_hash) for key, extract in _FINGERPRINTED
     }
     # `tierGate` (_fp_tier_gate) is the first top-level row whose own default is UNDEFINED (an absent
     # key) rather than None -- every other row's default is None (see the docstring above for why that

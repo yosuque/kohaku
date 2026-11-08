@@ -188,6 +188,8 @@ class FilterInjection:
     """`ComposePolicy.l1Filters` injection request for `post_process` (L1 only; see inject_filters.py)."""
 
     descriptors: Sequence[FilterDescriptor]
+    max_variants: int | None = None
+    """`ComposePolicy.l1FiltersMaxVariants` (None = the default, 64)."""
     report: Callable[[InjectFiltersResult], None] | None = None
     """Receives the injection outcome (for ComposeTrace.filters); called once, only when descriptors is non-empty."""
 
@@ -217,7 +219,7 @@ def post_process(
 
 def _filter_injection_rule(filters: FilterInjection) -> PostRule:
     def rule(spec: UISpec, ctx: PostProcessContext) -> UISpec:
-        injected = inject_filters(spec, filters.descriptors)
+        injected = inject_filters(spec, filters.descriptors, max_variants=filters.max_variants)
         if filters.report is not None:
             filters.report(injected)
         return injected.spec

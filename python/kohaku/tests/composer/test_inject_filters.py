@@ -17,6 +17,7 @@ from kohaku.spec import (
 REGION = FilterDescriptor(
     param="region",
     queryParam="geo",
+    paths=["summary"],
     label="Region",
     options=[
         FilterOption("japan", "Japan"),
@@ -27,6 +28,7 @@ REGION = FilterDescriptor(
 GROUP_BY = FilterDescriptor(
     param="groupBy",
     queryParam="groupBy",
+    paths=["summary"],
     label="Group by",
     options=[FilterOption("region", "By region"), FilterOption("product", "By product")],
 )
@@ -133,6 +135,7 @@ def test_skips_everything_with_variant_limit_when_the_total_variants_exceed_256(
     big = FilterDescriptor(
         param="region",
         queryParam="geo",
+        paths=["summary"],
         label="Region",
         options=[FilterOption("europe" if i == 0 else f"r{i}", f"r{i}") for i in range(130)],
     )
@@ -212,3 +215,112 @@ def test_does_not_mutate_its_input() -> None:
     before = json.dumps(spec.to_wire(), sort_keys=True)
     inject_filters(spec, [REGION, GROUP_BY])
     assert json.dumps(spec.to_wire(), sort_keys=True) == before
+
+
+def test_binds_only_the_data_components_whose_ref_path_is_one_of_the_descriptors_paths() -> None:
+    spec = l1_spec(REF, "query://sales/trend?geo=europe&groupBy=region")
+    out = inject_filters(spec, [REGION])
+    assert out.injected == ["region"]
+    by_id = {c.id: c for c in out.spec.components}
+    assert by_id["chart1"].data is not None and by_id["chart1"].data.bind is not None
+    # The table reads another path (trend) that happens to carry the same query parameter name: untouched.
+    assert by_id["table1"].data is not None
+    assert by_id["table1"].data.to_wire() == {
+        "$ref": "query://sales/trend?geo=europe&groupBy=region"
+    }
+    assert len([s for s in collect_capability_scopes(out.spec) if s.kind == "read"]) == 4
+
+
+def test_injects_nothing_when_no_data_component_reads_a_governed_path() -> None:
+    from dataclasses import replace
+
+    out = inject_filters(
+        l1_spec(REF), [replace(REGION, paths=["trend"]), replace(GROUP_BY, paths=[])]
+    )
+    assert out.injected == []
+    assert out.skipped is None
+
+
+def test_leaves_a_component_already_bound_on_the_query_param_to_its_own_declaration() -> None:
+    wire = l1_spec(REF).to_wire()
+    wire["state"] = {"own": "europe"}
+    wire["components"][2]["data"] = {
+        "$ref": REF,
+        "bind": {"geo": {"$state": "own", "values": ["europe", "japan"]}},
+    }
+    assert inject_filters(UISpec.model_validate(wire), [REGION]).injected == []
+
+
+def test_skips_a_descriptor_whose_query_param_is_in_the_reserved_namespace() -> None:
+    from dataclasses import replace
+
+    reserved = replace(REGION, queryParam="_limit")
+    spec = l1_spec("query://sales/summary?geo=europe")
+    assert inject_filters(spec, [reserved]).injected == []
+
+
+def test_de_duplicates_options_by_value_first_wins() -> None:
+    from dataclasses import replace
+
+    dup = replace(
+        REGION,
+        options=[
+            FilterOption("europe", "Europe"),
+            FilterOption("japan", "Japan"),
+            FilterOption("europe", "Europe again"),
+        ],
+    )
+    out = inject_filters(l1_spec(REF), [dup])
+    control = next(c for c in out.spec.components if c.id == "filter-region")
+    assert control.props["options"] == [
+        {"value": "europe", "label": "Europe"},
+        {"value": "japan", "label": "Japan"},
+    ]
+    chart = next(c for c in out.spec.components if c.id == "chart1")
+    assert chart.data is not None and chart.data.bind is not None
+    assert chart.data.bind["geo"].to_wire() == {"$state": "region", "values": ["europe", "japan"]}
+
+
+def test_ignores_a_second_descriptor_for_the_same_param_or_the_same_query_param() -> None:
+    from dataclasses import replace
+
+    same_param = inject_filters(l1_spec(REF), [REGION, replace(REGION, label="Other")])
+    assert same_param.injected == ["region"]
+    same_query_param = inject_filters(
+        l1_spec(REF), [REGION, replace(GROUP_BY, param="area", queryParam="geo")]
+    )
+    assert same_query_param.injected == ["region"]
+
+
+def test_is_idempotent_a_second_pass_injects_nothing() -> None:
+    once = inject_filters(l1_spec(REF), [REGION, GROUP_BY])
+    twice = inject_filters(once.spec, [REGION, GROUP_BY])
+    assert twice.injected == []
+    assert twice.spec is once.spec
+
+
+def test_returns_invalid_when_the_injected_spec_fails_structural_validation() -> None:
+    legacy = l1_spec(REF).model_copy(update={"kohaku": "0.1"})
+    out = inject_filters(legacy, [REGION])
+    assert out.skipped == "invalid"
+    assert out.spec is legacy
+
+
+def test_caps_the_variants_at_max_variants_default_64_never_above_256() -> None:
+    from dataclasses import replace
+
+    def opts(n: int) -> FilterDescriptor:
+        return replace(
+            REGION,
+            options=[FilterOption("europe" if i == 0 else f"r{i}", f"r{i}") for i in range(n)],
+        )
+
+    # 2 data components x 32 values = 64: at the default cap.
+    assert inject_filters(l1_spec(REF), [opts(32)]).injected == ["region"]
+    # 2 x 33 = 66 > 64.
+    assert inject_filters(l1_spec(REF), [opts(33)]).skipped == "variant-limit"
+    # An explicit cap changes the answer both ways.
+    assert inject_filters(l1_spec(REF), [opts(33)], max_variants=66).injected == ["region"]
+    assert inject_filters(l1_spec(REF), [opts(3)], max_variants=5).skipped == "variant-limit"
+    # ...but never above MAX_BIND_VARIANTS (2 x 130 = 260).
+    assert inject_filters(l1_spec(REF), [opts(130)], max_variants=10_000).skipped == "variant-limit"

@@ -22,10 +22,10 @@ export interface IntentDef {
   /**
    * The GUI filters this Intent exposes (see spec-core's `FilterDescriptor`), derived from the `facets`
    * declaration. Present only for a declarative-template Intent: a callback `queries` has no `paramMap` to
-   * read the query param name from. `params` is the Intent's current params (reserved: the derivation does
-   * not depend on it today); `locale` selects the label overlays, falling back to the canonical label.
+   * read the query param name from. `locale` (a BCP-47-like tag such as "ja" or "ja-JP") selects the label
+   * overlays -- exact tag first, then its primary subtag -- falling back to the canonical label.
    */
-  filters?: (params: JsonObject, locale?: string) => FilterDescriptor[];
+  filters?: (locale?: string) => FilterDescriptor[];
 }
 
 /** (c) host-mcp-apps input (structural type). IntentDef is assignable to it, but this is provided as an explicit API. */
@@ -131,32 +131,59 @@ function buildToQueries(spec: IntentSpec): (p: JsonObject) => QueryHandle[] {
  * (the default), the param is not numeric (a numeric facet is a range/curation, not an enumeration), and it
  * has at least one option. The query param comes from the templates' `paramMap`; a param mapped to different
  * query params by different templates is ambiguous and is skipped, as is a param no template maps.
+ * `paths` are the template paths that map the param.
+ *
+ * A filter is excluded entirely when its `queryParam` would not have one meaning across the Intent's refs
+ * (FilterDescriptor's contract): it is also a `fixedParams` key of any template (the ref's value is fixed, not
+ * the param's), or another Intent param maps to the same query parameter on one of the filter's paths.
  * undefined for a callback `queries` (nothing to read a `paramMap` from).
  */
 function buildFilters(spec: IntentSpec): IntentDef["filters"] | undefined {
   const queries = spec.queries;
   if (typeof queries === "function") return undefined;
-  const entries: { entry: FacetViewEntry; queryParam: string }[] = [];
+  const entries: { entry: FacetViewEntry; queryParam: string; paths: string[] }[] = [];
   for (const entry of buildFacetView(spec).facets) {
     if (entry.control !== "select" || entry.valueType !== "string" || entry.options.length === 0) continue;
     const mapped = new Set<string>();
+    const paths: string[] = [];
     for (const template of queries) {
       const queryParam = template.paramMap?.[entry.key];
-      if (queryParam != null) mapped.add(queryParam);
+      if (queryParam == null) continue;
+      mapped.add(queryParam);
+      if (!paths.includes(template.path)) paths.push(template.path);
     }
     if (mapped.size !== 1) continue;
-    entries.push({ entry, queryParam: [...mapped][0]! });
+    const queryParam = [...mapped][0]!;
+    if (queries.some((t) => t.fixedParams != null && Object.hasOwn(t.fixedParams, queryParam))) continue;
+    const shared = queries.some(
+      (t) =>
+        paths.includes(t.path) &&
+        Object.entries(t.paramMap ?? {}).some(([param, qp]) => qp === queryParam && param !== entry.key),
+    );
+    if (shared) continue;
+    entries.push({ entry, queryParam, paths });
   }
-  return (_params, locale) =>
-    entries.map(({ entry, queryParam }) => ({
+  return (locale) =>
+    entries.map(({ entry, queryParam, paths }) => ({
       param: entry.key,
       queryParam,
-      label: (locale != null ? entry.labels?.[locale] : undefined) ?? entry.label,
+      paths: [...paths],
+      label: localized(entry.labels, locale, entry.label),
       options: entry.options.map((opt) => ({
         value: opt.value,
-        label: (locale != null ? opt.labels?.[locale] : undefined) ?? opt.label,
+        label: localized(opt.labels, locale, opt.label),
       })),
     }));
+}
+
+/** The locale overlay for `locale` (exact tag, then its primary subtag: "ja-JP" -> "ja"), else the canonical label. */
+function localized(
+  labels: Record<string, string> | undefined,
+  locale: string | undefined,
+  canonical: string,
+): string {
+  if (locale == null || labels == null) return canonical;
+  return labels[locale] ?? labels[locale.split("-")[0]!] ?? canonical;
 }
 
 function buildFacetView(spec: IntentSpec): FacetView {

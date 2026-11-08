@@ -27,8 +27,20 @@ export interface QueryHandle {
 export interface FilterDescriptor {
   /** Intent param name; also used as the UISpec.state key. */
   param: string;
-  /** Query parameter the param maps to in the resolved query:// ref (an Intent param and its query param may be named differently). */
+  /**
+   * Query parameter the param maps to in the resolved query:// ref (an Intent param and its query param may be
+   * named differently). Contract: `queryParam` must have ONE meaning across the Intent's refs -- on every path in
+   * `paths` it is this param's value, and it is not also a fixed parameter or another Intent param's query
+   * parameter. A filter that cannot honour that is not described at all (`IntentDef.filters` excludes it).
+   */
   queryParam: string;
+  /**
+   * The query paths (the `<path>` of `query://<source>/<path>?...`) whose refs this filter governs, i.e. the
+   * Intent's query templates that map `param` to `queryParam`. The composer binds only data components whose
+   * `$ref` path is listed here; a component reading another path is left untouched even if its ref happens to
+   * carry the same query parameter name.
+   */
+  paths: string[];
   label: string;
   /** The authorized value domain (becomes both the control's options and `data.bind.values`). */
   options: { value: string; label: string }[];
@@ -79,10 +91,11 @@ export interface SemanticPort {
   validateIntent?(intent: IntentInput, ctx: SessionContext): Promise<IntentInput>;
   /**
    * Describes the GUI filters of an Intent (see {@link FilterDescriptor}); consulted by the composer only
-   * when `ComposePolicy.l1Filters` is on. Must be a pure function of the Intent definition: the composed
-   * Spec is cached under a key that contains neither tenant nor locale, so the descriptors must not depend
-   * on the caller's locale (the composer passes none, so labels are canonical). `ctx.tenant` only selects a
-   * per-tenant Intent catalog, like `resolveQuery`.
+   * when `ComposePolicy.l1Filters` is on. Must be a pure function of (Intent definition, tenant, locale):
+   * `ctx.tenant` selects a per-tenant Intent catalog (like `resolveQuery`) and `ctx.locale` (the session's
+   * locale, when present) selects the label language. The composer folds a hash of the returned descriptors
+   * into the Spec cache key, so Specs whose descriptors differ (another locale, a tenant-specific option
+   * list, a changed vocabulary) are cached separately and never served to each other.
    *
    * Optional and backward compatible: a `SemanticPort` that does not implement it simply gets no injected
    * filters. Returning `[]` means the Intent has no filters.
