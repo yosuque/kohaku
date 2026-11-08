@@ -7,6 +7,7 @@ convention (they are an API the product implements, not a wire contract). Record
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import ValidationError
@@ -536,6 +537,11 @@ class PromotionState:
     data: dict[str, Any] = field(default_factory=dict)
     tenant: str | None = None
     """The tenant that owns the promotion state. When omitted, tenant-neutral (equivalent to single-tenant)."""
+    revision: str | None = None
+    """A per-write token (None = compatible with records that predate it). The lineage promotion service
+    stamps a fresh one on every write and passes the one it read back as `expected_revision`, which is what
+    lets a `supports_compare_and_set` adapter reject a write based on a stale read. A StoragePort stores and
+    returns it verbatim and never generates one itself."""
 
 
 @dataclass(frozen=True)
@@ -613,7 +619,43 @@ def validate_promotion_state(raw: object) -> PromotionState | None:
         updatedAt=model.updatedAt,
         data=model.data,
         tenant=model.tenant,
+        revision=model.revision,
     )
+
+
+class _Unset(Enum):
+    """The type of `UNSET`. A single-member enum so `expected_revision is UNSET` narrows for mypy."""
+
+    UNSET = "UNSET"
+
+
+UNSET = _Unset.UNSET
+"""Sentinel for "no `expected_revision` given" (the tri-state's omitted case). `None` cannot play that role:
+TS distinguishes `expectedRevision: undefined` (no check) from `expectedRevision: null` (the record must not
+exist yet), and so does Python -- `None` is the latter."""
+
+type ExpectedRevision = str | None | _Unset
+"""Tri-state compare-and-set expectation of `put_promotion_state` / `put_fixation`: `UNSET` (default) = no
+check; `None` = the record MUST NOT exist yet; a str = the stored record's `revision` MUST equal it."""
+
+type ExpectedDeleteRevision = str | _Unset
+"""Compare-and-set expectation of `delete_fixation`: `UNSET` (default) = unconditional; a str = the stored
+fixation's `revision` MUST equal it (deleting has no "must not exist" case, so `None` is not accepted)."""
+
+
+def is_single_process(storage: object) -> bool:
+    """True when `storage` marks itself `single_process = True`: only ever shared by the callers of one
+    process (the file and in-memory ports), so it has no cross-process guarantee to declare and a host does
+    not warn about it (TS: `storage.singleProcess === true`). A strict identity check, like
+    `supports_compare_and_set`."""
+    return getattr(storage, "single_process", False) is True
+
+
+def supports_compare_and_set(storage: object) -> bool:
+    """True when `storage` declares the optional compare-and-set extension (TS: `storage.supportsCompareAndSet
+    === true`). A strict identity check on a real `True`, so a `Mock` or a `__getattr__`-based proxy does not
+    pass for one."""
+    return getattr(storage, "supports_compare_and_set", False) is True
 
 
 @runtime_checkable
@@ -649,10 +691,22 @@ class StoragePort(Protocol):
     createKeyedMutex, shared by the promotion lock and the fixation lock). That lock only orders calls
     *within one process* — running multiple instances/processes against the same backing store concurrently
     (e.g. two hosts sharing one data directory) is not supported by this contract; a lost update between
-    processes can still occur. The optional conditional-write parameter below (`if_present` on put_fixation)
-    is an additive hook a StoragePort MAY use to narrow one specific race (a stale self-heal resurrecting a
-    fixation deleted by another writer); implementations that ignore it keep unconditional (legacy) write
-    behavior. A full compare-and-swap contract is out of scope for v0.1 and left to future extension.
+    processes can still occur.
+
+    Optional compare-and-set (CAS): an adapter that sets a class/instance attribute
+    `supports_compare_and_set = True` (checked with `supports_compare_and_set(storage)`) additionally honors
+    `expected_revision` on `put_promotion_state`, `put_fixation` and `delete_fixation`, which makes the
+    read-modify-write safe *across processes* sharing one backend. `expected_revision` is tri-state: omitted
+    (`UNSET`) = no check (the legacy unconditional write, and what a caller passes for a record that predates
+    `revision`); `None` = the record MUST NOT exist yet; a str = the stored record's `revision` MUST equal it.
+    A mismatch (including a record that is absent when a str was expected) MUST raise `StorageConflictError`
+    and MUST NOT modify anything; the check and the write are one atomic step. An adapter that does not
+    declare `supports_compare_and_set` MAY ignore the parameter (unconditional write, as before), so the
+    in-process lock stays the only protection there; hosts warn about such an adapter at start-up. The
+    conditional-write parameter `if_present` on put_fixation is an older, independent hook that narrows one
+    specific race (a stale self-heal resurrecting a fixation deleted by another writer); it is applied first,
+    and `if_present` together with `expected_revision=None` ("must exist" and "must not exist") always
+    conflicts.
     """
 
     async def get_spec_cache(self, key: str) -> UISpec | None: ...
@@ -686,7 +740,12 @@ class StoragePort(Protocol):
         self, artifact_id: str, tenant: str | None = None
     ) -> PromotionState | None: ...
 
-    async def put_promotion_state(self, state: PromotionState) -> None: ...
+    async def put_promotion_state(
+        self, state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+    ) -> None:
+        """Save promotion state, keyed (tenant, artifactId) by state.tenant. `expected_revision` (honored only
+        by a `supports_compare_and_set` adapter): see this Protocol's docstring."""
+        ...
 
     async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]: ...
 
@@ -711,21 +770,38 @@ class StoragePort(Protocol):
         self, intent_hash: str, tenant: str | None = None
     ) -> FixationRecord | None: ...
 
-    async def put_fixation(self, record: FixationRecord, *, if_present: bool = False) -> None:
+    async def put_fixation(
+        self,
+        record: FixationRecord,
+        *,
+        if_present: bool = False,
+        expected_revision: ExpectedRevision = UNSET,
+    ) -> None:
         """Save a fixation.
 
         if_present (optional, additive): when True, the write MUST be a no-op unless a fixation currently
         exists at (record.tenant, record.intentHash) — used by self-healing's refresh_fingerprint so a
         get->put that races with a concurrent delete does not resurrect an already-removed fixation. An
         implementation that ignores the parameter keeps the legacy unconditional-write behavior.
+
+        expected_revision (honored only by a `supports_compare_and_set` adapter): the tri-state compare-and-set
+        expectation described on this Protocol; a mismatch raises `StorageConflictError`.
         """
         ...
 
     async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]: ...
 
-    async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
+    async def delete_fixation(
+        self,
+        intent_hash: str,
+        tenant: str | None = None,
+        *,
+        expected_revision: ExpectedDeleteRevision = UNSET,
+    ) -> None:
         """Release a fixation (optional extension). An unsupported implementation raises NotImplementedError
-        (fail-fast; no audit event is recorded either)."""
+        (fail-fast; no audit event is recorded either). expected_revision (honored only by a
+        `supports_compare_and_set` adapter): the delete is conditional on the stored fixation's `revision`
+        and raises `StorageConflictError` on a mismatch (an absent fixation also mismatches a str)."""
         ...
 
 

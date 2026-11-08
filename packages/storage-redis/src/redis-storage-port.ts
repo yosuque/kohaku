@@ -1,5 +1,5 @@
 import type { FixationRecord, PromotionState, StoragePort, UISpec } from "@kohaku-ui/spec-core";
-import { normalizeTenant } from "@kohaku-ui/spec-core";
+import { createKeyedMutex, normalizeTenant, StorageConflictError } from "@kohaku-ui/spec-core";
 import type { ChainableCommander, Redis } from "ioredis";
 import { createRedisConnection } from "./connection.js";
 import { DEFAULT_KEY_PREFIX, type RedisKeys, redisKeys } from "./keys.js";
@@ -57,7 +57,11 @@ export interface RedisStoragePort extends StoragePort {
    * reject outright ("Stream isn't writeable...") instead of failing fast with a clear "not ready" story.
    */
   ready(): Promise<void>;
-  /** Disconnects the client this port created (a no-op for an injected client). */
+  /**
+   * Disconnects the connections this port created: the `url`-constructed client, and (for either kind of
+   * client) the dedicated connection the compare-and-set writes lazily open. A no-op for an injected client
+   * that no compare-and-set write has touched (its owner disconnects it).
+   */
   close(): Promise<void>;
 }
 
@@ -85,12 +89,17 @@ export interface RedisStoragePort extends StoragePort {
  */
 export function createRedisStoragePort(options: RedisStoragePortOptions): RedisStoragePort {
   const connection = createRedisConnection(options, "redis storage port");
-  const { redis, ready, close } = connection;
+  const { redis, ready } = connection;
   const keys: RedisKeys = redisKeys(options.keyPrefix ?? DEFAULT_KEY_PREFIX);
+  const cas = createCompareAndSet(redis, ready, options);
 
   return {
+    supportsCompareAndSet: true,
     ready,
-    close,
+    async close() {
+      await cas.close();
+      await connection.close();
+    },
     async getSpecCache(key) {
       await ready();
       const raw = await redis.get(keys.spec(key));
@@ -151,8 +160,23 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       const raw = await redis.get(keys.promotion(tenant, artifactId));
       return raw == null ? null : (JSON.parse(raw) as PromotionState);
     },
-    async putPromotionState(state) {
+    async putPromotionState(state, putOptions) {
       await ready();
+      const expected = putOptions?.expectedRevision;
+      if (expected !== undefined) {
+        const key = keys.promotion(state.tenant, state.artifactId);
+        await cas.write(
+          "promotion",
+          state.artifactId,
+          key,
+          (current, multi, seq) => {
+            checkRevision("promotion", state.artifactId, current, expected);
+            queueIndexed(multi, seq, key, state.tenant, keys.promotionIndex, state);
+          },
+          keys.promotionSeq,
+        );
+        return;
+      }
       await putIndexed(
         redis,
         keys.promotionSeq,
@@ -188,6 +212,27 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
     async putFixation(record, options) {
       await ready();
       const key = keys.fixation(record.tenant, record.intentHash);
+      const expected = options?.expectedRevision;
+      if (expected !== undefined) {
+        // ifPresent + null is contradictory ("must exist" and "must not exist"): always a conflict.
+        if (options?.ifPresent === true && expected === null) {
+          throw new StorageConflictError("fixation", record.intentHash);
+        }
+        await cas.write(
+          "fixation",
+          record.intentHash,
+          key,
+          (current, multi, seq) => {
+            // ifPresent first: an absent record is a silent no-op even when a string was expected.
+            if (options?.ifPresent === true && current == null) return "skip";
+            checkRevision("fixation", record.intentHash, current, expected);
+            queueIndexed(multi, seq, key, record.tenant, keys.fixationIndex, record);
+            return undefined;
+          },
+          keys.fixationSeq,
+        );
+        return;
+      }
       if (options?.ifPresent === true) {
         // XX: only overwrite an existing key. The indexes already contain it, so nothing else to do.
         await redis.set(key, JSON.stringify(record), "XX");
@@ -199,9 +244,19 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       await ready();
       return listIndexed<FixationRecord>(redis, keys.fixationIndex(tenant));
     },
-    async deleteFixation(intentHash, tenant) {
+    async deleteFixation(intentHash, tenant, deleteOptions) {
       await ready();
       const key = keys.fixation(tenant, intentHash);
+      if (deleteOptions?.expectedRevision !== undefined) {
+        const expected = deleteOptions.expectedRevision;
+        await cas.write("fixation", intentHash, key, (current, multi) => {
+          checkRevision("fixation", intentHash, current, expected);
+          multi.del(key);
+          multi.zrem(keys.fixationIndex(undefined), key);
+          if (normalizeTenant(tenant) != null) multi.zrem(keys.fixationIndex(tenant), key);
+        });
+        return;
+      }
       const multi = redis.multi();
       multi.del(key);
       multi.zrem(keys.fixationIndex(undefined), key);
@@ -275,4 +330,155 @@ async function listIndexed<T>(redis: Redis, indexKey: string): Promise<T[]> {
   const out: T[] = [];
   for (const raw of raws) if (raw != null) out.push(JSON.parse(raw) as T);
   return out;
+}
+
+/** The record `revision` out of a stored JSON body (`undefined` when the record has none). */
+function revisionOf(raw: string): string | undefined {
+  const revision = (JSON.parse(raw) as { revision?: unknown }).revision;
+  return typeof revision === "string" ? revision : undefined;
+}
+
+/**
+ * The compare-and-set check against the raw stored body (`null` = absent), the same tri-state as
+ * `StoragePort`'s `expectedRevision`: `null` = must be absent; a string = must be present with exactly that
+ * `revision` (a record with no revision never matches).
+ */
+function checkRevision(
+  kind: "promotion" | "fixation",
+  id: string,
+  current: string | null,
+  expected: string | null,
+): void {
+  if (expected === null) {
+    if (current != null) throw new StorageConflictError(kind, id);
+    return;
+  }
+  if (current == null || revisionOf(current) !== expected) throw new StorageConflictError(kind, id);
+}
+
+interface CompareAndSet {
+  /**
+   * One optimistic transaction on `key`: `WATCH key`, `GET key`, run `build` against the current body (it
+   * queues the writes on the MULTI and throws `StorageConflictError` to abort, or returns `"skip"` to
+   * write nothing), then `EXEC`. A null EXEC reply means another client touched `key` between the `WATCH`
+   * and the `EXEC`, which is a conflict. `seqKey`, when given, reserves one sequence number for `build` (the
+   * index insertion order); it is wasted on a conflict, like every other sequence reservation here.
+   */
+  write(
+    kind: "promotion" | "fixation",
+    id: string,
+    key: string,
+    build: (current: string | null, multi: ChainableCommander, seq: number) => "skip" | undefined,
+    seqKey?: string,
+  ): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * The WATCH / MULTI / EXEC machinery behind the optional compare-and-set writes (Lua is deliberately not
+ * used). `WATCH` state belongs to a connection, and an `EXEC` from any other `MULTI` on the same connection
+ * would clear it, so these transactions run on their own lazily opened connection (`redis.duplicate()`),
+ * never on the shared command connection that `appendLineage` and the plain writes pipeline through. Within
+ * the process the transactions on that one connection are also serialized by a mutex (two interleaved
+ * `WATCH`es on a single connection would otherwise share, and one `EXEC` would clear, the other's watch);
+ * across processes the `WATCH` is what detects the race.
+ * `close()` ends that connection; a `write()` racing shutdown could open a fresh one that is never closed, which only
+ * matters while the process is exiting.
+ */
+function createCompareAndSet(
+  redis: Redis,
+  ready: () => Promise<void>,
+  options: RedisStoragePortOptions,
+): CompareAndSet {
+  const lock = createKeyedMutex();
+  let dedicated: Promise<Redis> | undefined;
+  // Counts `ready` events of the dedicated connection. A reconnect (which silently drops a server-side WATCH)
+  // bumps it, so a transaction whose epoch changed between WATCH and EXEC is treated as a conflict.
+  let epoch = 0;
+
+  function dedicatedClient(): Promise<Redis> {
+    if (dedicated == null) {
+      const attempt = (async () => {
+        await ready();
+        // enableOfflineQueue: false and autoResendUnfulfilledCommands: false keep ioredis from queueing or
+        // re-sending a WATCH / MULTI / EXEC across a reconnect: a re-sent EXEC would run without the watch the
+        // server dropped with the old connection and apply the write unconditionally.
+        const dup = redis.duplicate({
+          lazyConnect: true,
+          enableOfflineQueue: false,
+          autoResendUnfulfilledCommands: false,
+        });
+        dup.on("ready", () => {
+          epoch += 1;
+        });
+        dup.on("error", (error: Error) => {
+          if (options.onError != null) options.onError(error);
+          else
+            console.error(
+              "[@kohaku-ui/storage-redis] redis storage port: compare-and-set connection error:",
+              error,
+            );
+        });
+        try {
+          if (dup.status !== "ready") await dup.connect();
+        } catch (error) {
+          dup.disconnect();
+          throw error;
+        }
+        return dup;
+      })();
+      // Do not memoize a failed attempt (same policy as ready()).
+      dedicated = attempt.catch((error: unknown) => {
+        dedicated = undefined;
+        throw error;
+      });
+    }
+    return dedicated;
+  }
+
+  return {
+    write(kind, id, key, build, seqKey) {
+      return lock("cas", async () => {
+        const client = await dedicatedClient();
+        const startEpoch = epoch;
+        // EXEC (whatever it replies) clears the watch, so UNWATCH is only needed on the paths that leave
+        // before EXEC. The one connection is shared by every CAS write of this port, which is why the mutex
+        // above serializes them per process.
+        let executed = false;
+        try {
+          await client.watch(key);
+          const current = await client.get(key);
+          const seq = seqKey != null ? await client.incr(seqKey) : 0;
+          const multi = client.multi();
+          if (build(current, multi, seq) === "skip") return;
+          // The connection was re-established since the WATCH: the server dropped the watch with the old
+          // connection, so an EXEC now would apply unconditionally. Refuse it as a conflict instead.
+          if (epoch !== startEpoch) throw new StorageConflictError(kind, id);
+          executed = true;
+          // A null reply = the watched key changed under us: nothing was applied.
+          const replies = await multi.exec();
+          if (replies == null) throw new StorageConflictError(kind, id);
+        } finally {
+          // Best effort: if the connection itself is broken the next transaction's WATCH fails loudly instead.
+          if (!executed) await client.unwatch().catch(() => {});
+        }
+      });
+    },
+    async close() {
+      const pending = dedicated;
+      dedicated = undefined;
+      if (pending == null) return;
+      let client: Redis;
+      try {
+        client = await pending;
+      } catch {
+        return;
+      }
+      try {
+        await client.quit();
+      } catch {
+        client.disconnect();
+      }
+    },
+  };
 }

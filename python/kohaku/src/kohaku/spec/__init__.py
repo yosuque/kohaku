@@ -113,6 +113,7 @@ from .ports import (
     APPROVAL_ISSUE_ERROR_CODE,
     DEFAULT_APPROVAL_TTL_SECONDS,
     DEFAULT_CAPABILITY_TTL_SECONDS,
+    UNSET,
     ApprovalGrant,
     ApprovalIssueError,
     ApprovalPort,
@@ -122,6 +123,8 @@ from .ports import (
     CapabilityRevocationStore,
     CatalogContribution,
     DomainPort,
+    ExpectedDeleteRevision,
+    ExpectedRevision,
     FilterDescriptor,
     FilterOption,
     FixationRecord,
@@ -153,6 +156,8 @@ from .ports import (
     ThemeTokens,
     VerifyRequest,
     VerifyResult,
+    is_single_process,
+    supports_compare_and_set,
     validate_fixation_record,
     validate_promotion_state,
 )
@@ -179,6 +184,7 @@ from .sandbox_dom import (
     to_kebab_case,
 )
 from .spec_text import spec_to_text
+from .storage_conflict import StorageConflictError, is_storage_conflict_error
 from .suggestion import SchemaSuggestion, SuggestedDraft, SuggestedEvent
 from .tabular import ColumnType, DataShape, DataShapeColumn, TabularColumn, TabularData
 from .validate import (
@@ -218,6 +224,7 @@ __all__ = [
     "SPEC_VERSION",
     "UNDEFINED",
     "VOID_TAGS",
+    "UNSET",
     "ActionParamIssue",
     "ActionParamsSchema",
     "ActionParamsSchemaError",
@@ -245,6 +252,8 @@ __all__ = [
     "EventBinding",
     "FilterDescriptor",
     "FilterOption",
+    "ExpectedDeleteRevision",
+    "ExpectedRevision",
     "FixationRecord",
     "FixationRecordModel",
     "GovernanceErrorDiscriminators",
@@ -307,6 +316,7 @@ __all__ = [
     "SpecParseFailed",
     "SpecParseOk",
     "SpecPatch",
+    "StorageConflictError",
     "StoragePort",
     "SuggestedDraft",
     "SuggestedEvent",
@@ -351,6 +361,8 @@ __all__ = [
     "is_style_value_safe",
     "is_tag_allowed",
     "js_string",
+    "is_single_process",
+    "is_storage_conflict_error",
     "merge_policy_sections",
     "normalize_intent",
     "normalize_json_value",
@@ -367,6 +379,7 @@ __all__ = [
     "safe_parse_spec",
     "sha256_hex",
     "spec_to_text",
+    "supports_compare_and_set",
     "to_kebab_case",
     "validate_action_params",
     "validate_fixation_record",

@@ -503,10 +503,14 @@ export function createPromotions(opts: CreatePromotionsOptions): Promotions {
   /**
    * Executes a single transition (load -> transition -> record -> persist).
    *
-   * Idempotency contract: **act is not idempotent**. There is no optimistic lock on the candidate's
-   * read-modify-write, and there is no serialization here like the component.nominated duplicate guard of
-   * auto-nominate (scanCandidates). Thus serializing concurrent / retried calls to the same artifact is the
-   * **caller's responsibility** (at the HTTP layer, guard with per-artifact serialization or optimistic locking, etc.).
+   * Idempotency contract: **act is not idempotent**. There is no serialization here like the
+   * component.nominated duplicate guard of auto-nominate (scanCandidates). Thus serializing concurrent /
+   * retried calls to the same artifact within one process is the **caller's responsibility** (host-rest holds a
+   * per-artifact mutex). Across processes sharing one backend, a StoragePort that declares
+   * `supportsCompareAndSet` makes the candidate's read-modify-write optimistic: the snapshot write is
+   * conditional on the revision the candidate was loaded with, and a concurrent change surfaces as
+   * `StorageConflictError` (nothing is overwritten; the caller reloads and retries). Without that declaration
+   * a lost update between processes remains possible.
    *
    * scope.tenant: when given, if the candidate's owning tenant (the component.generated tenant via
    * store.load) does not match, it is treated as "does not exist" (throws unknown artifact). The recorded
@@ -541,6 +545,13 @@ export function createPromotions(opts: CreatePromotionsOptions): Promotions {
     applyActionData(candidate, action);
     const event = auditEventFor(action, artifactId, actor);
     if (event != null) {
+      // Compare-and-set port: re-read the stored revision first and give up (StorageConflictError) if another
+      // instance moved the state since the load, so a transition that would lose its conditional persist
+      // below does not record an audit event for it. This narrows the window to the record -> persist gap;
+      // a conflict at the persist itself still leaves one orphan `component.reviewed`/etc. event, which is
+      // harmless: reconcile only reads snapshots (it never derives state from events), so an event with no
+      // matching state change is ignored, and a retry records a fresh one.
+      await store.assertUnchanged(candidate, tenant);
       await opts.lineage.record(event.type, event.payload, event.actor, tenant);
     }
     await store.persist(candidate, tenant);

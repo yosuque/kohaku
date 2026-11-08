@@ -5,7 +5,13 @@ import {
   pageLineageArray,
   type StoragePort,
 } from "@kohaku-ui/spec-core";
-import { filterLineage, listByTenant, tenantKey } from "./shared.js";
+import {
+  checkExpectedRevision,
+  filterLineage,
+  listByTenant,
+  planFixationWrite,
+  tenantKey,
+} from "./shared.js";
 import { createSpecCache } from "./spec-cache.js";
 
 /**
@@ -27,6 +33,10 @@ export function createMemoryStoragePort(): StoragePort {
   const fixations = new Map<string, FixationRecord>();
 
   return {
+    // Single-threaded and free of awaits between each compare and its write, so the check-and-set below is
+    // atomic within the process (a shared backend across processes is what redis / postgres are for).
+    supportsCompareAndSet: true,
+    singleProcess: true,
     async getSpecCache(key) {
       return specCache.get(key);
     },
@@ -51,8 +61,10 @@ export function createMemoryStoragePort(): StoragePort {
     async getPromotionState(artifactId, tenant) {
       return promotions.get(tenantKey(tenant, artifactId)) ?? null;
     },
-    async putPromotionState(state) {
-      promotions.set(tenantKey(state.tenant, state.artifactId), state);
+    async putPromotionState(state, options) {
+      const key = tenantKey(state.tenant, state.artifactId);
+      checkExpectedRevision("promotion", state.artifactId, promotions.get(key), options?.expectedRevision);
+      promotions.set(key, state);
     },
     async putPromotionStates(states) {
       for (const state of states) promotions.set(tenantKey(state.tenant, state.artifactId), state);
@@ -66,14 +78,16 @@ export function createMemoryStoragePort(): StoragePort {
     async putFixation(record, options) {
       const key = tenantKey(record.tenant, record.intentHash);
       // ifPresent: a self-healing get→put racing a concurrent delete must not resurrect the record.
-      if (options?.ifPresent === true && !fixations.has(key)) return;
+      if (planFixationWrite(record.intentHash, fixations.get(key), options) === "skip") return;
       fixations.set(key, record);
     },
     async listFixations(tenant) {
       return listByTenant(fixations, tenant);
     },
-    async deleteFixation(intentHash, tenant) {
-      fixations.delete(tenantKey(tenant, intentHash));
+    async deleteFixation(intentHash, tenant, options) {
+      const key = tenantKey(tenant, intentHash);
+      checkExpectedRevision("fixation", intentHash, fixations.get(key), options?.expectedRevision);
+      fixations.delete(key);
     },
   };
 }

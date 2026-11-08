@@ -28,7 +28,15 @@ from kohaku.registry import (
     define_component,
     resolve_catalog,
 )
-from kohaku.spec import ComponentNode, FixationRecord, Intent, Principal, Provenance, UISpec
+from kohaku.spec import (
+    ComponentNode,
+    FixationRecord,
+    Intent,
+    Principal,
+    Provenance,
+    StorageConflictError,
+    UISpec,
+)
 
 INTENT_HASH_CLEAN = "sha256:" + "1" * 64
 INTENT_HASH_BLOCKED = "sha256:" + "2" * 64
@@ -733,6 +741,35 @@ def test_apply_reports_a_guard_mismatch_as_skipped() -> None:
     assert result.applied == []
     assert result.skipped == [{"intentHash": INTENT_HASH_CLEAN, "tenant": None}]
     assert result.blocked == []
+
+
+def test_apply_reports_a_lost_storage_compare_and_set_race_as_skipped_and_propagates_other_errors() -> (
+    None
+):
+    plan = _build_plan()
+
+    class _Conflicting:
+        async def replace(self, *args: Any, **kwargs: Any) -> Any:
+            raise StorageConflictError("fixation", INTENT_HASH_CLEAN)
+
+    class _Broken:
+        async def replace(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("disk full")
+
+    async def apply(replacer: CatalogMigrationFixationReplacer) -> CatalogMigrationApplyResult:
+        return await apply_catalog_migration(
+            plan=plan,
+            fixations=replacer,
+            approver=APPROVER,
+            catalog_for=lambda _t: _migration_catalog(),
+        )
+
+    result = asyncio.run(apply(_Conflicting()))
+    assert result.applied == []
+    assert result.skipped == [{"intentHash": INTENT_HASH_CLEAN, "tenant": None}]
+    assert result.blocked == []
+    with pytest.raises(RuntimeError, match="disk full"):
+        asyncio.run(apply(_Broken()))
 
 
 def test_apply_never_calls_replace_for_a_step_already_in_plan_blocked() -> None:

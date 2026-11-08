@@ -4,6 +4,7 @@ import {
   type LineageFilter,
   matchesLineageFilter,
   normalizeTenant,
+  StorageConflictError,
 } from "@kohaku-ui/spec-core";
 
 /**
@@ -52,4 +53,44 @@ export function filterLineage(
     if (event != null && matchesLineageFilter(event, filter)) newestFirst.push(event);
   }
   return newestFirst.reverse();
+}
+
+/**
+ * The compare-and-set check shared by the memory and file ports (`StoragePort.supportsCompareAndSet`):
+ * throws {@link StorageConflictError} unless `existing` (the stored record, `undefined` when absent) satisfies
+ * the tri-state `expected`. `undefined` = no check; `null` = the record must be absent; a string = the record
+ * must be present and carry exactly that `revision` (a record with no revision never matches a string).
+ */
+export function checkExpectedRevision(
+  kind: "promotion" | "fixation",
+  key: string,
+  existing: { revision?: string } | undefined,
+  expected: string | null | undefined,
+): void {
+  if (expected === undefined) return;
+  if (expected === null) {
+    if (existing !== undefined) throw new StorageConflictError(kind, key);
+    return;
+  }
+  if (existing === undefined || existing.revision !== expected) throw new StorageConflictError(kind, key);
+}
+
+/**
+ * Decides a `putFixation` against the stored record (`existing`, `undefined` when absent): `"skip"` when
+ * `ifPresent` applies to an absent record (the write is a silent no-op), `"write"` when the write may
+ * proceed, and a thrown {@link StorageConflictError} when `expectedRevision` is not satisfied. `ifPresent`
+ * is applied first, and `ifPresent` together with `expectedRevision: null` ("must exist" and "must not
+ * exist") always conflicts.
+ */
+export function planFixationWrite(
+  intentHash: string,
+  existing: { revision?: string } | undefined,
+  options: { ifPresent?: boolean; expectedRevision?: string | null } | undefined,
+): "write" | "skip" {
+  if (options?.ifPresent === true && options.expectedRevision === null) {
+    throw new StorageConflictError("fixation", intentHash);
+  }
+  if (options?.ifPresent === true && existing === undefined) return "skip";
+  checkExpectedRevision("fixation", intentHash, existing, options?.expectedRevision);
+  return "write";
 }

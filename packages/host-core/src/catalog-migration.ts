@@ -4,6 +4,7 @@ import {
   canonicalStringify,
   computeStructureHash,
   type FixationRecord,
+  isStorageConflictError,
   type JsonObject,
   type Principal,
   type StoragePort,
@@ -360,19 +361,28 @@ export async function applyCatalogMigration(
       continue;
     }
 
-    const result = await fixations.replace(step.intentHash, step.pinnedSpec, {
-      approver,
-      ...(step.tenant != null ? { tenant: step.tenant } : {}),
-      guard: {
-        ...(step.beforeRevision != null ? { ifRevision: step.beforeRevision } : {}),
-        ifFixatedAt: step.beforeFixatedAt,
-        ifStructureHash: step.beforeStructureHash,
-        ...(step.beforeCatalogFingerprint != null
-          ? { ifCatalogFingerprint: step.beforeCatalogFingerprint }
-          : {}),
-      },
-      planId: plan.planHash,
-    });
+    let result: Awaited<ReturnType<CatalogMigrationFixationReplacer["replace"]>>;
+    try {
+      result = await fixations.replace(step.intentHash, step.pinnedSpec, {
+        approver,
+        ...(step.tenant != null ? { tenant: step.tenant } : {}),
+        guard: {
+          ...(step.beforeRevision != null ? { ifRevision: step.beforeRevision } : {}),
+          ifFixatedAt: step.beforeFixatedAt,
+          ifStructureHash: step.beforeStructureHash,
+          ...(step.beforeCatalogFingerprint != null
+            ? { ifCatalogFingerprint: step.beforeCatalogFingerprint }
+            : {}),
+        },
+        planId: plan.planHash,
+      });
+    } catch (e) {
+      // A compare-and-set StoragePort found the fixation changed by another writer between the guard check
+      // and the write: the same "changed underneath the plan" outcome the guard itself reports, so skip this
+      // step (and keep going with the rest) rather than aborting the whole apply.
+      if (!isStorageConflictError(e)) throw e;
+      result = null;
+    }
     if (result == null) {
       skipped.push({ intentHash: step.intentHash, ...(step.tenant != null ? { tenant: step.tenant } : {}) });
     } else {

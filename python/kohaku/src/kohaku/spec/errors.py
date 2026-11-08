@@ -85,6 +85,11 @@ type HostErrorCode = Literal[
     # `confirmed: true` (tier "confirm") or a valid unused approval token bound to this exact
     # invocation (tier "approve"), and neither was satisfied. MUST be reported with HTTP 403.
     "APPROVAL_REQUIRED",
+    # Storage compare-and-set (SPEC §6.1, REST-CONF-001): a governance write found its record changed by a
+    # concurrent writer between the read and the write (a StorageConflictError from a StoragePort that
+    # declares supports_compare_and_set). Nothing was written. MUST be reported with HTTP 409 and a fixed,
+    # client-safe message; the client reloads and retries (a host does not retry on its own).
+    "CONFLICT",
 ]
 
 
@@ -166,3 +171,5 @@ class GovernanceErrorDiscriminators:
     ARTIFACT_NOT_FOUND_CODE = "PROMOTION_ARTIFACT_NOT_FOUND"
     """The exception raised by the promotion service when the artifact does not exist (or belongs to another
     tenant) -> 404 NOT_FOUND. Discriminated by code rather than a message-text match."""
+    STORAGE_CONFLICT_CODE = "STORAGE_CONFLICT"
+    """StorageConflictError.code (a compare-and-set write lost a race with another writer -> 409 CONFLICT)."""

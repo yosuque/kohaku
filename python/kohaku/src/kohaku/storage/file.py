@@ -51,10 +51,13 @@ import uuid
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from kohaku.spec import (
     DEFAULT_LINEAGE_LIMIT,
+    UNSET,
+    ExpectedDeleteRevision,
+    ExpectedRevision,
     FixationRecord,
     LineageActor,
     LineageEventRecord,
@@ -63,6 +66,7 @@ from kohaku.spec import (
     LineagePageRequest,
     Principal,
     PromotionState,
+    StorageConflictError,
     UISpec,
     page_lineage_events,
 )
@@ -88,6 +92,47 @@ def _fixation_key(tenant: str | None, intent_hash: str) -> str:
 def _promotion_key(tenant: str | None, artifact_id: str) -> str:
     normalized = _normalize_tenant(tenant)
     return f"{normalized}\x00{artifact_id}" if normalized is not None else artifact_id
+
+
+def _check_expected_revision(
+    kind: Literal["promotion", "fixation"],
+    record_id: str,
+    existing: dict[str, Any] | None,
+    expected: ExpectedRevision,
+) -> None:
+    """The compare-and-set check shared by the promotion and fixation writes (twin of the TS port's
+    checkExpectedRevision, storage-memory/src/shared.ts): raises StorageConflictError unless `existing` (the
+    stored wire record, None when absent) satisfies the tri-state `expected`. UNSET = no check; None = the
+    record must be absent; a str = the record must be present and carry exactly that `revision` (a record
+    with no revision never matches a str)."""
+    if expected is UNSET:
+        return
+    if expected is None:
+        if existing is not None:
+            raise StorageConflictError(kind, record_id)
+        return
+    if existing is None or existing.get("revision") != expected:
+        raise StorageConflictError(kind, record_id)
+
+
+def _plan_fixation_write(
+    intent_hash: str,
+    existing: dict[str, Any] | None,
+    *,
+    if_present: bool,
+    expected: ExpectedRevision,
+) -> bool:
+    """Decides a put_fixation against the stored wire record (None when absent): False when `if_present`
+    applies to an absent record (the write is a silent no-op), True when the write may proceed, and
+    StorageConflictError when `expected` is not satisfied. `if_present` is applied first, and `if_present`
+    together with `expected=None` ("must exist" and "must not exist") always conflicts. Twin of the TS
+    port's planFixationWrite."""
+    if if_present and expected is None:
+        raise StorageConflictError("fixation", intent_hash)
+    if if_present and existing is None:
+        return False
+    _check_expected_revision("fixation", intent_hash, existing, expected)
+    return True
 
 
 def _lineage_to_wire(event: LineageEventRecord) -> dict[str, Any]:
@@ -130,6 +175,8 @@ def _promotion_to_wire(state: PromotionState) -> dict[str, Any]:
     }
     if state.tenant is not None:
         out["tenant"] = state.tenant
+    if state.revision is not None:
+        out["revision"] = state.revision
     return out
 
 
@@ -140,6 +187,7 @@ def _promotion_from_wire(data: dict[str, Any]) -> PromotionState:
         updatedAt=str(data.get("updatedAt", "")),
         data=data.get("data") or {},
         tenant=data.get("tenant"),
+        revision=data.get("revision"),
     )
 
 
@@ -193,6 +241,15 @@ class FileStoragePort:
     not power-loss/kernel-panic durability), single-process concurrency only, and reference/demo status —
     ship a DB-backed StoragePort implementation for production use.
     """
+
+    single_process = True
+    """Marks this port as only ever shared by the callers of one process (hosts do not warn about it). It
+    deliberately does NOT declare `supports_compare_and_set`: `expected_revision` is honored (the compare runs
+    against the snapshot freshly re-read from disk inside the per-file asyncio lock, see `_merge_mutate`), but a
+    lock that only orders calls within this process is not atomic across processes, and two processes sharing
+    one data directory (sample-api + a Python MCP host) is a documented setup. The lineage services therefore
+    do not pass `expected_revision` to this port. `MemoryStoragePort` (one disposable directory, one process)
+    does declare it."""
 
     def __init__(self, data_dir: str | Path) -> None:
         self._dir = Path(data_dir)
@@ -312,7 +369,13 @@ class FileStoragePort:
     ) -> PromotionState | None:
         return self._promotions.get(_promotion_key(tenant, artifact_id))
 
-    async def put_promotion_state(self, state: PromotionState) -> None:
+    async def put_promotion_state(
+        self, state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+    ) -> None:
+        def _plan(existing: dict[str, Any] | None) -> bool:
+            _check_expected_revision("promotion", state.artifactId, existing, expected_revision)
+            return True
+
         await self._merge_put(
             self._promotions_path,
             self._promotions,
@@ -320,6 +383,7 @@ class FileStoragePort:
             state,
             _promotion_to_wire,
             _promotion_from_wire,
+            plan=_plan,
         )
 
     async def put_promotion_states(self, states: list[PromotionState]) -> None:
@@ -359,7 +423,18 @@ class FileStoragePort:
     ) -> FixationRecord | None:
         return self._fixations.get(_fixation_key(tenant, intent_hash))
 
-    async def put_fixation(self, record: FixationRecord, *, if_present: bool = False) -> None:
+    async def put_fixation(
+        self,
+        record: FixationRecord,
+        *,
+        if_present: bool = False,
+        expected_revision: ExpectedRevision = UNSET,
+    ) -> None:
+        def _plan(existing: dict[str, Any] | None) -> bool:
+            return _plan_fixation_write(
+                record.intentHash, existing, if_present=if_present, expected=expected_revision
+            )
+
         await self._merge_put(
             self._fixations_path,
             self._fixations,
@@ -367,7 +442,7 @@ class FileStoragePort:
             record,
             _fixation_to_wire,
             _fixation_from_wire,
-            if_present=if_present,
+            plan=_plan,
         )
 
     async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]:
@@ -379,7 +454,13 @@ class FileStoragePort:
             else [f for f in values if _normalize_tenant(f.tenant) == wanted]
         )
 
-    async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
+    async def delete_fixation(
+        self,
+        intent_hash: str,
+        tenant: str | None = None,
+        *,
+        expected_revision: ExpectedDeleteRevision = UNSET,
+    ) -> None:
         key = _fixation_key(tenant, intent_hash)
 
         def _do() -> None:
@@ -389,6 +470,14 @@ class FileStoragePort:
                 if corrupted
                 else loaded
             )
+            try:
+                _check_expected_revision("fixation", intent_hash, base.get(key), expected_revision)
+            except StorageConflictError:
+                # Nothing is written, but this process's view was stale -- that staleness is exactly what the
+                # conflict reports -- so refresh it from the re-read (twin of TS mergeMutate's behaviour).
+                self._fixations.clear()
+                self._fixations.update({k: _fixation_from_wire(v) for k, v in base.items()})
+                raise
             base.pop(key, None)
             _write_json_atomic(self._fixations_path, base)
             self._fixations.clear()
@@ -415,23 +504,24 @@ class FileStoragePort:
         value: T,
         to_wire: Callable[[T], dict[str, Any]],
         from_wire: Callable[[dict[str, Any]], T],
-        *,
-        if_present: bool = False,
+        plan: Callable[[dict[str, Any] | None], bool] | None = None,
     ) -> None:
         """Read the latest from disk, update **one** key, write it back atomically, and sync memory too. A
         thin single-key wrapper over `_merge_mutate` (below), which several keys in one call (e.g.
         `put_promotion_states`) also builds on.
 
-        if_present: skip the write-back (memory is still synced to the freshly re-read base) unless `key` is
-        already present there. Used by Fixations.refresh_fingerprint (via put_fixation's if_present) so a
-        self-healing get->put that races with a concurrent delete does not resurrect an already-removed
-        fixation — and, since memory is synced to the current disk truth even on this no-op path, the
-        caller's own stale in-memory copy of the deleted record is dropped too rather than lingering until an
-        unrelated key's put happens to resync it.
+        plan: sees the wire record currently on the freshly re-read disk snapshot (None when absent) and
+        returns False to skip the write-back (memory is still synced to the freshly re-read base) or True to
+        proceed; it may raise (a compare-and-set StorageConflictError), which aborts the write. The False case
+        is put_fixation's `if_present`: used by Fixations.refresh_fingerprint so a self-healing get->put that
+        races with a concurrent delete does not resurrect an already-removed fixation — and, since memory is
+        synced to the current disk truth even on this no-op path, the caller's own stale in-memory copy of
+        the deleted record is dropped too rather than lingering until an unrelated key's put happens to
+        resync it.
         """
 
         def _mutate(base: dict[str, Any]) -> bool | None:
-            if if_present and key not in base:
+            if plan is not None and not plan(base.get(key)):
                 return False
             base[key] = to_wire(value)
             return None
@@ -467,7 +557,15 @@ class FileStoragePort:
         def _do() -> None:
             loaded, corrupted = _load_json_snapshot(path, {})
             base = {k: to_wire(v) for k, v in memory.items()} if corrupted else loaded
-            should_write = mutate(base) is not False
+            try:
+                should_write = mutate(base) is not False
+            except Exception:
+                # A rejected conditional write (compare-and-set conflict) changes nothing on disk, but this
+                # process's view was stale -- that is exactly what the conflict reports -- so refresh it from
+                # the re-read before propagating (twin of TS mergeMutate).
+                memory.clear()
+                memory.update({k: from_wire(v) for k, v in base.items()})
+                raise
             if should_write:
                 _write_json_atomic(path, base)
             memory.clear()
@@ -485,6 +583,10 @@ class MemoryStoragePort(FileStoragePort):
     memory; governance state is files under that temp directory). The temp directory is reclaimed at instance
     GC, or via close(). The public API is unchanged (usable with no constructor arguments).
     """
+
+    supports_compare_and_set = True
+    """One process owns the temporary directory, so the in-process lock makes the compare-and-set atomic for
+    every possible caller; it declares the extension (unlike its parent, which may share a directory)."""
 
     def __init__(self) -> None:
         import tempfile

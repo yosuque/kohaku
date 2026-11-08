@@ -237,6 +237,25 @@ function resolveAuthz(options: CreateKohakuHostOptions): AuthzPort {
 }
 
 /**
+ * One `console.warn` line for a StoragePort that declares neither `supportsCompareAndSet` nor `singleProcess`.
+ * The in-process mutex the hosts hold still serializes promotion / fixation updates within one process, but
+ * with two or more host instances on the same backend such a port can lose one instance's update to the
+ * other's. The reference redis / postgres ports declare the compare-and-set extension; the in-memory and file
+ * ports mark themselves `singleProcess` (the file port's lock does not span processes, so it does not claim
+ * the extension, and sharing one data directory across processes can still lose updates). Only a custom
+ * adapter that has adopted neither reaches this.
+ */
+function warnIfStorageLacksCompareAndSet(storage: StoragePort): void {
+  if (storage.supportsCompareAndSet === true || storage.singleProcess === true) return;
+  console.warn(
+    "[kohaku] the StoragePort declares neither `supportsCompareAndSet` nor `singleProcess`: if more than one host instance " +
+      "shares this storage, concurrent promotion/fixation updates can be silently lost (the in-process " +
+      "lock only serializes within one process). Implement the optional compare-and-set extension " +
+      "(`expectedRevision`, see @kohaku-ui/port-contracts' `requireCompareAndSet`) or run a single instance.",
+  );
+}
+
+/**
  * Wires the default Port implementations into `@kohaku-ui/host-rest`'s `createKohakuRoutes` in one call: a
  * minimal host is `createKohakuHost({ domain, querySource, llm, intents, dataVersion })`, mounted at
  * `/api/kohaku` and ready to serve. Every default is independently overridable (`storage`, `authz`,
@@ -256,6 +275,7 @@ function resolveAuthz(options: CreateKohakuHostOptions): AuthzPort {
  */
 export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
   const storage = options.storage ?? createMemoryStoragePort();
+  warnIfStorageLacksCompareAndSet(storage);
   const authz = resolveAuthz(options);
   const semantic = resolveSemantic(options);
   const catalog = options.catalog ?? resolveCatalog(coreCatalog);

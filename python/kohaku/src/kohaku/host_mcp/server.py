@@ -32,6 +32,7 @@ from kohaku.host_core import (
     ACTION_GATE_UNAVAILABLE_MESSAGE,
     GATED_READ_MESSAGE,
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+    STORAGE_CONFLICT_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
     ActionGateRequest,
@@ -444,6 +445,8 @@ def _client_failure_message(exc: BaseException) -> str:
     `_TOOL_INTERNAL_ERROR_MESSAGE`. Port of TS `clientFailureMessage`.
     """
     cls = classify_host_error(exc)
+    if cls.kind == "conflict":
+        return STORAGE_CONFLICT_MESSAGE
     if cls.kind == "upstream_unavailable":
         return LLM_PROVIDER_UNAVAILABLE_MESSAGE
     return str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE

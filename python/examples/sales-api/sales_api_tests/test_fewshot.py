@@ -81,7 +81,7 @@ class _StubStorage:
     ) -> PromotionState | None:
         return None
 
-    async def put_promotion_state(self, state: PromotionState) -> None:
+    async def put_promotion_state(self, state: PromotionState, **_kwargs: object) -> None:
         return None
 
     async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]:
@@ -92,13 +92,17 @@ class _StubStorage:
     ) -> FixationRecord | None:
         return None
 
-    async def put_fixation(self, record: FixationRecord, *, if_present: bool = False) -> None:
+    async def put_fixation(
+        self, record: FixationRecord, *, if_present: bool = False, **_kwargs: object
+    ) -> None:
         return None
 
     async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]:
         return self._fixations
 
-    async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
+    async def delete_fixation(
+        self, intent_hash: str, tenant: str | None = None, **_kwargs: object
+    ) -> None:
         return None
 
 

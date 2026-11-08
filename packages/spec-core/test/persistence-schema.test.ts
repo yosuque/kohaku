@@ -123,3 +123,21 @@ describe("LineageEventRecordSchema", () => {
     expect(LineageEventRecordSchema.safeParse(event).success).toBe(false);
   });
 });
+
+describe("PromotionStateSchema revision", () => {
+  const base = { artifactId: "a1", status: "candidate", updatedAt: "2026-07-01T00:00:00Z", data: {} };
+
+  it("accepts an optional revision and keeps it on parse", () => {
+    const parsed = PromotionStateSchema.safeParse({ ...base, revision: "r1" });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.revision).toBe("r1");
+  });
+
+  it("stays compatible with a record that predates revision", () => {
+    expect(PromotionStateSchema.safeParse(base).success).toBe(true);
+  });
+
+  it("rejects a non-string revision", () => {
+    expect(PromotionStateSchema.safeParse({ ...base, revision: 3 }).success).toBe(false);
+  });
+});
