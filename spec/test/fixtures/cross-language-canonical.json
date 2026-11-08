@@ -1291,5 +1291,2047 @@
       "  - never leave browser-default styling on tables, buttons or inputs"
     ],
     "promptRevision": "13"
+  },
+  "domainMcp": {
+    "schemaProjection": [
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string",
+              "description": "x",
+              "maxLength": 10
+            }
+          },
+          "required": [
+            "q"
+          ]
+        },
+        "expected": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "q": {
+                "type": "string",
+                "maxLength": 10
+              }
+            },
+            "required": [
+              "q"
+            ],
+            "additionalProperties": false
+          },
+          "dropped": [
+            "properties.q.description"
+          ],
+          "omitted": false,
+          "reasons": []
+        }
+      },
+      {
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "title": "refund",
+          "properties": {
+            "orderId": {
+              "type": "string",
+              "pattern": "^o-",
+              "minLength": 1,
+              "format": "uuid"
+            },
+            "amount": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000,
+              "default": 5
+            },
+            "qty": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "full",
+                "partial"
+              ]
+            },
+            "notify": {
+              "type": "boolean"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 8
+              },
+              "maxItems": 4,
+              "minItems": 1
+            },
+            "nested": {
+              "type": "object",
+              "properties": {
+                "a": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": [
+            "orderId",
+            "amount"
+          ],
+          "additionalProperties": false
+        },
+        "expected": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "orderId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "amount": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "qty": {
+                "type": "integer"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "partial"
+                ]
+              },
+              "notify": {
+                "type": "boolean"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 8
+                },
+                "maxItems": 4
+              },
+              "nested": {
+                "type": "object",
+                "properties": {
+                  "a": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "orderId",
+              "amount"
+            ],
+            "additionalProperties": false
+          },
+          "dropped": [
+            "$schema",
+            "title",
+            "properties.orderId.pattern",
+            "properties.orderId.format",
+            "properties.amount.default",
+            "properties.qty.exclusiveMinimum",
+            "properties.tags.minItems"
+          ],
+          "omitted": false,
+          "reasons": []
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object"
+        },
+        "expected": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false
+          },
+          "dropped": [],
+          "omitted": false,
+          "reasons": []
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "string",
+              "minimum": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "expected": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "n": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "dropped": [
+            "properties.n.minimum",
+            "properties.n.items"
+          ],
+          "omitted": false,
+          "reasons": []
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.anyOf"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "oneOf": [
+            {
+              "properties": {}
+            }
+          ]
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "oneOf"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/A"
+            }
+          },
+          "$defs": {
+            "A": {
+              "type": "string"
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [
+            "$defs"
+          ],
+          "omitted": true,
+          "reasons": [
+            "properties.a.$ref"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.type"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "additionalProperties"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "additionalProperties"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.items"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "string"
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "type"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {}
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.type"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string",
+              "enum": [
+                {
+                  "x": 1
+                }
+              ]
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.enum"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string",
+              "enum": [
+                "x",
+                1,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "expected": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "string",
+                "enum": [
+                  "x",
+                  1,
+                  true,
+                  null
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "dropped": [],
+          "omitted": false,
+          "reasons": []
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string",
+              "maxLength": 1.5
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.maxLength"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string",
+              "someVendorThing": 1,
+              "x-note": "n"
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [
+            "properties.a.x-note"
+          ],
+          "omitted": true,
+          "reasons": [
+            "properties.a.someVendorThing"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "required": "a"
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "required"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": []
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties"
+          ]
+        }
+      },
+      {
+        "inputSchema": null,
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "(root)"
+          ]
+        }
+      },
+      {
+        "inputSchema": true,
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "(root)"
+          ]
+        }
+      }
+    ],
+    "argumentCoercion": [
+      {
+        "args": {
+          "n": "3",
+          "b": "true",
+          "s": "x",
+          "_limit": "5",
+          "_sort": "a"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "n": 3,
+          "b": true,
+          "s": "x",
+          "limit": 5
+        }
+      },
+      {
+        "args": {
+          "n": "-1.5",
+          "b": "false"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "n": -1.5,
+          "b": false
+        }
+      },
+      {
+        "args": {
+          "n": "1e3",
+          "limit": "7"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "n": 1000,
+          "limit": 7
+        }
+      },
+      {
+        "args": {
+          "n": "3.0",
+          "limit": "3.0"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "n": 3,
+          "limit": 3
+        }
+      },
+      {
+        "args": {
+          "limit": "9",
+          "_limit": "5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 5
+        }
+      },
+      {
+        "args": {
+          "_cursor": "c",
+          "_limit": "2",
+          "_sort": "s",
+          "_dir": "asc",
+          "s": "x"
+        },
+        "inputSchema": {
+          "type": "object"
+        },
+        "expected": {
+          "s": "x"
+        }
+      },
+      {
+        "args": {
+          "_limit": "5",
+          "s": "x"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "s": {
+              "type": "string"
+            }
+          }
+        },
+        "expected": {
+          "s": "x"
+        }
+      },
+      {
+        "args": {
+          "s": "1",
+          "other": "2",
+          "t": "true"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "s": {
+              "type": "string"
+            },
+            "t": {}
+          }
+        },
+        "expected": {
+          "s": "1",
+          "other": "2",
+          "t": "true"
+        }
+      },
+      {
+        "args": {
+          "n": 4,
+          "b": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "n": 4,
+          "b": false
+        }
+      },
+      {
+        "args": {
+          "n": "abc"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "n": ""
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "n": " 3"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "n": "0x10"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "n": "01"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "n": "1e400"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "limit": "3.5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "b": "yes"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "b": "True"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "_limit": "many"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      }
+    ],
+    "tabular": [
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "id": "o-1",
+              "total": 10.5,
+              "paid": true,
+              "placedAt": "2026-04-01"
+            },
+            {
+              "id": "o-2",
+              "total": 3,
+              "paid": false,
+              "placedAt": "2026-04-02T10:00:00Z"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "id",
+              "type": "string"
+            },
+            {
+              "key": "total",
+              "type": "number"
+            },
+            {
+              "key": "paid",
+              "type": "boolean"
+            },
+            {
+              "key": "placedAt",
+              "type": "date"
+            }
+          ],
+          "rows": [
+            {
+              "id": "o-1",
+              "total": 10.5,
+              "paid": true,
+              "placedAt": "2026-04-01"
+            },
+            {
+              "id": "o-2",
+              "total": 3,
+              "paid": false,
+              "placedAt": "2026-04-02T10:00:00Z"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "[{\"id\":\"o-1\",\"total\":10.5,\"paid\":true,\"placedAt\":\"2026-04-01\"},{\"id\":\"o-2\",\"total\":3,\"paid\":false,\"placedAt\":\"2026-04-02T10:00:00Z\"}]"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "id",
+              "type": "string"
+            },
+            {
+              "key": "total",
+              "type": "number"
+            },
+            {
+              "key": "paid",
+              "type": "boolean"
+            },
+            {
+              "key": "placedAt",
+              "type": "date"
+            }
+          ],
+          "rows": [
+            {
+              "id": "o-1",
+              "total": 10.5,
+              "paid": true,
+              "placedAt": "2026-04-01"
+            },
+            {
+              "id": "o-2",
+              "total": 3,
+              "paid": false,
+              "placedAt": "2026-04-02T10:00:00Z"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": {
+            "rows": [
+              {
+                "id": "o-1",
+                "total": 10.5,
+                "paid": true,
+                "placedAt": "2026-04-01"
+              },
+              {
+                "id": "o-2",
+                "total": 3,
+                "paid": false,
+                "placedAt": "2026-04-02T10:00:00Z"
+              }
+            ],
+            "note": "x"
+          }
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "id",
+              "type": "string"
+            },
+            {
+              "key": "total",
+              "type": "number"
+            },
+            {
+              "key": "paid",
+              "type": "boolean"
+            },
+            {
+              "key": "placedAt",
+              "type": "date"
+            }
+          ],
+          "rows": [
+            {
+              "id": "o-1",
+              "total": 10.5,
+              "paid": true,
+              "placedAt": "2026-04-01"
+            },
+            {
+              "id": "o-2",
+              "total": 3,
+              "paid": false,
+              "placedAt": "2026-04-02T10:00:00Z"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": {
+            "result": [
+              {
+                "id": "o-1",
+                "total": 10.5,
+                "paid": true,
+                "placedAt": "2026-04-01"
+              },
+              {
+                "id": "o-2",
+                "total": 3,
+                "paid": false,
+                "placedAt": "2026-04-02T10:00:00Z"
+              }
+            ]
+          }
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "id",
+              "type": "string"
+            },
+            {
+              "key": "total",
+              "type": "number"
+            },
+            {
+              "key": "paid",
+              "type": "boolean"
+            },
+            {
+              "key": "placedAt",
+              "type": "date"
+            }
+          ],
+          "rows": [
+            {
+              "id": "o-1",
+              "total": 10.5,
+              "paid": true,
+              "placedAt": "2026-04-01"
+            },
+            {
+              "id": "o-2",
+              "total": 3,
+              "paid": false,
+              "placedAt": "2026-04-02T10:00:00Z"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "[]"
+            }
+          ],
+          "structuredContent": [
+            {
+              "id": "o-1",
+              "total": 10.5,
+              "paid": true,
+              "placedAt": "2026-04-01"
+            },
+            {
+              "id": "o-2",
+              "total": 3,
+              "paid": false,
+              "placedAt": "2026-04-02T10:00:00Z"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "id",
+              "type": "string"
+            },
+            {
+              "key": "total",
+              "type": "number"
+            },
+            {
+              "key": "paid",
+              "type": "boolean"
+            },
+            {
+              "key": "placedAt",
+              "type": "date"
+            }
+          ],
+          "rows": [
+            {
+              "id": "o-1",
+              "total": 10.5,
+              "paid": true,
+              "placedAt": "2026-04-01"
+            },
+            {
+              "id": "o-2",
+              "total": 3,
+              "paid": false,
+              "placedAt": "2026-04-02T10:00:00Z"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": 1,
+              "b": null,
+              "c": {
+                "x": 1
+              }
+            },
+            {
+              "a": "x",
+              "b": 2,
+              "c": [
+                1
+              ]
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "a",
+              "type": "string"
+            },
+            {
+              "key": "b",
+              "type": "number"
+            },
+            {
+              "key": "c",
+              "type": "string"
+            }
+          ],
+          "rows": [
+            {
+              "a": 1,
+              "b": null,
+              "c": {
+                "x": 1
+              }
+            },
+            {
+              "a": "x",
+              "b": 2,
+              "c": [
+                1
+              ]
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "d": "2026-01-01"
+            },
+            {
+              "d": "not a date"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "d",
+              "type": "string"
+            }
+          ],
+          "rows": [
+            {
+              "d": "2026-01-01"
+            },
+            {
+              "d": "not a date"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "k": null
+            },
+            {
+              "k": null
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "k",
+              "type": "string"
+            }
+          ],
+          "rows": [
+            {
+              "k": null
+            },
+            {
+              "k": null
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": []
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [],
+          "rows": [],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": 0
+            },
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            },
+            {
+              "a": 4
+            },
+            {
+              "a": 5
+            },
+            {
+              "a": 6
+            },
+            {
+              "a": 7
+            },
+            {
+              "a": 8
+            },
+            {
+              "a": 9
+            },
+            {
+              "a": 10
+            },
+            {
+              "a": 11
+            },
+            {
+              "a": 12
+            },
+            {
+              "a": 13
+            },
+            {
+              "a": 14
+            },
+            {
+              "a": 15
+            },
+            {
+              "a": 16
+            },
+            {
+              "a": 17
+            },
+            {
+              "a": 18
+            },
+            {
+              "a": 19
+            },
+            {
+              "a": 20
+            },
+            {
+              "a": 21
+            },
+            {
+              "a": 22
+            },
+            {
+              "a": 23
+            },
+            {
+              "a": 24
+            },
+            {
+              "a": 25
+            },
+            {
+              "a": 26
+            },
+            {
+              "a": 27
+            },
+            {
+              "a": 28
+            },
+            {
+              "a": 29
+            },
+            {
+              "a": 30
+            },
+            {
+              "a": 31
+            },
+            {
+              "a": 32
+            },
+            {
+              "a": 33
+            },
+            {
+              "a": 34
+            },
+            {
+              "a": 35
+            },
+            {
+              "a": 36
+            },
+            {
+              "a": 37
+            },
+            {
+              "a": 38
+            },
+            {
+              "a": 39
+            },
+            {
+              "a": 40
+            },
+            {
+              "a": 41
+            },
+            {
+              "a": 42
+            },
+            {
+              "a": 43
+            },
+            {
+              "a": 44
+            },
+            {
+              "a": 45
+            },
+            {
+              "a": 46
+            },
+            {
+              "a": 47
+            },
+            {
+              "a": 48
+            },
+            {
+              "a": 49
+            },
+            {
+              "a": 50,
+              "late": "x"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": {
+          "columns": [
+            {
+              "key": "a",
+              "type": "number"
+            }
+          ],
+          "rows": [
+            {
+              "a": 0
+            },
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            },
+            {
+              "a": 4
+            },
+            {
+              "a": 5
+            },
+            {
+              "a": 6
+            },
+            {
+              "a": 7
+            },
+            {
+              "a": 8
+            },
+            {
+              "a": 9
+            },
+            {
+              "a": 10
+            },
+            {
+              "a": 11
+            },
+            {
+              "a": 12
+            },
+            {
+              "a": 13
+            },
+            {
+              "a": 14
+            },
+            {
+              "a": 15
+            },
+            {
+              "a": 16
+            },
+            {
+              "a": 17
+            },
+            {
+              "a": 18
+            },
+            {
+              "a": 19
+            },
+            {
+              "a": 20
+            },
+            {
+              "a": 21
+            },
+            {
+              "a": 22
+            },
+            {
+              "a": 23
+            },
+            {
+              "a": 24
+            },
+            {
+              "a": 25
+            },
+            {
+              "a": 26
+            },
+            {
+              "a": 27
+            },
+            {
+              "a": 28
+            },
+            {
+              "a": 29
+            },
+            {
+              "a": 30
+            },
+            {
+              "a": 31
+            },
+            {
+              "a": 32
+            },
+            {
+              "a": 33
+            },
+            {
+              "a": 34
+            },
+            {
+              "a": 35
+            },
+            {
+              "a": 36
+            },
+            {
+              "a": 37
+            },
+            {
+              "a": 38
+            },
+            {
+              "a": 39
+            },
+            {
+              "a": 40
+            },
+            {
+              "a": 41
+            },
+            {
+              "a": 42
+            },
+            {
+              "a": 43
+            },
+            {
+              "a": 44
+            },
+            {
+              "a": 45
+            },
+            {
+              "a": 46
+            },
+            {
+              "a": 47
+            },
+            {
+              "a": 48
+            },
+            {
+              "a": 49
+            },
+            {
+              "a": 50,
+              "late": "x"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": 3
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": {
+            "a": 1,
+            "b": 2
+          }
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            1,
+            2
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "no rows today"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      },
+      {
+        "result": {
+          "content": []
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "image",
+              "data": "x"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      },
+      {
+        "result": {
+          "isError": true,
+          "content": [
+            {
+              "type": "text",
+              "text": "boom"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "expected": null
+      }
+    ],
+    "shape": [
+      {
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": "number"
+                  },
+                  "qty": {
+                    "type": "integer"
+                  },
+                  "paid": {
+                    "type": "boolean"
+                  },
+                  "placedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "day": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "meta": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "expected": {
+          "columns": [
+            {
+              "name": "id",
+              "type": "string",
+              "role": "dimension"
+            },
+            {
+              "name": "total",
+              "type": "number",
+              "role": "measure"
+            },
+            {
+              "name": "qty",
+              "type": "number",
+              "role": "measure"
+            },
+            {
+              "name": "paid",
+              "type": "boolean"
+            },
+            {
+              "name": "placedAt",
+              "type": "date",
+              "role": "time"
+            },
+            {
+              "name": "day",
+              "type": "date",
+              "role": "time"
+            }
+          ]
+        }
+      },
+      {
+        "outputSchema": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "total": {
+                "type": "number"
+              },
+              "qty": {
+                "type": "integer"
+              },
+              "paid": {
+                "type": "boolean"
+              },
+              "placedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "day": {
+                "type": "string",
+                "format": "date"
+              },
+              "meta": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "expected": {
+          "columns": [
+            {
+              "name": "id",
+              "type": "string",
+              "role": "dimension"
+            },
+            {
+              "name": "total",
+              "type": "number",
+              "role": "measure"
+            },
+            {
+              "name": "qty",
+              "type": "number",
+              "role": "measure"
+            },
+            {
+              "name": "paid",
+              "type": "boolean"
+            },
+            {
+              "name": "placedAt",
+              "type": "date",
+              "role": "time"
+            },
+            {
+              "name": "day",
+              "type": "date",
+              "role": "time"
+            }
+          ]
+        }
+      },
+      {
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": "number"
+                  },
+                  "qty": {
+                    "type": "integer"
+                  },
+                  "paid": {
+                    "type": "boolean"
+                  },
+                  "placedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "day": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "meta": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "expected": {
+          "columns": [
+            {
+              "name": "id",
+              "type": "string",
+              "role": "dimension"
+            },
+            {
+              "name": "total",
+              "type": "number",
+              "role": "measure"
+            },
+            {
+              "name": "qty",
+              "type": "number",
+              "role": "measure"
+            },
+            {
+              "name": "paid",
+              "type": "boolean"
+            },
+            {
+              "name": "placedAt",
+              "type": "date",
+              "role": "time"
+            },
+            {
+              "name": "day",
+              "type": "date",
+              "role": "time"
+            }
+          ]
+        }
+      },
+      {
+        "outputSchema": {
+          "type": "string"
+        },
+        "expected": null
+      },
+      {
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "number"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "outputSchema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected": null
+      },
+      {
+        "outputSchema": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "expected": null
+      },
+      {
+        "outputSchema": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "meta": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "expected": null
+      }
+    ]
   }
 }

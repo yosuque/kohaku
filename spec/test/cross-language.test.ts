@@ -39,6 +39,12 @@ import {
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
+// Relative (not "@kohaku-ui/domain-mcp") import, same reasoning as the composer import above: spec does not
+// declare domain-mcp as a dependency. These four modules import only spec-core types.
+import { coerceToolArguments } from "../../packages/domain-mcp/src/coerce.js";
+import { projectInputSchema } from "../../packages/domain-mcp/src/schema-projection.js";
+import { shapeFromOutputSchema } from "../../packages/domain-mcp/src/shape.js";
+import { toTabularData } from "../../packages/domain-mcp/src/tabular.js";
 // Relative (not "@kohaku-ui/lineage") import, same reasoning as generate-cross-language-fixtures.ts's
 // own lineage import.
 import {
@@ -78,6 +84,12 @@ interface Fixture {
   actionPayloadScan: { payload: JsonObject; issues: ActionParamIssue[] }[];
   sandboxDom: { tags: string[]; attrs: string[]; styleProps: string[] };
   distillation: { jsonl: string };
+  domainMcp: {
+    schemaProjection: { inputSchema: unknown; expected: unknown }[];
+    argumentCoercion: { args: unknown; inputSchema: unknown; expected: unknown }[];
+    tabular: { result: unknown; dataVersion: string; expected: unknown }[];
+    shape: { outputSchema: unknown; expected: unknown }[];
+  };
   promptFragments: {
     designKit: string;
     designSystem: { guide: DesignSystemGuide; fragment: string };
@@ -156,6 +168,41 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     expect(fixture.actionPayloadScan.length).toBeGreaterThan(0);
     for (const c of fixture.actionPayloadScan) {
       expect(findUnsafeActionParamKeys(c.payload)).toEqual(c.issues);
+    }
+  });
+
+  it("@kohaku-ui/domain-mcp's pure functions reproduce the fixture (schema projection, coercion, tabular, shape)", () => {
+    const attempt = <T>(fn: () => T): T | null => {
+      try {
+        return fn();
+      } catch {
+        return null;
+      }
+    };
+    // Compared as canonical JSON: that is the representation both languages are pinned to (true vs 1, 3 vs 3.0).
+    const same = (actual: unknown, expected: unknown) =>
+      expect(canonicalStringify(actual as never)).toBe(canonicalStringify(expected as never));
+    expect(fixture.domainMcp.schemaProjection.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.schemaProjection) {
+      same(projectInputSchema(c.inputSchema), c.expected);
+    }
+    expect(fixture.domainMcp.argumentCoercion.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.argumentCoercion) {
+      same(
+        attempt(() => coerceToolArguments(c.args as never, c.inputSchema as never)),
+        c.expected,
+      );
+    }
+    expect(fixture.domainMcp.tabular.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.tabular) {
+      same(
+        attempt(() => toTabularData(c.result as never, c.dataVersion)),
+        c.expected,
+      );
+    }
+    expect(fixture.domainMcp.shape.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.shape) {
+      same(shapeFromOutputSchema(c.outputSchema), c.expected);
     }
   });
 
