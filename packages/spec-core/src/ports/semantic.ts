@@ -20,6 +20,21 @@ export interface QueryHandle {
 }
 
 /**
+ * One GUI filter an Intent exposes, derived deterministically from the Intent's facet declaration (never from
+ * a model). `ComposePolicy.l1Filters` makes the composer inject a `control.select` + `data.bind` pair per
+ * descriptor into an L1-generated Spec, so changing the filter re-resolves the data without a recompose.
+ */
+export interface FilterDescriptor {
+  /** Intent param name; also used as the UISpec.state key. */
+  param: string;
+  /** Query parameter the param maps to in the resolved query:// ref (an Intent param and its query param may be named differently). */
+  queryParam: string;
+  label: string;
+  /** The authorized value domain (becomes both the control's options and `data.bind.values`). */
+  options: { value: string; label: string }[];
+}
+
+/**
  * Resolution of a normalized Intent → a deterministic query (the semantic-layer connection point).
  *
  * Tenant invariant: keep `query://` references tenant-neutral. Tenant data filtering is done by
@@ -62,4 +77,18 @@ export interface SemanticPort {
    * behavior of finalizing the caller-supplied Intent unchecked.
    */
   validateIntent?(intent: IntentInput, ctx: SessionContext): Promise<IntentInput>;
+  /**
+   * Describes the GUI filters of an Intent (see {@link FilterDescriptor}); consulted by the composer only
+   * when `ComposePolicy.l1Filters` is on. Must be a pure function of the Intent definition: the composed
+   * Spec is cached under a key that contains neither tenant nor locale, so the descriptors must not depend
+   * on the caller's locale (the composer passes none, so labels are canonical). `ctx.tenant` only selects a
+   * per-tenant Intent catalog, like `resolveQuery`.
+   *
+   * Optional and backward compatible: a `SemanticPort` that does not implement it simply gets no injected
+   * filters. Returning `[]` means the Intent has no filters.
+   */
+  describeFilters?(
+    intent: CanonicalIntent,
+    ctx?: { tenant?: string; locale?: string },
+  ): Promise<FilterDescriptor[]>;
 }

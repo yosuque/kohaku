@@ -1,4 +1,4 @@
-import type { JsonObject, QueryHandle } from "@kohaku-ui/spec-core";
+import type { FilterDescriptor, JsonObject, QueryHandle } from "@kohaku-ui/spec-core";
 import type { z } from "zod";
 import type { FacetView, FacetViewEntry } from "./facet-view.js";
 import { compileQueryTemplate, type QueryTemplate } from "./query-template.js";
@@ -19,6 +19,13 @@ export interface IntentDef {
   toQueries(params: JsonObject): QueryHandle[];
   /** Resolves the Intent delta from a component event (rowClick, etc.). */
   drilldown?: (current: JsonObject, payload: JsonObject) => { canonical?: string; params: JsonObject };
+  /**
+   * The GUI filters this Intent exposes (see spec-core's `FilterDescriptor`), derived from the `facets`
+   * declaration. Present only for a declarative-template Intent: a callback `queries` has no `paramMap` to
+   * read the query param name from. `params` is the Intent's current params (reserved: the derivation does
+   * not depend on it today); `locale` selects the label overlays, falling back to the canonical label.
+   */
+  filters?: (params: JsonObject, locale?: string) => FilterDescriptor[];
 }
 
 /** (c) host-mcp-apps input (structural type). IntentDef is assignable to it, but this is provided as an explicit API. */
@@ -98,6 +105,8 @@ export function defineIntent(spec: IntentSpec): IntentBuilder {
         toQueries,
       };
       if (spec.drilldown != null) def.drilldown = spec.drilldown;
+      const filters = buildFilters(spec);
+      if (filters != null) def.filters = filters;
       return def;
     },
     toFacetView: () => buildFacetView(spec),
@@ -114,6 +123,40 @@ function buildToQueries(spec: IntentSpec): (p: JsonObject) => QueryHandle[] {
     throw new Error(`Intent "${spec.canonical}" declares queries as templates but source is unspecified`);
   }
   return (p) => queries.map((template) => compileQueryTemplate(source, template, p));
+}
+
+/**
+ * Derives IntentDef.filters from the facet declarations (the same resolution toFacetView uses, so the two
+ * never disagree). A facet becomes a filter when it is a discrete string-valued select: `control` is "select"
+ * (the default), the param is not numeric (a numeric facet is a range/curation, not an enumeration), and it
+ * has at least one option. The query param comes from the templates' `paramMap`; a param mapped to different
+ * query params by different templates is ambiguous and is skipped, as is a param no template maps.
+ * undefined for a callback `queries` (nothing to read a `paramMap` from).
+ */
+function buildFilters(spec: IntentSpec): IntentDef["filters"] | undefined {
+  const queries = spec.queries;
+  if (typeof queries === "function") return undefined;
+  const entries: { entry: FacetViewEntry; queryParam: string }[] = [];
+  for (const entry of buildFacetView(spec).facets) {
+    if (entry.control !== "select" || entry.valueType !== "string" || entry.options.length === 0) continue;
+    const mapped = new Set<string>();
+    for (const template of queries) {
+      const queryParam = template.paramMap?.[entry.key];
+      if (queryParam != null) mapped.add(queryParam);
+    }
+    if (mapped.size !== 1) continue;
+    entries.push({ entry, queryParam: [...mapped][0]! });
+  }
+  return (_params, locale) =>
+    entries.map(({ entry, queryParam }) => ({
+      param: entry.key,
+      queryParam,
+      label: (locale != null ? entry.labels?.[locale] : undefined) ?? entry.label,
+      options: entry.options.map((opt) => ({
+        value: opt.value,
+        label: (locale != null ? opt.labels?.[locale] : undefined) ?? opt.label,
+      })),
+    }));
 }
 
 function buildFacetView(spec: IntentSpec): FacetView {

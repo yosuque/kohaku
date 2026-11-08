@@ -75,6 +75,7 @@ export type {
   CapabilityRevocationStore,
   CatalogContribution,
   DomainPort,
+  FilterDescriptor,
   FixationRecord,
   GuiAction,
   InvocationContext,
