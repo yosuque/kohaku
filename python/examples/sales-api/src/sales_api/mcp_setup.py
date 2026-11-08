@@ -41,6 +41,7 @@ from kohaku.storage import FileStoragePort
 
 from .action_effects import sales_action_effects
 from .app import admit_fixation_for_locale, create_app
+from .authz_from_env import capability_secret_from_env
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _RENDERER_PATH = _REPO_ROOT / "apps/sample-mcp/dist/renderer/index.html"
@@ -134,7 +135,16 @@ async def create_kohaku_mcp_setup(
         else Path(os.environ.get("KOHAKU_DATA_DIR", _DEFAULT_DATA_DIR))
     )
     storage = FileStoragePort(resolved_data_dir)
-    capability_secret = os.environ.get("KOHAKU_CAPABILITY_SECRET", "dev-secret-change-me")
+    # The MCP profile resolves no per-call principal, so there is nothing to feed a bearer JWT into: fail closed
+    # rather than silently running the HMAC-only authz when the environment asked for jwt (the REST entry,
+    # __main__.py, supports it via authz_from_env).
+    authz_kind = os.environ.get("KOHAKU_AUTHZ", "hmac")
+    if authz_kind != "hmac":
+        raise RuntimeError(
+            f'KOHAKU_AUTHZ="{authz_kind}" is not supported by the Python MCP profile, which is HMAC-only '
+            "(KOHAKU_AUTHZ=jwt is supported by the REST entry point, python -m sales_api)"
+        )
+    capability_secret = capability_secret_from_env(os.environ)
     authz = create_hmac_authz_port(capability_secret)
     # Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish") needs an
     # ApprovalPort to ever be allowed on the MCP profile too (symmetric with __main__.py's REST-side
