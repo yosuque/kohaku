@@ -80,6 +80,7 @@ from .catalog_migration import (
 from .daily_token_ledger import DailyTokenLedger, create_daily_token_ledger
 from .errors import (
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+    STORAGE_CONFLICT_MESSAGE,
     ConsoleErrorReporter,
     ConsoleErrorReporterOptions,
     HostErrorClass,
@@ -172,6 +173,7 @@ __all__ = [
     "APPROVAL_TOKEN_REQUIRED_MESSAGE",
     "CONFIRMATION_REQUIRED_MESSAGE",
     "LLM_PROVIDER_UNAVAILABLE_MESSAGE",
+    "STORAGE_CONFLICT_MESSAGE",
     "NO_APPROVAL_PORT_REASON",
     "UNDECLARED_ACTION_MESSAGE",
     "ActionAuditContext",

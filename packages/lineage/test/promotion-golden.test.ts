@@ -119,9 +119,15 @@ async function runChain(
   await promotions.act(artifactId, { kind: "publish", version: draft.version }, reviewer, scope);
 }
 
-/** Normalizes updatedAt to a fixed sentinel (same key position) so the timestamp does not defeat the golden compare. */
+/**
+ * Normalizes updatedAt and revision to fixed sentinels (same key positions) so the wall-clock timestamp and the
+ * per-write random revision token do not defeat the golden compare. The revision must be present and a
+ * non-empty string (the optional StoragePort compare-and-set token); its value is checked structurally.
+ */
 function normalize(state: PromotionState): PromotionState {
-  return { ...state, updatedAt: "TS" };
+  expect(typeof state.revision).toBe("string");
+  expect(state.revision).not.toBe("");
+  return { ...state, updatedAt: "TS", revision: "REV" };
 }
 
 describe("promotion 永続化のゴールデン(#golden, God-factory 分割前の特性テスト)", () => {
@@ -135,6 +141,7 @@ describe("promotion 永続化のゴールデン(#golden, God-factory 分割前�
         artifactId: "golden-1",
         status: "published",
         updatedAt: "TS",
+        revision: "REV",
         data: {
           verdict,
           draft,
@@ -155,7 +162,7 @@ describe("promotion 永続化のゴールデン(#golden, God-factory 分割前�
     expect(readBack?.draft).toEqual(draft);
   });
 
-  it("テナント指定時も同じキー順序(tenant は updatedAt の直後、data の中身は不変)", async () => {
+  it("テナント指定時も同じキー順序(tenant は updatedAt の直後、revision がその次、data の中身は不変)", async () => {
     const storage = memoryStorageWithStates();
     await runChain(storage, "golden-2", "acme");
 
@@ -166,6 +173,7 @@ describe("promotion 永続化のゴールデン(#golden, God-factory 分割前�
         status: "published",
         updatedAt: "TS",
         tenant: "acme",
+        revision: "REV",
         data: {
           verdict,
           draft,

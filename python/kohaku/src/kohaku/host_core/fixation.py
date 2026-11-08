@@ -27,7 +27,13 @@ from kohaku.composer import (
 )
 from kohaku.composer.fixation import FixationCheck, materialize_fixation
 from kohaku.llm import AbortSignal
-from kohaku.spec import FixationRecord, Intent, IntentInput, SessionContext
+from kohaku.spec import (
+    FixationRecord,
+    Intent,
+    IntentInput,
+    SessionContext,
+    is_storage_conflict_error,
+)
 
 
 class FixationSelfHealApi(Protocol):
@@ -137,9 +143,16 @@ async def settle_fixation(
         if check.kind == "revalidated" and fixations is not None:
 
             async def _refresh() -> None:
-                await fixations.refresh_fingerprint(
-                    target.intent_hash, target.catalog_fingerprint, target.tenant
-                )
+                try:
+                    await fixations.refresh_fingerprint(
+                        target.intent_hash, target.catalog_fingerprint, target.tenant
+                    )
+                except Exception as e:
+                    # Losing a storage compare-and-set race means another instance already healed this
+                    # fixation: a no-op, not an error worth reporting (the reference Fixations already
+                    # swallows it; this covers a custom FixationSelfHealApi that does not).
+                    if not is_storage_conflict_error(e):
+                        raise
 
             await host.run_self_heal(
                 target.tenant, target.intent_hash, _refresh, "refresh_fingerprint"
@@ -163,7 +176,15 @@ async def settle_fixation(
             guard["ifCatalogFingerprint"] = target.fixation.catalogFingerprint
 
         async def _invalidate() -> None:
-            await fixations.invalidate(target.intent_hash, "stale", detail, target.tenant, guard)
+            try:
+                await fixations.invalidate(
+                    target.intent_hash, "stale", detail, target.tenant, guard
+                )
+            except Exception as e:
+                if not is_storage_conflict_error(
+                    e
+                ):  # a conflict = another instance already healed it
+                    raise
 
         await host.run_self_heal(target.tenant, target.intent_hash, _invalidate, "invalidate")
     return None

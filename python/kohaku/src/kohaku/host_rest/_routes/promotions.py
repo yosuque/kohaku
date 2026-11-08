@@ -22,7 +22,7 @@ from kohaku.lineage import (
     Unpublish,
     Withdraw,
 )
-from kohaku.spec import GovernanceErrorDiscriminators, Principal, Scope
+from kohaku.spec import GovernanceErrorDiscriminators, Principal, Scope, is_storage_conflict_error
 
 from ..bodies import parse_component_draft, parse_promotion_action
 from ..deps import KohakuHostDeps, PromotionsApi
@@ -37,6 +37,7 @@ from .shared import (
     _promotion_key,
     _read_json,
     _resolve_tenant,
+    _storage_conflict,
     capability_tenant_for,
     report_host_error,
     request_id_of,
@@ -158,7 +159,10 @@ async def _promotion_error(
     deps: KohakuHostDeps, request: Request, endpoint: str, e: BaseException
 ) -> Response:
     """Map a promotion-action exception into the error convention. Discriminated structurally since
-    lineage is not depended on, using kohaku.spec's GovernanceErrorDiscriminators."""
+    lineage is not depended on, using kohaku.spec's GovernanceErrorDiscriminators. A StorageConflictError
+    (compare-and-set lost a race with another writer) is a 409 CONFLICT with the fixed message."""
+    if is_storage_conflict_error(e):
+        return await _storage_conflict(request, deps, e)
     if getattr(e, "code", None) == GovernanceErrorDiscriminators.NOT_PUBLISHED_CODE:
         error: dict[str, Any] = {"code": "PROMOTION_NOT_PUBLISHED", "message": _message(e)}
         status_val = getattr(e, "status", None)

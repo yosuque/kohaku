@@ -183,5 +183,7 @@ class CountingStorage(FileStoragePort):
 class NoDeleteFixationStorage(FileStoragePort):
     """A StoragePort that does not support delete_fixation (for fail-fast verification; NotImplementedError per the ports.py contract)."""
 
-    async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
+    async def delete_fixation(
+        self, intent_hash: str, tenant: str | None = None, **_kwargs: object
+    ) -> None:
         raise NotImplementedError("This StoragePort does not support delete_fixation")

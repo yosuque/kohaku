@@ -33,6 +33,8 @@ from kohaku.lineage import (
 )
 from kohaku.lineage.promotion.service import _index_latest_generated, _usage_index_key
 from kohaku.spec import (
+    UNSET,
+    ExpectedRevision,
     FixationRecord,
     LineageActor,
     LineageEventRecord,
@@ -296,7 +298,7 @@ class _NoBatchPutStorage:
     ) -> PromotionState | None:
         return await self._inner.get_promotion_state(artifact_id, tenant)
 
-    async def put_promotion_state(self, state: PromotionState) -> None:
+    async def put_promotion_state(self, state: PromotionState, **_kwargs: object) -> None:
         self.put_promotion_state_calls.append(state)
         await self._inner.put_promotion_state(state)
 
@@ -308,13 +310,17 @@ class _NoBatchPutStorage:
     ) -> FixationRecord | None:
         return await self._inner.get_fixation(intent_hash, tenant)
 
-    async def put_fixation(self, record: FixationRecord, *, if_present: bool = False) -> None:
+    async def put_fixation(
+        self, record: FixationRecord, *, if_present: bool = False, **_kwargs: object
+    ) -> None:
         await self._inner.put_fixation(record, if_present=if_present)
 
     async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]:
         return await self._inner.list_fixations(tenant)
 
-    async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
+    async def delete_fixation(
+        self, intent_hash: str, tenant: str | None = None, **_kwargs: object
+    ) -> None:
         await self._inner.delete_fixation(intent_hash, tenant)
 
 
@@ -333,9 +339,11 @@ class _BatchPutSpyStorage(FileStoragePort):
         self.batch_calls.append(list(states))
         await super().put_promotion_states(states)
 
-    async def put_promotion_state(self, state: PromotionState) -> None:
+    async def put_promotion_state(
+        self, state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+    ) -> None:
         self.single_calls.append(state)
-        await super().put_promotion_state(state)
+        await super().put_promotion_state(state, expected_revision=expected_revision)
 
 
 def test_persist_many_falls_back_to_one_by_one_without_batch_support(tmp_path: Path) -> None:

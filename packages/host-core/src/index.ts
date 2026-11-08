@@ -91,6 +91,7 @@ export {
   isTypedHostError,
   LLM_PROVIDER_UNAVAILABLE_MESSAGE,
   notifyHook,
+  STORAGE_CONFLICT_MESSAGE,
 } from "./errors.js";
 export {
   composeWithFixation,

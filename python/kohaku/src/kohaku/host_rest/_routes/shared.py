@@ -37,6 +37,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from kohaku.host_core import (
     DEFAULT_CAPABILITY_TTL_SECONDS,
+    STORAGE_CONFLICT_MESSAGE,
     ActionGate,
     OperationIndexEntry,
     PolicyRateLimiterTakeParams,
@@ -492,6 +493,20 @@ def _parse_limit(raw: str | None, max_limit: int, default: int | None) -> int | 
 
 def _json(body: object, status: int = 200) -> Response:
     return JSONResponse(content=to_jsonable(body), status_code=status)
+
+
+async def _storage_conflict(
+    request: Request, deps: KohakuHostDeps, error: BaseException
+) -> Response:
+    """The 409 `CONFLICT` response for a `StorageConflictError` (SPEC §6.1): a governance write found its
+    record changed by a concurrent writer between the read and the write, and nothing was written. The
+    message is the fixed STORAGE_CONFLICT_MESSAGE (the error's own text names the record kind and key, so it
+    never reaches the client). The host does not retry on its own; the caller reloads and retries. The conflict
+    is still reported to `on_error` under the dedicated endpoint `storage.conflict` (the client message stays
+    fixed), so REST conflicts can be counted the same way the MCP profile's are."""
+    request_id = request_id_of(request, deps)
+    await report_host_error(deps, "storage.conflict", request_id, error)
+    return _error("CONFLICT", STORAGE_CONFLICT_MESSAGE, 409, request_id)
 
 
 def _error(

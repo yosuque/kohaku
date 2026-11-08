@@ -12,6 +12,7 @@ import pytest
 from kohaku.composer import ComposeErrorContext
 from kohaku.host_core import (
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+    STORAGE_CONFLICT_MESSAGE,
     ConsoleErrorReporterOptions,
     HostErrorClass,
     classify_host_error,
@@ -22,7 +23,7 @@ from kohaku.host_core import (
     is_typed_host_error,
 )
 from kohaku.llm import LlmError
-from kohaku.spec import Intent, SpecError
+from kohaku.spec import Intent, SpecError, StorageConflictError
 
 
 class TestFormatErrorChain:
@@ -245,6 +246,14 @@ class TestClassifyHostError:
         coded = Exception("governance failed")
         coded.code = "PROMOTION_NOT_PUBLISHED"  # type: ignore[attr-defined]
         assert classify_host_error(coded) == HostErrorClass("typed", "governance failed")
+
+    def test_maps_a_storage_conflict_to_the_fixed_message_not_its_own_text(self) -> None:
+        # It carries a string `code` too, so without an explicit branch it would pass its own text through.
+        error = StorageConflictError("promotion", "art-1")
+        assert classify_host_error(error) == HostErrorClass("conflict", STORAGE_CONFLICT_MESSAGE)
+        assert (
+            STORAGE_CONFLICT_MESSAGE == "the resource was modified concurrently; reload and retry"
+        )
 
     def test_maps_a_plain_exception_and_a_non_exception_to_untyped(self) -> None:
         assert classify_host_error(Exception("boom")) == HostErrorClass("untyped")

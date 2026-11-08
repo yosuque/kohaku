@@ -12,7 +12,7 @@ from typing import Literal, Protocol
 
 from kohaku.composer import ComposeError, ComposeErrorContext
 from kohaku.llm import LlmError
-from kohaku.spec import QueryRefError, SpecError
+from kohaku.spec import QueryRefError, SpecError, is_storage_conflict_error
 
 
 def is_typed_host_error(e: object) -> bool:
@@ -46,6 +46,14 @@ def _is_llm_error(e: object) -> bool:
     )
 
 
+STORAGE_CONFLICT_MESSAGE = "the resource was modified concurrently; reload and retry"
+"""The fixed, client-safe message for a `StorageConflictError` (SPEC §6.1, `CONFLICT`): a governance write
+found its record changed by a concurrent writer (typically another host instance on the same backend)
+between its read and its write, and nothing was written. REST answers 409 `CONFLICT` with this text and MCP
+a structured tool error; the caller reloads and retries (a host never retries on its own). The error's own
+message (which names the record kind and key) goes only to the observability hook. Identical to TS
+host-core's STORAGE_CONFLICT_MESSAGE."""
+
 LLM_PROVIDER_UNAVAILABLE_MESSAGE = (
     "LLM provider unavailable; see the host's observability hook (onError) for details"
 )
@@ -69,11 +77,11 @@ def is_llm_unavailable_error(e: object) -> bool:
 
 @dataclass(frozen=True)
 class HostErrorClass:
-    """What a host should do with a caught exception: map to 503 (`upstream_unavailable`), pass its message
-    through (`typed`), or use a fixed fallback (`untyped`). `message` is set for the first two kinds. Port of
-    TS host-core's HostErrorClass (errors.ts)."""
+    """What a host should do with a caught exception: map to 409 (`conflict`), map to 503
+    (`upstream_unavailable`), pass its message through (`typed`), or use a fixed fallback (`untyped`).
+    `message` is set for all but the last kind. Port of TS host-core's HostErrorClass (errors.ts)."""
 
-    kind: Literal["upstream_unavailable", "typed", "untyped"]
+    kind: Literal["conflict", "upstream_unavailable", "typed", "untyped"]
     message: str | None = None
 
 
@@ -81,6 +89,10 @@ def classify_host_error(e: object) -> HostErrorClass:
     """Classifies a caught exception for a client-facing failure response. Shared by both host profiles so
     REST's 503 and MCP's tool error agree on which failures are "the upstream LLM is unavailable". Port of TS
     host-core's classifyHostError (errors.ts)."""
+    # Before the typed check: a StorageConflictError carries a string `code` too, so it would otherwise pass
+    # its own message through instead of the fixed STORAGE_CONFLICT_MESSAGE.
+    if is_storage_conflict_error(e):
+        return HostErrorClass("conflict", STORAGE_CONFLICT_MESSAGE)
     if is_llm_unavailable_error(e):
         return HostErrorClass("upstream_unavailable", LLM_PROVIDER_UNAVAILABLE_MESSAGE)
     if is_typed_host_error(e):

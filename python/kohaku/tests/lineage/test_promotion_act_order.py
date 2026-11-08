@@ -21,7 +21,7 @@ from kohaku.lineage import (
     create_lineage,
     create_promotions,
 )
-from kohaku.spec import LineageEventRecord, Principal, PromotionState
+from kohaku.spec import UNSET, ExpectedRevision, LineageEventRecord, Principal, PromotionState
 from kohaku.storage import FileStoragePort
 
 from ._helpers import seed
@@ -53,9 +53,11 @@ class _RecordingStorage(FileStoragePort):
         self.sequence.append(f"record:{event.type}")
         await super().append_lineage(event)
 
-    async def put_promotion_state(self, state: PromotionState) -> None:
+    async def put_promotion_state(
+        self, state: PromotionState, *, expected_revision: ExpectedRevision = UNSET
+    ) -> None:
         self.sequence.append("persist")
-        await super().put_promotion_state(state)
+        await super().put_promotion_state(state, expected_revision=expected_revision)
 
 
 def _promotions(storage: FileStoragePort) -> Promotions:

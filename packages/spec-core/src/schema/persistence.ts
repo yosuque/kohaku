@@ -57,6 +57,8 @@ export const PromotionStateSchema = z.object({
   data: JsonObjectSchema,
   /** The tenant that owns the promotion state (optional = tenant-neutral / legacy). */
   tenant: z.string().optional(),
+  /** A per-write token for the optional StoragePort compare-and-set (optional = compatible with records that predate it). */
+  revision: z.string().optional(),
 });
 
 /**

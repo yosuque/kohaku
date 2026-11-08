@@ -66,6 +66,11 @@ export const REQUIREMENTS: Requirement[] = [
   // rate-limit policy, so this is "reference" rather than a black-box check against the unconfigured demo host.
   { id: "REST-RL-001", level: "SHOULD", target: "rest-host", verification: "reference", verifiedBy: "packages/host-rest/test/rate-limited-error.test.ts, packages/client/test/client.test.ts, packages/host-rest/test/rate-limit-middleware.test.ts", description: "A rate-limited request is rejected with HTTP 429 and an {error:{code:RATE_LIMITED}} envelope, retryAfterMs round-trips through the client, and governance routes are exempt" },
 
+  // REST-CONF-001 is SHOULD (not MUST), so it does not change the manifest's MUST count (spec/SPEC.md §7). Like
+  // REST-RL-001 it is "reference": the optional StoragePort compare-and-set extension it concerns is only exercised
+  // against an adapter that declares it (a single-instance conformance demo host never loses such a race).
+  { id: "REST-CONF-001", level: "SHOULD", target: "rest-host", verification: "reference", verifiedBy: "packages/host-rest/test/storage-conflict.test.ts, packages/host-mcp-apps/test/storage-conflict.test.ts, packages/host-core/test/errors.test.ts, packages/lineage/test/storage-cas.test.ts, python/kohaku/tests/host_rest/test_storage_conflict.py, python/kohaku/tests/host_mcp/test_storage_conflict.py, python/kohaku/tests/lineage/test_storage_cas.py", description: "A shared storage backend implements the optional compare-and-set extension; a host whose storage implements it answers a governance write that loses the race with HTTP 409 and an {error:{code:CONFLICT}} envelope carrying the fixed message (never the storage error's own text), and does not retry it" },
+
   // --- Governed Actions (SPEC §5 [Draft], design.md #62/#63/#64). Action names and paramsSchema/tier are
   // DomainPort configuration a generic conformance host has none of, so — like REST-RL-001 above — these
   // are "reference" (guaranteed by the reference implementation's own package tests) rather than a

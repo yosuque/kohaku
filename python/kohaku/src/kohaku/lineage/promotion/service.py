@@ -21,19 +21,25 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from kohaku.spec import (
+    UNSET,
+    ExpectedRevision,
     GovernanceErrorDiscriminators,
     LineageActor,
     LineageEventRecord,
     LineageFilter,
     Principal,
     PromotionState,
+    StorageConflictError,
     StoragePort,
     SupportsBatchPromotionStates,
+    is_storage_conflict_error,
+    supports_compare_and_set,
     validate_promotion_state,
 )
 
 from ..events import Clock, now_iso
 from ..lineage import Lineage
+from ..revision import generate_revision
 from .machine import (
     ComponentDraft,
     JudgeResult,
@@ -133,6 +139,25 @@ class ReconcileSummary:
     published: int = 0
     withdrawn: int = 0
     skipped: int = 0
+
+
+_LOADED_REVISION_ATTR = "_loaded_revision"
+"""Name of the private attribute `_load_candidate` stamps on a loaded PromotionCandidate (see
+`_loaded_revision`)."""
+
+
+def _loaded_revision(candidate: PromotionCandidate) -> ExpectedRevision:
+    """The revision a loaded candidate was read with, for the optional StoragePort compare-and-set: `None` =
+    no state was stored, a str = the stored `revision`, `UNSET` (also: never loaded) = the stored record
+    predates `revision` or was unreadable, so the next write is unconditional (and stamps one). Kept as a
+    private instance attribute, not a dataclass field, because `PromotionCandidate` is what the REST API
+    serializes (field by field) and the revision is storage bookkeeping, not part of that wire shape."""
+    value: ExpectedRevision = getattr(candidate, _LOADED_REVISION_ATTR, UNSET)
+    return value
+
+
+def _remember_revision(candidate: PromotionCandidate, revision: ExpectedRevision) -> None:
+    setattr(candidate, _LOADED_REVISION_ATTR, revision)
 
 
 @dataclass
@@ -445,9 +470,8 @@ class Promotions:
         # Narrow the promotion state by tenant too. Even if the same artifactId exists for multiple tenants, they
         # do not get mixed. Fetched before the component.generated lookup below because a self-contained
         # published snapshot (persist's html/sha256/ref copy, #9) can make the generated lookup unnecessary.
-        state = self._validated_promotion_state(
-            await self._storage.get_promotion_state(artifact_id, tenant), artifact_id, tenant
-        )
+        raw_state = await self._storage.get_promotion_state(artifact_id, tenant)
+        state = self._validated_promotion_state(raw_state, artifact_id, tenant)
         if generated_event is not None:
             generated = [generated_event]
         else:
@@ -474,7 +498,7 @@ class Promotions:
         # persisted (state.data["origin"]) once the generated event ages out of the scan window — the
         # same pattern `request` above uses, so origin survives indefinitely once captured.
         origin = _origin_from_payload(payload) or state_data.get("origin")
-        return PromotionCandidate(
+        candidate = PromotionCandidate(
             artifactId=artifact_id,
             status=cast("PromotionStatus", state.status) if state is not None else "in_use",
             canonical=payload_data.get("canonical"),
@@ -490,6 +514,17 @@ class Promotions:
             origin=origin,
             updatedAt=state.updatedAt if state is not None else generated[0].ts,
         )
+        # A record that exists but failed validation is "absent" to the candidate, yet must not read back as
+        # None here: a conditional create would then conflict with that corrupt row forever instead of
+        # repairing it. A record with no revision (legacy) reads back as UNSET for the same reason.
+        if raw_state is None:
+            _remember_revision(candidate, None)
+        else:
+            _remember_revision(
+                candidate,
+                state.revision if state is not None and state.revision is not None else UNSET,
+            )
+        return candidate
 
     def _build_promotion_state(
         self, candidate: PromotionCandidate, tenant: str | None = None
@@ -536,14 +571,51 @@ class Promotions:
             updatedAt=self._clock(),
             data=data,
             tenant=tenant,
+            # A fresh per-write token on every snapshot (also on a port that ignores it, so adopting a
+            # compare-and-set adapter later needs no data migration).
+            revision=generate_revision(),
         )
 
     async def _persist(self, candidate: PromotionCandidate, tenant: str | None = None) -> None:
-        await self._storage.put_promotion_state(self._build_promotion_state(candidate, tenant))
+        """Writes the candidate's snapshot with a fresh revision. On a `supports_compare_and_set` port the
+        write is conditional on the revision the candidate was loaded with (see `_assert_unchanged`), so it
+        raises StorageConflictError instead of overwriting a concurrent writer's state. A candidate that was
+        not loaded through `_load_candidate`, or whose stored record predates `revision`, is written
+        unconditionally."""
+        state = self._build_promotion_state(candidate, tenant)
+        expected = _loaded_revision(candidate)
+        if supports_compare_and_set(self._storage) and expected is not UNSET:
+            await self._storage.put_promotion_state(state, expected_revision=expected)
+        else:
+            await self._storage.put_promotion_state(state)
+        # A candidate persisted twice (it is mutated in place) must chain from what it just wrote.
+        _remember_revision(candidate, state.revision)
+
+    async def _assert_unchanged(
+        self, candidate: PromotionCandidate, tenant: str | None = None
+    ) -> None:
+        """The cheap pre-check `act` runs right before it records its audit event: re-reads the stored state
+        and raises StorageConflictError when its revision differs from the one the candidate was loaded
+        with, so a transition that is already doomed to lose its conditional `_persist` does not leave an
+        orphan audit event behind. A no-op on a port that does not declare `supports_compare_and_set`, and
+        for a candidate with no known loaded revision (never loaded, or loaded from a legacy record)."""
+        if not supports_compare_and_set(self._storage):
+            return
+        expected = _loaded_revision(candidate)
+        if expected is UNSET:
+            return
+        current = await self._storage.get_promotion_state(candidate.artifactId, tenant)
+        current_revision: ExpectedRevision
+        if current is None:
+            current_revision = None
+        else:
+            current_revision = current.revision if current.revision is not None else UNSET
+        if current_revision != expected:
+            raise StorageConflictError("promotion", candidate.artifactId)
 
     async def _persist_many(
         self, candidates: list[PromotionCandidate], tenant: str | None = None
-    ) -> None:
+    ) -> list[PromotionCandidate]:
         """Batch counterpart of `_persist`: builds every PromotionState up front, then issues either one
         `StoragePort.put_promotion_states` call (when the storage implements
         `kohaku.spec.ports.SupportsBatchPromotionStates` -- see that Protocol's comment, and
@@ -551,15 +623,35 @@ class Promotions:
         unlike TS's real optional interface field) or falls back to the legacy one-`put_promotion_state`-call
         -per-state loop. A no-op for an empty list. Used by the batch nominate persistence in
         `_gather_candidates` below (mirrors TS nomination.ts's `toPersist` / candidate-store.ts's
-        `persistMany`)."""
+        `persistMany`).
+
+        Returns the candidates actually persisted. On a `supports_compare_and_set` port the batch write has no
+        per-item expectation, and an unconditional batch would overwrite a decision another instance recorded
+        after this scan loaded the candidate (an approve moving it past `candidate` would be rolled back). So
+        each candidate is written on its own, conditional on the revision the scan loaded it with (None when
+        no state existed), and a candidate that lost the race is SKIPPED: someone else changed it, so this
+        pass must not nominate it. Chosen over adding a per-item expectation to `put_promotion_states`, which
+        would complicate every adapter's batch path for a pass that is cheap to repeat."""
         if not candidates:
-            return
+            return []
+        if supports_compare_and_set(self._storage):
+            persisted: list[PromotionCandidate] = []
+            for candidate in candidates:
+                try:
+                    await self._persist(candidate, tenant)
+                except Exception as e:
+                    if not is_storage_conflict_error(e):
+                        raise
+                else:
+                    persisted.append(candidate)
+            return persisted
         states = [self._build_promotion_state(c, tenant) for c in candidates]
         if isinstance(self._storage, SupportsBatchPromotionStates):
             await self._storage.put_promotion_states(states)
         else:
             for state in states:
                 await self._storage.put_promotion_state(state)
+        return list(candidates)
 
     async def _gather_candidates(
         self, auto_nominate: bool, tenant: str | None = None
@@ -668,7 +760,15 @@ class Promotions:
 
         # Every eligible candidate's status transition is now applied in memory; persist them all in a single
         # batch write (see _persist_many's doc for the SupportsBatchPromotionStates isinstance check / fallback).
-        await self._persist_many(to_persist, tenant)
+        persisted = await self._persist_many(to_persist, tenant)
+        # A candidate a compare-and-set port refused (another instance changed it since the scan) was not
+        # nominated by this pass: put its in-memory status back so the returned list does not claim a
+        # transition that was not stored, and drop it from the audits below.
+        persisted_ids = {id(c) for c in persisted}
+        for candidate in to_persist:
+            if id(candidate) not in persisted_ids:
+                candidate.status = "in_use"
+        to_persist = persisted
 
         # component.nominated audit events are recorded only after the batch persist above resolves, and are
         # fail-open (mirroring handle_publish's own audit record): the status transition is already durable
@@ -822,7 +922,13 @@ class Promotions:
     ) -> PromotionCandidate:
         """Execute a single transition (load -> transition -> record -> persist).
 
-        Idempotency contract (3-13a): **act is not idempotent**. Serializing concurrent / retried calls is the caller's responsibility.
+        Idempotency contract (3-13a): **act is not idempotent**. Serializing concurrent / retried calls
+        within one process is the caller's responsibility (host_rest holds a per-artifact lock). Across
+        processes sharing one backend, a StoragePort that declares `supports_compare_and_set` makes the
+        candidate's read-modify-write optimistic: the snapshot write is conditional on the revision the
+        candidate was loaded with, and a concurrent change surfaces as StorageConflictError (nothing is
+        overwritten; the caller reloads and retries). Without that declaration a lost update between
+        processes remains possible.
         When tenant is given, if the owning tenant does not match it is treated as "unknown artifact".
         """
         candidate = await self._load_candidate(artifact_id, None, tenant)
@@ -979,6 +1085,14 @@ class Promotions:
 
         if audit is not None:
             audit_type, audit_payload, audit_actor = audit
+            # Compare-and-set port: re-read the stored revision first and give up (StorageConflictError) if
+            # another instance moved the state since the load, so a transition that would lose its
+            # conditional persist below does not record an audit event for it. This narrows the window to
+            # the record -> persist gap; a conflict at the persist itself still leaves one orphan
+            # component.reviewed/etc. event, which is harmless: reconcile only reads snapshots (it never
+            # derives state from events), so an event with no matching state change is ignored, and a retry
+            # records a fresh one.
+            await self._assert_unchanged(candidate, tenant)
             await self._lineage.record(audit_type, audit_payload, audit_actor, tenant)
         await self._persist(candidate, tenant)
         return candidate

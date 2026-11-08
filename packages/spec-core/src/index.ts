@@ -74,6 +74,7 @@ export type {
   AuthzPort,
   CapabilityRevocationStore,
   CatalogContribution,
+  DeleteFixationOptions,
   DomainPort,
   FixationRecord,
   GuiAction,
@@ -87,6 +88,8 @@ export type {
   OperationDescriptor,
   Principal,
   PromotionState,
+  PutFixationOptions,
+  PutPromotionStateOptions,
   QueryHandle,
   RateLimitResult,
   RateLimitRule,
@@ -207,6 +210,8 @@ export {
 } from "./schema/state.js";
 // Text summary (fallback for hosts without UI support / the feed-back text for ui/update-model-context)
 export { specToText } from "./spec-text.js";
+// Optional StoragePort compare-and-set: the error a conditional write throws on a revision mismatch
+export { isStorageConflictError, StorageConflictError } from "./storage-conflict.js";
 
 // Tabular
 export type { ColumnType, DataShape, TabularColumn, TabularData } from "./tabular.js";

@@ -11,7 +11,13 @@ import {
   pageLineageArray,
   type StoragePort,
 } from "@kohaku-ui/spec-core";
-import { filterLineage, listByTenant, tenantKey } from "./shared.js";
+import {
+  checkExpectedRevision,
+  filterLineage,
+  listByTenant,
+  planFixationWrite,
+  tenantKey,
+} from "./shared.js";
 import { createSpecCache } from "./spec-cache.js";
 
 /**
@@ -64,6 +70,12 @@ export function createFileStoragePort(dataDir: string): StoragePort {
   const fixations = new TenantSnapshot<FixationRecord>(fixationsPath, (fn) => fileLock(fixationsPath, fn));
 
   return {
+    // Deliberately does NOT declare `supportsCompareAndSet`. The `expectedRevision` option is honored (the
+    // compare runs against the snapshot freshly re-read from disk inside the in-process file lock, see
+    // mergeMutate), but a lock that only orders calls within this process is not atomic across processes, and
+    // two processes sharing one data directory (sample-api + sample-mcp) is a documented setup. The lineage
+    // services therefore do not pass the option to this port, and it declares `singleProcess` instead.
+    singleProcess: true,
     async getSpecCache(key) {
       return specCache.get(key);
     },
@@ -104,9 +116,12 @@ export function createFileStoragePort(dataDir: string): StoragePort {
       // When tenant is specified, legacy (no-tenant) state is a different key and is invisible = treated as tenant-neutral.
       return promotions.get(tenant, artifactId);
     },
-    async putPromotionState(state) {
+    async putPromotionState(state, options) {
       // Key-separate by (tenant, artifactId) using state.tenant. No tenant stays as artifactId.
-      await promotions.put(state.artifactId, state);
+      await promotions.put(state.artifactId, state, (existing) => {
+        checkExpectedRevision("promotion", state.artifactId, existing, options?.expectedRevision);
+        return "write";
+      });
     },
     async putPromotionStates(states) {
       // Batch counterpart of putPromotionState (P7 / the optional StoragePort extension): one read-modify-write
@@ -124,15 +139,19 @@ export function createFileStoragePort(dataDir: string): StoragePort {
     },
     async putFixation(record, options) {
       // Key-separate by (tenant, intentHash) using record.tenant. No tenant stays as intentHash.
-      await fixations.put(record.intentHash, record, options);
+      await fixations.put(record.intentHash, record, (existing) =>
+        planFixationWrite(record.intentHash, existing, options),
+      );
     },
     async listFixations(tenant) {
       // When tenant is specified, only matching ones (unspecified is all = legacy behavior).
       return fixations.list(tenant);
     },
     // v0.1 extension (optional): releasing a fixation
-    async deleteFixation(intentHash: string, tenant?: string) {
-      await fixations.delete(tenant, intentHash);
+    async deleteFixation(intentHash: string, tenant?: string, options?: { expectedRevision?: string }) {
+      await fixations.delete(tenant, intentHash, (existing) => {
+        checkExpectedRevision("fixation", intentHash, existing, options?.expectedRevision);
+      });
     },
   };
 }
@@ -170,11 +189,13 @@ class TenantSnapshot<T extends { tenant?: string }> {
 
   /**
    * Merge-puts value at (value.tenant, id): re-read disk, update that key, write back atomically, sync memory.
-   * `options.ifPresent`: when true, the write is a no-op (memory not synced either) unless that key is
-   * already present in the freshly re-read disk snapshot — see mergePut's doc comment for why this exists.
+   * `plan` (optional) sees the record currently on the freshly re-read disk snapshot (`undefined` when absent)
+   * and returns `"skip"` to leave the file untouched (the `ifPresent` no-op — see mergePut's doc comment for
+   * why this exists) or `"write"` to proceed; it may throw (a compare-and-set conflict), which aborts the
+   * write.
    */
-  put(id: string, value: T, options?: { ifPresent?: boolean }): Promise<void> {
-    return this.withLock(() => mergePut(this.path, this.map, tenantKey(value.tenant, id), value, options));
+  put(id: string, value: T, plan?: (existing: T | undefined) => "write" | "skip"): Promise<void> {
+    return this.withLock(() => mergePut(this.path, this.map, tenantKey(value.tenant, id), value, plan));
   }
 
   /**
@@ -193,9 +214,12 @@ class TenantSnapshot<T extends { tenant?: string }> {
     );
   }
 
-  /** Merge-deletes (tenant, id): re-read disk, delete that key, write back atomically, sync memory. */
-  delete(tenant: string | undefined, id: string): Promise<void> {
-    return this.withLock(() => mergeDelete(this.path, this.map, tenantKey(tenant, id)));
+  /**
+   * Merge-deletes (tenant, id): re-read disk, delete that key, write back atomically, sync memory. `check`
+   * (optional) sees the record currently on the freshly re-read disk snapshot and may throw to abort the delete.
+   */
+  delete(tenant: string | undefined, id: string, check?: (existing: T | undefined) => void): Promise<void> {
+    return this.withLock(() => mergeDelete(this.path, this.map, tenantKey(tenant, id), check));
   }
 }
 
@@ -223,15 +247,23 @@ async function mergeMutate<T>(
 ): Promise<void> {
   const loaded = await loadJsonSnapshotAsync<Record<string, T>>(path, {});
   const base = loaded.corrupted ? Object.fromEntries(memory) : loaded.data;
-  const shouldPersist = mutate(base) !== false;
+  let shouldPersist: boolean;
+  try {
+    shouldPersist = mutate(base) !== false;
+  } catch (error) {
+    // A rejected conditional write (compare-and-set conflict) changes nothing on disk, but this process's
+    // view was stale -- that staleness is exactly what the conflict reports -- so refresh it from the re-read.
+    syncMemory(memory, base);
+    throw error;
+  }
   if (shouldPersist) await writeJsonAtomicAsync(path, base);
   syncMemory(memory, base);
 }
 
 /**
  * Reads the latest from disk, updates that key, writes it back atomically, and syncs the memory Map too.
- * `options.ifPresent`: skip the write-back (memory is still synced to the freshly re-read disk snapshot; see
- * mergeMutate's doc comment) unless `key` is already present there. Used by `Fixations.refreshFingerprint`
+ * `plan` returning `"skip"` (the `ifPresent` case when `key` is absent): skip the write-back (memory is still synced to the freshly re-read disk snapshot; see
+ * mergeMutate's doc comment). Used by `Fixations.refreshFingerprint`
  * (via `StoragePort.putFixation`'s options) so a self-healing get→put that races with a concurrent delete
  * does not resurrect an already-removed fixation (sample-api and sample-mcp sharing one `.data`
  * directory could otherwise revive a fixation deleted by the other process's `unfixate`).
@@ -241,17 +273,23 @@ function mergePut<T>(
   memory: Map<string, T>,
   key: string,
   value: T,
-  options?: { ifPresent?: boolean },
+  plan?: (existing: T | undefined) => "write" | "skip",
 ): Promise<void> {
   return mergeMutate(path, memory, (base) => {
-    if (options?.ifPresent === true && !(key in base)) return false;
+    if (plan?.(key in base ? base[key] : undefined) === "skip") return false;
     base[key] = value;
   });
 }
 
 /** Reads the latest from disk, deletes that key, writes it back atomically, and syncs the memory Map too. */
-function mergeDelete<T>(path: string, memory: Map<string, T>, key: string): Promise<void> {
+function mergeDelete<T>(
+  path: string,
+  memory: Map<string, T>,
+  key: string,
+  check?: (existing: T | undefined) => void,
+): Promise<void> {
   return mergeMutate(path, memory, (base) => {
+    check?.(key in base ? base[key] : undefined);
     delete base[key];
   });
 }
