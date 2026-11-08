@@ -188,10 +188,10 @@ async function failedTaskFor(error: Error): Promise<{
   const result = json["result"] as Record<string, unknown>;
   expect(result["resultType"]).toBe("task");
   const store = __getTaskStoreForTest(server)!;
-  for (let i = 0; i < 50 && store.get(result["taskId"] as string)?.status === "working"; i++) {
+  for (let i = 0; i < 50 && store.get(result["taskId"] as string, "anonymous")?.status === "working"; i++) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  return { task: store.get(result["taskId"] as string), onError };
+  return { task: store.get(result["taskId"] as string, "anonymous"), onError };
 }
 
 describe("an unavailable LLM provider inside a task-backed kohaku_compose fails the task with the same fixed message", () => {

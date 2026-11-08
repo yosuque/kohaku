@@ -616,12 +616,6 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
 - Internal APIs (functions and methods that do not appear on the wire) follow Python's
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
-- **The MCP Tasks extension (`io.modelcontextprotocol/tasks`) is not ported.** On the TS
-  side (`packages/host-mcp-apps/src/tasks.ts`), `kohaku_compose` and the intent tools
-  become task-capable for a request that opts in, but only when `AttachOptions.tasksEnabled`
-  is also turned on (default off). `host_mcp` always serves the compose family
-  synchronously and never declares the extension, regardless of what a request's
-  `_meta` asks for.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
   the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the
   `acknowledged` payload field) and their rubric variants; the analytics `review` block and
