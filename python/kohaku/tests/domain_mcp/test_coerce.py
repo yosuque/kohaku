@@ -44,6 +44,64 @@ def test_limit_only_lowers_the_signed_limit_the_smaller_of_the_two_wins() -> Non
     assert coerce_tool_arguments({"limit": 4, "_limit": "5"}, INPUT_SCHEMA) == {"limit": 4}
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "-1",
+        "-1e9",
+        "0",
+        "0.5",
+        "1.5",
+        "abc",
+        "",
+        "9007199254740993",
+        -1,
+        0,
+        0.5,
+        True,
+    ],
+    ids=repr,
+)
+def test_refuses_a_limit_that_is_not_a_positive_integer(bad: Any) -> None:
+    """`_limit` is outside the signed ref: anything but a positive safe integer would not lower the signed limit."""
+    number_limit: dict[str, Any] = {"type": "object", "properties": {"limit": {"type": "number"}}}
+    for schema in (INPUT_SCHEMA, number_limit):
+        for args in ({"limit": "1", "_limit": bad}, {"_limit": bad}):
+            with pytest.raises(McpArgumentError) as info:
+                coerce_tool_arguments(args, schema)
+            assert info.value.code == "MCP_ARGUMENT_INVALID"
+            assert str(info.value) == 'argument "_limit": expected a positive integer'
+
+
+@pytest.mark.parametrize("bad", ["-1", "0", "0.5", -1, 0, 10**400], ids=lambda v: repr(v)[:12])
+def test_refuses_a_signed_limit_that_is_not_a_positive_integer(bad: Any) -> None:
+    """A signed limit of 0 / -1 would slip under max_limit (the smaller wins): same rule as `_limit`."""
+    number_limit: dict[str, Any] = {"type": "object", "properties": {"limit": {"type": "number"}}}
+    for schema in (INPUT_SCHEMA, number_limit):
+        for args in ({"limit": bad}, {"limit": bad, "_limit": "5"}):
+            with pytest.raises(McpArgumentError) as info:
+                coerce_tool_arguments(args, schema)
+            assert info.value.code == "MCP_ARGUMENT_INVALID"
+
+
+def test_a_huge_int_limit_is_an_argument_error_not_an_overflow() -> None:
+    with pytest.raises(McpArgumentError):
+        coerce_tool_arguments({"limit": "3", "_limit": 10**400}, INPUT_SCHEMA)
+
+
+def test_the_limit_rules_apply_only_when_the_tool_declares_a_numeric_limit() -> None:
+    string_limit: dict[str, Any] = {"type": "object", "properties": {"limit": {"type": "string"}}}
+    assert coerce_tool_arguments({"limit": "0", "_limit": "-1"}, string_limit) == {"limit": "0"}
+    assert coerce_tool_arguments({"_limit": "-1", "s": "x"}, {"type": "object"}) == {"s": "x"}
+
+
+def test_accepts_a_positive_integer_limit_however_it_is_spelled() -> None:
+    assert coerce_tool_arguments({"limit": "9", "_limit": "5.0"}, INPUT_SCHEMA) == {"limit": 5}
+    assert coerce_tool_arguments({"limit": "9", "_limit": "1e1"}, INPUT_SCHEMA) == {"limit": 9}
+    assert coerce_tool_arguments({"limit": "9", "_limit": 3}, INPUT_SCHEMA) == {"limit": 3}
+    assert coerce_tool_arguments({"_limit": "1"}, INPUT_SCHEMA) == {"limit": 1}
+
+
 def test_caps_the_limit_at_max_limit_whichever_way_it_was_supplied() -> None:
     assert coerce_tool_arguments({"limit": "5000"}, INPUT_SCHEMA) == {"limit": 1000}
     assert coerce_tool_arguments({"_limit": "2000"}, INPUT_SCHEMA) == {"limit": 1000}

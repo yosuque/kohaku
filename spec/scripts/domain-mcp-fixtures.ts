@@ -163,6 +163,40 @@ const COERCION_CASES: { args: Record<string, unknown>; inputSchema: unknown; max
   { args: { b: "yes" }, inputSchema: COERCION_SCHEMA },
   { args: { b: "True" }, inputSchema: COERCION_SCHEMA },
   { args: { _limit: "many" }, inputSchema: COERCION_SCHEMA },
+  // `_limit` is outside the signed ref, so it may only lower the signed limit: a positive safe integer or nothing.
+  { args: { limit: "1", _limit: "-1" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "1", _limit: "0" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "1", _limit: "0.5" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "1", _limit: "abc" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "1", _limit: "-1e9" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: "5" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: "5.0" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: "1e1" }, inputSchema: COERCION_SCHEMA },
+  { args: { _limit: "1" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: 3 }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: -1 }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: 0.5 }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: true }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "9", _limit: "9007199254740993" }, inputSchema: COERCION_SCHEMA },
+  // A signed limit that is not a positive integer would slip under maxLimit (the smaller wins): same rule.
+  { args: { limit: "-1" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "0" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "-1", _limit: "5" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: -1 }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "0" }, inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
+  { args: { limit: "0.5" }, inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
+  {
+    args: { limit: "0", _limit: "-1" },
+    inputSchema: { type: "object", properties: { limit: { type: "string" } } },
+  },
+  {
+    args: { limit: "1", _limit: "0.5" },
+    inputSchema: { type: "object", properties: { limit: { type: "number" } } },
+  },
+  {
+    args: { limit: "1", _limit: "-1" },
+    inputSchema: { type: "object", properties: { limit: { type: "number" } } },
+  },
 ];
 
 const ROWS = [
