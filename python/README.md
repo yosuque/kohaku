@@ -552,6 +552,13 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   `sanitizeJsonSchema` performs, so the TS and Python adapters degrade the same way for the
   same schema). Validation of the returned object still uses the original, unsanitized
   schema.
+- **The Python `claude` adapter never sends `temperature`** (`KOHAKU_LLM_TEMPERATURE` and a
+  per-call `temperature` are accepted but not forwarded to Anthropic; the TS adapter still
+  sends it through `@ai-sdk/anthropic`). The `anthropic` SDK's `messages.create` has no such
+  parameter, and under SDK 2.x's `anthropic-version: 2026-10-21` the Messages API rejects
+  any request carrying `temperature` / `top_p` / `top_k` with a 400. kohaku's
+  identical-display guarantee comes from the Spec cache, with temperature 0 only auxiliary,
+  so the loss on older models is cosmetic.
 - Internal APIs (functions and methods that do not appear on the wire) follow Python's
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.

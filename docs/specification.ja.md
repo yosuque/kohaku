@@ -465,7 +465,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `KOHAKU_LLM_MODEL` | プロバイダ別既定(claude-sonnet-5 / gpt-4.1 / gemini-2.5-flash / llama3.3) | `llama` は必須指定 |
 | `KOHAKU_LLM_BASE_URL` | ollama: `http://localhost:11434/v1` | `llama`(OpenAI 互換)は必須 |
 | `KOHAKU_LLM_API_KEY` | — | 最優先キー。なければ `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` |
-| `KOHAKU_LLM_TEMPERATURE` / `KOHAKU_LLM_MAX_OUTPUT_TOKENS` | 0 / 4096 | L2 自由生成は `outputBudgetFactor=3` により上限が 3 倍(既定 12288)に拡大される |
+| `KOHAKU_LLM_TEMPERATURE` / `KOHAKU_LLM_MAX_OUTPUT_TOKENS` | 0 / 4096 | L2 自由生成は `outputBudgetFactor=3` により上限が 3 倍(既定 12288)に拡大される。Python の `claude` アダプタは temperature を転送しない(Anthropic API は `anthropic-version` 2026-10-21 以降サンプリングパラメータを拒否する。`python/README.ja.md` 参照) |
 | `KOHAKU_LLM_STRUCTURED_MODE` | `auto` | `auto`(ネイティブ→失敗時プロンプト JSON)/ `strict` / `prompt` |
 | `KOHAKU_LLM_TIMEOUT_MS` | 60000 | LLM 1 回の呼び出しのタイムアウト(ms)。L2 自由生成(フル HTML の長出力)は `outputBudgetFactor=3` により 3 倍(既定 180s)に拡大される |
 | `KOHAKU_LLM_RETRY_MAX` / `KOHAKU_LLM_RETRY_INITIAL_MS` | 2 / 250 | PROVIDER 障害(429/5xx)のジッター付き指数バックオフ再試行。`0` で無効。全体で `KOHAKU_LLM_TIMEOUT_MS` を超えない |
