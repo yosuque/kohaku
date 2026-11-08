@@ -12,6 +12,7 @@ import {
   type SessionContext,
 } from "@kohaku-ui/spec-core";
 import type { IntentCatalogLike } from "./catalog.js";
+import { DEFAULT_MAX_FILTER_VARIANTS, vetFilters } from "./filters.js";
 import { normalizeGuiAction } from "./gui.js";
 import { normalizeNlQuery } from "./nl.js";
 
@@ -66,6 +67,13 @@ export interface LlmSemanticPortOptions {
   /** Rejects an NL question longer than this many characters before any LLM call. Default: 2000. */
   maxQuestionChars?: number;
   /**
+   * The budget of `describeFilters`' product check: the number of filter-option combinations validated against
+   * the Intent's params schema (a combination its `refine` forbids makes the Intent expose NO filters). More
+   * combinations than this are not provable and also yield no filters. Default: 64, the composer's default
+   * `l1FiltersMaxVariants` -- raise both together.
+   */
+  maxFilterVariants?: number;
+  /**
    * Observation hook, called after every successful NL normalization (both the matched-Intent and the
    * fallback outcomes; never called before a throw). Fail-open: a throwing hook is caught and ignored, so an
    * observability bug can never break normalization.
@@ -83,6 +91,7 @@ export interface LlmSemanticPortOptions {
  */
 export function createLlmSemanticPort(options: LlmSemanticPortOptions): SemanticPort {
   const { llm, dataVersion, describeShape, rules, fallbackIntent, maxQuestionChars, onNormalized } = options;
+  const maxFilterVariants = options.maxFilterVariants ?? DEFAULT_MAX_FILTER_VARIANTS;
   const catalogFor =
     typeof options.catalog === "function" ? options.catalog : () => options.catalog as IntentCatalogLike;
   const outputLocale = options.outputLocale ?? defaultOutputLocale;
@@ -128,7 +137,12 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
     ): Promise<FilterDescriptor[]> {
       // An unknown Intent has no filters (resolveQuery is what reports it); an Intent defined without facets
       // or on the callback path has no `filters` derivation, which is the same "no filters" answer.
-      return catalogFor(ctx?.tenant).get(intent.canonical)?.filters?.(ctx?.locale) ?? [];
+      const def = catalogFor(ctx?.tenant).get(intent.canonical);
+      const filters = def?.filters?.(ctx?.locale);
+      if (def == null || filters == null || filters.length === 0) return [];
+      // The Intent's params schema is the authority: options it rejects are dropped, and a product containing a
+      // forbidden combination yields no filters at all (the composer signs the whole product).
+      return vetFilters(def, intent, filters, maxFilterVariants);
     },
     async validateIntent(intent: IntentInput, ctx: SessionContext): Promise<IntentInput> {
       const catalog = catalogFor(ctx.tenant);

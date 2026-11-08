@@ -305,3 +305,134 @@ describe("createLlmSemanticPort describeFilters", () => {
     expect(await p.describeFilters!(intent("sales.bogus"))).toEqual([]);
   });
 });
+
+describe("createLlmSemanticPort describeFilters: the filters never widen what the Intent's params allow", () => {
+  // A refine that forbids one combination: (private, detail). Each value alone is fine; the cartesian product
+  // of the two facets includes the forbidden pair, which /compose would reject for that Intent.
+  const docs = defineIntent({
+    canonical: "x.docs",
+    description: "Docs",
+    source: "src",
+    params: z
+      .object({
+        vis: z.enum(["public", "private"]).default("public"),
+        level: z.enum(["summary", "detail"]).default("summary"),
+      })
+      .refine((p) => !(p.vis === "private" && p.level === "detail"), "private/detail is forbidden"),
+    examples: [],
+    facets: [
+      { param: "vis", label: "Visibility" },
+      { param: "level", label: "Level" },
+    ],
+    queries: [{ path: "docs", paramMap: { vis: "vis", level: "level" } }],
+  }).toIntentDef();
+
+  const portFor = (defs: Parameters<typeof createIntentCatalog>[0], maxFilterVariants?: number) =>
+    createLlmSemanticPort({
+      llm: new FakeLlm(),
+      catalog: createIntentCatalog(defs),
+      dataVersion: () => "v",
+      ...(maxFilterVariants != null ? { maxFilterVariants } : {}),
+    });
+  const at = (canonical: string, params: Record<string, string | number>) => ({
+    canonical,
+    params,
+    hash: "h",
+  });
+
+  it("returns no filters when a combination of the remaining filters violates the Intent's params (fail-safe)", async () => {
+    const p = portFor([docs]);
+    expect(await p.describeFilters!(at("x.docs", { vis: "public", level: "summary" }))).toEqual([]);
+  });
+
+  it("an option invalid against the CURRENT params is dropped before the product check (public/detail keeps only `level`)", async () => {
+    const p = portFor([docs]);
+    // With level=detail, vis=private is rejected on its own, so `vis` is left with one option and is dropped;
+    // `level` alone has no forbidden combination.
+    const filters = await p.describeFilters!(at("x.docs", { vis: "public", level: "detail" }));
+    expect(filters.map((f) => f.param)).toEqual(["level"]);
+  });
+
+  it("drops an option the Intent's params reject on its own, and a filter left with fewer than 2 options", async () => {
+    const narrowed = defineIntent({
+      canonical: "x.narrow",
+      description: "Narrow",
+      source: "src",
+      // `flavor` is a facet over curated options of which only two are valid enum members; `size` keeps one.
+      params: z.object({
+        flavor: z.enum(["a", "b"]).default("a"),
+        size: z.enum(["s", "m", "l"]).default("s"),
+      }),
+      examples: [],
+      facets: [
+        {
+          param: "flavor",
+          label: "Flavor",
+          options: [
+            { value: "a", label: "A" },
+            { value: "b", label: "B" },
+            { value: "forbidden", label: "Forbidden" },
+          ],
+        },
+        {
+          param: "size",
+          label: "Size",
+          options: [
+            { value: "s", label: "S" },
+            { value: "nope", label: "Nope" },
+          ],
+        },
+      ],
+      queries: [{ path: "p", paramMap: { flavor: "flavor", size: "size" } }],
+    }).toIntentDef();
+    const filters = await portFor([narrowed]).describeFilters!(at("x.narrow", { flavor: "a", size: "s" }));
+    // flavor loses "forbidden" (2 options remain); size is left with one option and is dropped.
+    expect(filters.map((f) => [f.param, f.options.map((o) => o.value)])).toEqual([["flavor", ["a", "b"]]]);
+  });
+
+  it("keeps the filters when every combination is valid", async () => {
+    const free = defineIntent({
+      canonical: "x.free",
+      description: "Free",
+      source: "src",
+      params: z.object({
+        vis: z.enum(["public", "private"]).default("public"),
+        level: z.enum(["summary", "detail"]).default("summary"),
+      }),
+      examples: [],
+      facets: [
+        { param: "vis", label: "Visibility" },
+        { param: "level", label: "Level" },
+      ],
+      queries: [{ path: "docs", paramMap: { vis: "vis", level: "level" } }],
+    }).toIntentDef();
+    const filters = await portFor([free]).describeFilters!(at("x.free", { vis: "public", level: "summary" }));
+    expect(filters.map((f) => f.param)).toEqual(["vis", "level"]);
+  });
+
+  it("bounds the product check by maxFilterVariants (default 64): over budget returns no filters", async () => {
+    const values = (n: number) => Array.from({ length: n }, (_, i) => `v${i}`) as [string, ...string[]];
+    const wide = defineIntent({
+      canonical: "x.wide",
+      description: "Wide",
+      source: "src",
+      params: z.object({ a: z.enum(values(9)).default("v0"), b: z.enum(values(9)).default("v0") }),
+      examples: [],
+      facets: [
+        { param: "a", label: "A" },
+        { param: "b", label: "B" },
+      ],
+      queries: [{ path: "p", paramMap: { a: "a", b: "b" } }],
+    }).toIntentDef();
+    // 9 x 9 = 81 > 64: not provable within the budget, so nothing is offered...
+    expect(await portFor([wide]).describeFilters!(at("x.wide", { a: "v0", b: "v0" }))).toEqual([]);
+    // ...and a product that raises the composer's l1FiltersMaxVariants raises this budget with it.
+    const roomy = await portFor([wide], 81).describeFilters!(at("x.wide", { a: "v0", b: "v0" }));
+    expect(roomy.map((f) => f.param)).toEqual(["a", "b"]);
+  });
+
+  it("an unknown Intent and an Intent without filters are unaffected", async () => {
+    const p = portFor([docs]);
+    expect(await p.describeFilters!(at("x.bogus", {}))).toEqual([]);
+  });
+});

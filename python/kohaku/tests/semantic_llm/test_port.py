@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 import pytest
 
@@ -11,6 +13,9 @@ from kohaku.intents import (
     FacetSpec,
     IntentDef,
     IntentSpec,
+    ObjectSchema,
+    ParamField,
+    ParamParseResult,
     QueryTemplate,
     define_intent,
     object_schema,
@@ -32,6 +37,7 @@ from kohaku.spec import (
     IntentInput,
     IntentValidationError,
     JsonObject,
+    JsonValue,
     NLQuery,
     QueryHandle,
     QueryRef,
@@ -439,3 +445,151 @@ class TestDescribeFilters:
     def test_returns_empty_for_an_intent_without_facets_or_an_unknown_intent(self) -> None:
         assert asyncio.run(self.port.describe_filters(self._intent("sales.plain"))) == []
         assert asyncio.run(self.port.describe_filters(self._intent("sales.bogus"))) == []
+
+
+@dataclass(frozen=True)
+class _RefinedSchema(ObjectSchema):
+    """An ObjectSchema with a cross-field constraint (zod's `.refine`): (vis=private, level=detail) is forbidden.
+
+    The params DSL has no `refine`, so the constraint is expressed by overriding `safe_parse`, the single entry
+    point `describe_filters` validates through."""
+
+    def safe_parse(self, raw: Mapping[str, JsonValue]) -> ParamParseResult:
+        result = super().safe_parse(raw)
+        if result.success and result.data is not None:
+            if result.data.get("vis") == "private" and result.data.get("level") == "detail":
+                return ParamParseResult(
+                    success=False, data=None, error="private/detail is forbidden"
+                )
+        return result
+
+
+def _docs_def(refined: bool = True) -> IntentDef:
+    shape: dict[str, ParamField] = {
+        "vis": EnumField(values=("public", "private")).default("public"),
+        "level": EnumField(values=("summary", "detail")).default("summary"),
+    }
+    return define_intent(
+        IntentSpec(
+            canonical="x.docs",
+            description="Docs",
+            source="src",
+            params=_RefinedSchema(shape=dict(shape)) if refined else object_schema(shape),
+            examples=[],
+            facets=[
+                FacetSpec(param="vis", label="Visibility"),
+                FacetSpec(param="level", label="Level"),
+            ],
+            queries=[QueryTemplate(path="docs", paramMap={"vis": "vis", "level": "level"})],
+        )
+    ).to_intent_def()
+
+
+def _at(canonical: str, params: JsonObject) -> Intent:
+    return Intent(canonical=canonical, params=params, hash=f"sha256:{'ab' * 32}")
+
+
+class TestDescribeFiltersVetting:
+    """describe_filters never widens what the Intent's params allow (mirror of the TS describeFilters vetting suite)."""
+
+    @staticmethod
+    def _port(defs: list[IntentDef], max_filter_variants: int | None = None):  # type: ignore[no-untyped-def]
+        return create_llm_semantic_port(
+            llm=FakeLlm(),
+            catalog=create_intent_catalog(defs),
+            data_version=lambda _h: "v",
+            max_filter_variants=max_filter_variants,
+        )
+
+    def test_returns_no_filters_when_a_combination_of_the_remaining_filters_violates_the_params(
+        self,
+    ) -> None:
+        port = self._port([_docs_def()])
+        out = asyncio.run(
+            port.describe_filters(_at("x.docs", {"vis": "public", "level": "summary"}))
+        )
+        assert out == []
+
+    def test_an_option_invalid_against_the_current_params_is_dropped_before_the_product_check(
+        self,
+    ) -> None:
+        port = self._port([_docs_def()])
+        out = asyncio.run(
+            port.describe_filters(_at("x.docs", {"vis": "public", "level": "detail"}))
+        )
+        assert [f.param for f in out] == ["level"]
+
+    def test_drops_an_option_the_params_reject_on_their_own_and_a_filter_left_with_fewer_than_two(
+        self,
+    ) -> None:
+        narrowed = define_intent(
+            IntentSpec(
+                canonical="x.narrow",
+                description="Narrow",
+                source="src",
+                params=object_schema(
+                    {
+                        "flavor": EnumField(values=("a", "b")).default("a"),
+                        "size": EnumField(values=("s", "m", "l")).default("s"),
+                    }
+                ),
+                examples=[],
+                facets=[
+                    FacetSpec(
+                        param="flavor",
+                        label="Flavor",
+                        options=[
+                            {"value": "a", "label": "A"},
+                            {"value": "b", "label": "B"},
+                            {"value": "forbidden", "label": "Forbidden"},
+                        ],
+                    ),
+                    FacetSpec(
+                        param="size",
+                        label="Size",
+                        options=[{"value": "s", "label": "S"}, {"value": "nope", "label": "Nope"}],
+                    ),
+                ],
+                queries=[QueryTemplate(path="p", paramMap={"flavor": "flavor", "size": "size"})],
+            )
+        ).to_intent_def()
+        out = asyncio.run(
+            self._port([narrowed]).describe_filters(_at("x.narrow", {"flavor": "a", "size": "s"}))
+        )
+        assert [(f.param, [o.value for o in f.options]) for f in out] == [("flavor", ["a", "b"])]
+
+    def test_keeps_the_filters_when_every_combination_is_valid(self) -> None:
+        port = self._port([_docs_def(refined=False)])
+        out = asyncio.run(
+            port.describe_filters(_at("x.docs", {"vis": "public", "level": "summary"}))
+        )
+        assert [f.param for f in out] == ["vis", "level"]
+
+    def test_bounds_the_product_check_by_max_filter_variants(self) -> None:
+        values = tuple(f"v{i}" for i in range(9))
+        wide = define_intent(
+            IntentSpec(
+                canonical="x.wide",
+                description="Wide",
+                source="src",
+                params=object_schema(
+                    {
+                        "a": EnumField(values=values).default("v0"),
+                        "b": EnumField(values=values).default("v0"),
+                    }
+                ),
+                examples=[],
+                facets=[FacetSpec(param="a", label="A"), FacetSpec(param="b", label="B")],
+                queries=[QueryTemplate(path="p", paramMap={"a": "a", "b": "b"})],
+            )
+        ).to_intent_def()
+        intent = _at("x.wide", {"a": "v0", "b": "v0"})
+        # 9 x 9 = 81 > 64: not provable within the budget, so nothing is offered...
+        assert asyncio.run(self._port([wide]).describe_filters(intent)) == []
+        # ...and a product that raises the composer's l1FiltersMaxVariants raises this budget with it.
+        roomy = asyncio.run(self._port([wide], 81).describe_filters(intent))
+        assert [f.param for f in roomy] == ["a", "b"]
+
+    def test_an_unknown_intent_is_unaffected(self) -> None:
+        port = self._port([_docs_def()])
+        assert asyncio.run(port.describe_filters(_at("x.bogus", {}))) == []

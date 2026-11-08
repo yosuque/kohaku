@@ -10,6 +10,7 @@ Depends on kohaku.spec + kohaku.intents + kohaku.llm only (TS: spec-core + data-
 """
 
 from .catalog import IntentCatalog, IntentCatalogLike, ParamsValidation, create_intent_catalog
+from .filters import DEFAULT_MAX_FILTER_VARIANTS, vet_filters
 from .gui import normalize_gui_action
 from .nl import (
     DEFAULT_MAX_QUESTION_CHARS,
@@ -31,6 +32,7 @@ from .prompt import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_FILTER_VARIANTS",
     "DEFAULT_MAX_QUESTION_CHARS",
     "IntentCatalog",
     "IntentCatalogLike",
@@ -48,4 +50,5 @@ __all__ = [
     "normalize_gui_action",
     "normalize_nl_query",
     "render_catalog_doc",
+    "vet_filters",
 ]
