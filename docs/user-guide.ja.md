@@ -310,7 +310,7 @@ KOHAKU_MCP_ALLOWED_HOSTS=<ランダム>.trycloudflare.com \
 
 トンネルが払い出した `https://<ランダム>.trycloudflare.com` に `/mcp` を付けた URL を、ホストのカスタムコネクタ(claude.ai)/ MCP サーバー(ChatGPT の developer mode)に登録します。ブラウザから呼ぶ側のオリジンを許可するには `KOHAKU_MCP_ALLOWED_ORIGINS`(カンマ区切りのホスト名。スキーム・ポートなし)を追加します。`Origin` を持たないリクエスト(コネクタ自身のサーバー側呼び出し、Claude Desktop)には何も要りません。
 
-このエントリの HTTP 足場(Host / Origin ガード、CORS、ボディ上限、ステートレスなハンドラ)は `@kohaku-ui/host/mcp-http` の `createMcpHttpServer` で、`@modelcontextprotocol/node` は optional peer です。`apps/sample-mcp/src/http.ts` はその上にスナップショット配信と環境変数の解釈を加えています。クロスオリジンのブラウザ呼び出し元に対し、CORS プリフライトは `Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name` を許可します(末尾の 2 つは MCP SDK クライアントが送る標準リクエストヘッダーです)。ツールの `inputSchema` に `x-mcp-header` を宣言するプロダクトでは、クライアントが `Mcp-Param-<Name>` ヘッダーも送ります。CORS の許可リストはプレフィックスのワイルドカードを使えないため、`corsAllowHeaders` オプションでそれらを追加してください。`kohaku init --mcp` が生成するサーバーは今のところ独自のコピーを持ち、次のリリース後に共有版へ切り替えます。
+このエントリの HTTP 足場(Host / Origin ガード、CORS、ボディ上限、ステートレスなハンドラ)は `@kohaku-ui/host/mcp-http` の `createMcpHttpServer` で、`@modelcontextprotocol/node` は optional peer です。`apps/sample-mcp/src/http.ts` はその上にスナップショット配信と環境変数の解釈を加えています。クロスオリジンのブラウザ呼び出し元に対し、CORS プリフライトは `Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name` を許可します(末尾の 2 つは MCP SDK クライアントが送る標準リクエストヘッダーです)。ツールの `inputSchema` に `x-mcp-header` を宣言するプロダクトでは、クライアントが `Mcp-Param-<Name>` ヘッダーも送ります。CORS の許可リストはプレフィックスのワイルドカードを使えないため、`corsAllowHeaders` オプションでそれらを追加してください。`kohaku init --mcp` が生成するサーバー(`server/mcp-http.ts`)も同じ `createMcpHttpServer` の上に作られています。配信するパスは `/mcp` だけで(それ以外は 404)、`.env` の読み込み、`KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` の解釈、グレースフルシャットダウンは生成側に残ります。
 
 > ⚠️ **認証なしのデモです。** この HTTP エントリには一切の認証がありません。公開トンネルで露出すると、**URL を知る誰もが売上データを閲覧・操作できます**。信頼できる相手にのみ URL を渡し、機微データを載せないでください。停止したらトンネルも閉じます。ブラウザからの Host 偽装やクロスサイトのリクエストを弾く DNS リバインディング保護は既定で有効です(上記のとおり、`KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` で足さない限り Host と Origin は localhost 名でなければならず、CORS 応答は検証を通った Origin だけを返し `*` は返しません)。従来の `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` は `KOHAKU_MCP_ALLOWED_HOSTS` の非推奨エイリアスとして引き続き使えます。Python サンプル(`sales_api.mcp_http`)も同じ動作です。
 >
@@ -742,7 +742,7 @@ export const myCard = defineComponent({
   type: "myapp.card", version: "1.0.0",
   // … description / propsSchema / capabilities は従来どおり …
   deprecated: { reason: "myapp.cardV2 に置き換え", replacedBy: { type: "myapp.cardV2" } },
-  migrateProps: (props) => ({ title: props.title }), // TS のみ: `kohaku migrate` が props を書き換える際に使う
+  migrateProps: (props) => ({ title: props.title }), // `kohaku migrate` が props を書き換える際に使う(Python では `migrate_props=`)
 });
 ```
 

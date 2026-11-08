@@ -1,5 +1,5 @@
 import { coreCatalog, defineComponent, resolveCatalog } from "@kohaku-ui/registry";
-import type { FixationRecord, Principal, StoragePort, UISpec } from "@kohaku-ui/spec-core";
+import type { FixationRecord, JsonObject, Principal, StoragePort, UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
@@ -211,6 +211,64 @@ describe("planCatalogMigration", () => {
     expect(blocked.types).toEqual([OLD_BAD_TYPE]);
     expect(blocked.issues.length).toBeGreaterThan(0);
     expect(blocked.issues[0]).toContain("kpi2:");
+  });
+
+  describe("a migrateProps that misbehaves", () => {
+    /** OLD_CLEAN_TYPE with the given migrateProps, against a NEW_TYPE that has no required fields. */
+    function catalogWithMigrate(migrateProps: (props: JsonObject) => JsonObject) {
+      return resolveCatalog(coreCatalog, {
+        components: [
+          defineComponent({
+            type: NEW_TYPE,
+            version: "1.0.0",
+            description: "new kpi card (no required fields)",
+            propsSchema: z.object({ label: z.string().optional() }),
+            capabilities: { events: [], data: "required", children: "none" },
+          }),
+          defineComponent({
+            type: OLD_CLEAN_TYPE,
+            version: "1.0.0",
+            description: "old kpi card",
+            propsSchema: z.object({ label: z.string() }),
+            capabilities: { events: [], data: "required", children: "none" },
+            deprecated: { reason: "superseded", replacedBy: { type: NEW_TYPE } },
+            migrateProps,
+          }),
+        ],
+      });
+    }
+
+    it("propagates a throwing migrateProps out of planCatalogMigration (not caught)", async () => {
+      const catalog = catalogWithMigrate(() => {
+        throw new Error("migrate exploded");
+      });
+      await expect(
+        planCatalogMigration({ storage: stubStorage([cleanFixation()]), catalogFor: () => catalog }),
+      ).rejects.toThrow("migrate exploded");
+    });
+
+    it.each([undefined, null, "x", []])("blocks a non-object result (%j)", async (bad) => {
+      const catalog = catalogWithMigrate(() => bad as unknown as JsonObject);
+      const plan = await planCatalogMigration({
+        storage: stubStorage([cleanFixation()]),
+        catalogFor: () => catalog,
+      });
+      expect(plan.steps).toEqual([]);
+      expect(plan.blocked).toHaveLength(1);
+      expect(plan.blocked[0]!.types).toEqual([OLD_CLEAN_TYPE]);
+      expect(plan.blocked[0]!.issues[0]).toContain("kpi1:");
+    });
+
+    it("blocks reshaped props that still fail the replacement's schema", async () => {
+      const catalog = catalogWithMigrate((props) => ({ label: [props["label"]] }));
+      const plan = await planCatalogMigration({
+        storage: stubStorage([cleanFixation()]),
+        catalogFor: () => catalog,
+      });
+      expect(plan.steps).toEqual([]);
+      expect(plan.blocked).toHaveLength(1);
+      expect(plan.blocked[0]!.issues[0]).toContain("kpi1:");
+    });
   });
 
   it("skips a fixation that references no deprecated type entirely (not in steps or blocked)", async () => {
