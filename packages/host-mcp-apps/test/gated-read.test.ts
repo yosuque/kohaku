@@ -1,4 +1,4 @@
-import type { ComposeContext } from "@kohaku-ui/composer";
+import type { ComposeContext, ComposeResult } from "@kohaku-ui/composer";
 import type { ActionAuditRecorder } from "@kohaku-ui/host-core";
 import { createOperationIndex } from "@kohaku-ui/host-core";
 import type {
@@ -14,6 +14,7 @@ import { InMemoryTransport, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import { attachKohakuToMcpServer, type McpHostDeps } from "../src/index.js";
 import { preresolveInitialData } from "../src/initial-data.js";
+import { snapshotHtmlFor } from "../src/snapshot.js";
 import type { ToolCallContext } from "../src/types.js";
 
 // SPEC ACT-RD-001 (design.md #77) on the MCP profile: `${prefix}_resolve_binding` and the initial-data
@@ -138,6 +139,32 @@ describe("MCP kohaku_resolve_binding: gated operations are not readable (ACT-RD-
     await client.close();
   });
 
+  it("a tier-less operation with an invalid paramsSchema is refused too: a tool error, no invoke", async () => {
+    const invokeCalls: string[] = [];
+    const onError = vi.fn();
+    const client = await connect(
+      depsWith(
+        domainWith(invokeCalls, {
+          name: "odd",
+          description: "d",
+          paramsSchema: { type: "object", $ref: "#/nope" },
+        }),
+        { onError },
+      ),
+    );
+    const result = await client.callTool({
+      name: "kohaku_resolve_binding",
+      arguments: { ref: "query://sales/odd", capability: "cap" },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("action parameter schema unavailable");
+    expect(invokeCalls).toEqual([]);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: "kohaku_resolve_binding.operationIndex" }),
+    );
+    await client.close();
+  });
+
   it("an unreadable operation index fails closed: a tool error, audited as action.denied, no invoke", async () => {
     const invokeCalls: string[] = [];
     const denied = vi.fn(async () => {});
@@ -232,5 +259,99 @@ describe("MCP initial-data pre-resolution: gated operations are not read ahead (
     expect(data).toEqual({});
     expect(invokeCalls).toEqual([]);
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ endpoint: "compose.initialData" }));
+  });
+
+  it("a dead listOperations() is read once for the whole pre-resolution: one onError report and one audit record, not one per ref", async () => {
+    let listCalls = 0;
+    const onError = vi.fn();
+    const denied = vi.fn(async () => {});
+    const domain: DomainPort = {
+      async listOperations() {
+        listCalls++;
+        throw new Error("domain unavailable (test)");
+      },
+      async invoke() {
+        return DATA;
+      },
+    };
+    const ctx = ctxFor(domain, { onError, actionAuditRecorder: recorderWith(denied) });
+    const { data, denied: deniedRefs } = await preresolveInitialData(
+      specWith("query://sales/a", "query://sales/b", "query://sales/c", "query://sales/d"),
+      ctx,
+    );
+    expect(data).toEqual({});
+    expect(listCalls).toBe(1);
+    expect(onError.mock.calls.filter(([info]) => info.endpoint === "compose.initialData")).toHaveLength(1);
+    expect(denied).toHaveBeenCalledTimes(1);
+    expect([...deniedRefs.values()]).toEqual([
+      "indexUnavailable",
+      "indexUnavailable",
+      "indexUnavailable",
+      "indexUnavailable",
+    ]);
+  });
+
+  it("returns the refused refs with their reason", async () => {
+    const domain = domainWith(
+      [],
+      { name: "purge", description: "d", tier: "approve" },
+      { name: "odd", description: "d", paramsSchema: { type: "object", $ref: "#/nope" } },
+      { name: "records", description: "d" },
+    );
+    const { denied } = await preresolveInitialData(
+      specWith("query://sales/purge", "query://sales/odd", "query://sales/records"),
+      ctxFor(domain),
+    );
+    expect(Object.fromEntries(denied)).toEqual({
+      "query://sales/purge": "gated",
+      "query://sales/odd": "schemaInvalid",
+    });
+  });
+});
+
+describe("snapshot path: a refused ref is a clear error, not a bounded-deadline one (ACT-RD-001)", () => {
+  function snapshotCtx(domain: DomainPort, extra?: Partial<McpHostDeps>): ToolCallContext {
+    return {
+      deps: depsWith(domain, extra),
+      operationIndex: createOperationIndex(domain),
+      principal: { id: "tester", roles: ["user"] },
+      requestId: "req-1",
+      getRendererHtml: async () => '<script id="kohaku-snapshot">null</script>',
+    } as unknown as ToolCallContext;
+  }
+  const result = (ref: string) =>
+    ({
+      spec: {
+        components: [{ id: "c0", type: "table", data: { $ref: ref } }],
+      },
+    }) as unknown as ComposeResult;
+
+  it("standalone (render_snapshot): names the cause, never invokes, and audits the refusal once", async () => {
+    const invokeCalls: string[] = [];
+    const denied = vi.fn(async () => {});
+    const domain = domainWith(invokeCalls, { name: "purge", description: "d", tier: "approve" });
+    const ctx = snapshotCtx(domain, { actionAuditRecorder: recorderWith(denied) });
+    await expect(snapshotHtmlFor(ctx, result("query://sales/purge"))).rejects.toMatchObject({
+      code: "SNAPSHOT_REF_NOT_READABLE",
+      message: expect.stringContaining("gated operation is not readable"),
+    });
+    expect(invokeCalls).toEqual([]);
+    expect(denied).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a pre-resolution that already denied the ref: same error, no second action.denied", async () => {
+    const invokeCalls: string[] = [];
+    const denied = vi.fn(async () => {});
+    const domain = domainWith(invokeCalls, { name: "purge", description: "d", tier: "approve" });
+    const ctx = snapshotCtx(domain, { actionAuditRecorder: recorderWith(denied) });
+    const res = result("query://sales/purge");
+    const pre = await preresolveInitialData(res.spec, ctx);
+    expect(denied).toHaveBeenCalledTimes(1);
+    await expect(snapshotHtmlFor(ctx, res, pre.resolved, pre.denied)).rejects.toMatchObject({
+      code: "SNAPSHOT_REF_NOT_READABLE",
+      message: expect.stringContaining("gated operation is not readable"),
+    });
+    expect(denied).toHaveBeenCalledTimes(1);
+    expect(invokeCalls).toEqual([]);
   });
 });

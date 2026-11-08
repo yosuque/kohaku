@@ -226,6 +226,7 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         request_id = request_id_of(request, deps)
         guard = await run_gated_read_guard(
             operation_index=lambda: operation_index(deps),
+            operation=base.path,
             audit=ActionAuditContext(
                 recorder=deps.action_audit_recorder,
                 action=base.path,
@@ -238,11 +239,16 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             report_index_failure=lambda e: report_host_error(
                 deps, "binding/resolve", request_id, e
             ),
+            report_schema_error=lambda e: report_host_error(deps, "binding/resolve", request_id, e),
         )
         if guard.kind == "indexUnavailable":
             return _error("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, 503, request_id)
         if guard.kind == "gated":
             return _error("CAPABILITY_DENIED", GATED_READ_MESSAGE, 403, request_id)
+        # A declared operation whose paramsSchema failed validation is never invoked on the read path either:
+        # fail closed (500), the action path's outcome for it.
+        if guard.kind == "schemaInvalid":
+            return _error("INTERNAL", _ACTION_DECLARATION_INVALID_MESSAGE, 500, request_id)
         try:
             data = await deps.domain.invoke(
                 base.path,

@@ -160,3 +160,23 @@ class TestGatedOperationsAreNotReadable:
         assert recorder.denied_calls[0]["tier"] == "auto"
         assert recorder.denied_calls[0]["reason"] == "action gate unavailable"
         assert "binding/resolve" in seen
+
+    def test_a_tier_less_operation_with_an_invalid_params_schema_is_refused_too_with_500(
+        self, tmp_path: Path
+    ) -> None:
+        domain = _Domain(
+            OperationDescriptor(
+                name="odd", description="d", paramsSchema={"type": "object", "$ref": "#/nope"}
+            )
+        )
+        seen: list[str] = []
+        harness = build_harness(
+            tmp_path, domain=domain, on_error=lambda info: seen.append(info.endpoint)
+        )
+        res = _resolve(harness, "query://sales/odd")
+        assert res.status_code == 500
+        body = res.json()
+        assert body["error"]["code"] == "INTERNAL"
+        assert body["error"]["message"] == "action is not available on this host"
+        assert domain.invoke_calls == []
+        assert "binding/resolve" in seen

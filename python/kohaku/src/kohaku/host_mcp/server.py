@@ -92,7 +92,13 @@ from kohaku.spec import (
 from . import initial_data as _initial_data
 from .cache_hints import _CACHEABLE_RESULT_CACHE_SCOPE, _CACHEABLE_RESULT_TTL_MS
 from .fallback import spec_to_text
-from .initial_data import _preresolve_initial_data, _resolve_refs_bounded
+from .initial_data import (
+    PreresolveContext,
+    ReadDenial,
+    _create_read_guard_session,
+    _preresolve_initial_data,
+    _resolve_refs_bounded,
+)
 from .intent_tools import IntentToolDef
 from .meta import (
     ACTIONS_META_KEY,
@@ -791,12 +797,14 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         # `preresolved_refs` is the full pre-budget map of every ref already resolved here — handed to
         # _snapshot_html_for below so the legacyUiResource co-emission (which needs the identical ref
         # set) does not re-invoke domain.invoke for refs already resolved here.
-        initial_data, preresolved_refs = await _preresolve_initial_data(
-            result.spec,
-            deps,
-            principal,
+        pctx = PreresolveContext(
+            deps=deps,
+            principal=principal,
             operation_index=_operation_index,
             correlation_id=correlation_id,
+        )
+        initial_data, preresolved_refs, denied_refs = await _preresolve_initial_data(
+            result.spec, pctx
         )
         # The capability token is co-embedded in _meta for the same reason as INITIAL_DATA_META_KEY (see
         # CAPABILITY_META_KEY's doc comment): structured_content enters the model's context, so a bearer write
@@ -818,13 +826,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # without co-emission (fail-open — the legacy-compat add-on does not drag down the actual delivery). Same shape as TS.
             try:
                 snapshot_html = await _snapshot_html_for(
-                    result,
-                    deps,
-                    options,
-                    principal,
-                    preresolved_refs,
-                    operation_index=_operation_index,
-                    correlation_id=correlation_id,
+                    result, options, pctx, preresolved_refs, denied_refs
                 )
                 content.append(
                     mcp_types.EmbeddedResource(
@@ -1127,6 +1129,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             correlation_id = _correlation_id_of(ctx)
             guard = await run_gated_read_guard(
                 operation_index=_operation_index,
+                operation=base.path,
                 audit=ActionAuditContext(
                     recorder=deps.action_audit_recorder,
                     action=base.path,
@@ -1147,11 +1150,19 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                     exc,
                     correlation_id=correlation_id,
                 ),
+                report_schema_error=lambda exc: _report_mcp_error(
+                    deps,
+                    f"{prefix}_resolve_binding.operationIndex",
+                    exc,
+                    correlation_id=correlation_id,
+                ),
             )
             if guard.kind == "indexUnavailable":
                 return _tool_error("operation index unavailable")
             if guard.kind == "gated":
                 return _tool_error(f"capability denied: {GATED_READ_MESSAGE}")
+            if guard.kind == "schemaInvalid":
+                return _tool_error("action parameter schema unavailable")
             # The capability's signed tenant, when it binds one (a REST-issued capability replayed here), is
             # carried through to the invocation; this profile resolves no tenant of its own (CAP-TEN-002).
             data = await deps.domain.invoke(
@@ -1855,11 +1866,13 @@ async def _build_snapshot(
     # incomplete HTML).
     html = await _snapshot_html_for(
         result,
-        deps,
         options,
-        principal,
-        operation_index=operation_index,
-        correlation_id=correlation_id,
+        PreresolveContext(
+            deps=deps,
+            principal=principal,
+            operation_index=operation_index,
+            correlation_id=correlation_id,
+        ),
     )
     return result.spec, html
 
@@ -1884,15 +1897,29 @@ class SnapshotResolutionIncompleteError(RuntimeError):
     code = "SNAPSHOT_RESOLUTION_INCOMPLETE"
 
 
+_READ_DENIAL_MESSAGES: dict[ReadDenial, str] = {
+    "gated": GATED_READ_MESSAGE,
+    "schemaInvalid": "action parameter schema unavailable",
+    "indexUnavailable": "operation index unavailable",
+}
+"""The client-visible cause of each `ReadDenial` in a snapshot's `SNAPSHOT_REF_NOT_READABLE` error."""
+
+
+class SnapshotRefNotReadableError(RuntimeError):
+    """Raised when a snapshot's ref was refused by the data-plane read guard (SPEC ACT-RD-001): a gated operation,
+    an operation with an invalid declaration, or an unreadable operation index. Carries `code` so it is
+    recognized as a deliberate, host-authored error (kohaku.host_core's is_typed_host_error) -- its message
+    names the cause instead of collapsing to the generic internal-error text (see _safe_tool)."""
+
+    code = "SNAPSHOT_REF_NOT_READABLE"
+
+
 async def _snapshot_html_for(
     result: ComposeResult,
-    deps: McpHostDeps,
     options: AttachOptions,
-    principal: Principal,
+    pctx: PreresolveContext,
     preresolved: dict[str, TabularData] | None = None,
-    *,
-    operation_index: OperationIndex,
-    correlation_id: str | None = None,
+    denied: dict[str, ReadDenial] | None = None,
 ) -> str:
     """Assemble self-contained snapshot HTML from a composed result (shared by the render_snapshot tool and the
     mcp-ui legacy UIResource co-emission).
@@ -1927,16 +1954,20 @@ async def _snapshot_html_for(
             seen.add(variant)
             refs.append(variant)
 
-    resolvable_refs = [ref for ref in refs if _is_resolvable_ref(ref, deps)]
+    resolvable_refs = [ref for ref in refs if _is_resolvable_ref(ref, pctx.deps)]
     already_resolved = preresolved if preresolved is not None else {}
-    missing = [ref for ref in resolvable_refs if ref not in already_resolved]
+    already_denied = denied if denied is not None else {}
+    # A ref the data-plane read guard already refused during the pre-resolution (`denied`) is neither resolved
+    # again nor asked of the guard again (that would audit the same refusal twice).
+    missing = [
+        ref for ref in resolvable_refs if ref not in already_resolved and ref not in already_denied
+    ]
+    session = _create_read_guard_session(pctx)
     freshly_resolved = (
         await _resolve_refs_bounded(
             missing,
-            deps,
-            principal,
-            operation_index=operation_index,
-            correlation_id=correlation_id,
+            pctx,
+            session=session,
             # Read from the initial_data module at call time (not imported by value into this module's own
             # namespace) so a test that patches kohaku.host_mcp.initial_data.PRERESOLVE_*_S -- the module
             # _resolve_refs_bounded and _preresolve_initial_data actually read -- also bounds this snapshot
@@ -1951,6 +1982,12 @@ async def _snapshot_html_for(
 
     data: dict[str, TabularData] = {}
     for ref in resolvable_refs:
+        # A refused ref gets an error that names the cause, not the bounded-deadline one below (ACT-RD-001).
+        denial = already_denied.get(ref) or session.denied.get(ref)
+        if denial is not None:
+            raise SnapshotRefNotReadableError(
+                f"snapshot: ref is not readable ({_READ_DENIAL_MESSAGES[denial]}): {ref}"
+            )
         value = already_resolved.get(ref)
         if value is None:
             value = freshly_resolved.get(ref)

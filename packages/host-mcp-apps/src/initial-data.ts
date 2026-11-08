@@ -1,5 +1,11 @@
 import { parseQueryRef } from "@kohaku-ui/data-binding";
-import { errorMessage, notifyHook, parseInvokableRef, runGatedReadGuard } from "@kohaku-ui/host-core";
+import {
+  createGatedReadGuard,
+  errorMessage,
+  type GatedReadGuard,
+  notifyHook,
+  parseInvokableRef,
+} from "@kohaku-ui/host-core";
 import { enumerateBindVariants, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 import type { ToolCallContext } from "./types.js";
 
@@ -60,38 +66,67 @@ export function preresolveTotalTimeoutMs(): number {
   return preresolveTotalTimeoutMsOverride ?? PRERESOLVE_TOTAL_TIMEOUT_MS;
 }
 
+/** Why a read-ahead ref was not resolved: the data-plane read guard (SPEC ACT-RD-001) refused it. */
+export type ReadDenial = "gated" | "schemaInvalid" | "indexUnavailable";
+
+/**
+ * The data-plane read guard of one pre-resolution (or one snapshot), plus the refs it refused. One session
+ * shares one `GatedReadGuard`, so the operation index is read once and an index failure is reported and audited
+ * once, not once per ref. `denied` maps each refused ref to its reason, so a later step (the snapshot) can tell a
+ * refused ref from a failed one without asking the guard, and audit, again.
+ */
+export interface ReadGuardSession {
+  guard: GatedReadGuard;
+  denied: Map<string, ReadDenial>;
+}
+
+/** Builds the `ReadGuardSession` for one pre-resolution / snapshot over `ctx`'s operation index. */
+export function createReadGuardSession(ctx: ToolCallContext): ReadGuardSession {
+  const report = (error: unknown) => notifyHook(ctx.deps.onError, { endpoint: "compose.initialData", error });
+  return {
+    guard: createGatedReadGuard({
+      operationIndex: ctx.operationIndex,
+      report: { indexFailure: report, schemaError: report },
+    }),
+    denied: new Map(),
+  };
+}
+
 /**
  * A shared helper that preresolves a single effective ref with read (shared by buildSnapshot and preresolveInitialData).
  * Same ref-parsing style as resolve_binding: verify the source against base (reserved parameters removed), and merge the
  * reserved parameters (normally not present in a bind variant) into domain.invoke. An unknown source yields null (not an
  * embedding target). A domain.invoke failure is propagated to the caller rather than swallowed (the caller chooses total
  * failure or per-ref fail-open).
+ *
+ * Pre-resolution is a data-plane read too: it never runs a governed Action (SPEC ACT-RD-001, design.md #77). A ref
+ * the session's guard refuses (a gated operation, an operation with an invalid declaration, or an unreadable
+ * operation index) is skipped like an unknown source -- null, recorded in `session.denied` -- and the compose result
+ * itself stays successful.
  */
-async function resolveVariant(variant: string, ctx: ToolCallContext): Promise<TabularData | null> {
+async function resolveVariant(
+  variant: string,
+  ctx: ToolCallContext,
+  session: ReadGuardSession,
+): Promise<TabularData | null> {
   // Pure parse/merge via host-core's parseInvokableRef (shared with the REST/MCP resolve_binding sites).
-  // Deliberately no verify step here (see the module doc comment above) — an unknown source still yields
+  // No verify step here (see the module doc comment above) -- an unknown source still yields
   // null (not an embedding target) rather than a thrown error.
   const parsed = parseInvokableRef(variant, ctx.deps.querySource);
   if (parsed.kind === "source_mismatch") return null;
   const { base, params } = parsed.ref;
-  // Pre-resolution is a data-plane read too: it never runs a governed Action (SPEC ACT-RD-001, design.md #77).
-  // A ref naming a gated operation is skipped (not an embedding target; the denial is audited by the guard), and
-  // an unreadable operation index skips it as well (fail-closed; reported to the hook). Both are the same
-  // per-ref fail-open as an unknown source: the compose result itself stays successful.
-  const requestId = ctx.requestId ?? "initial-data";
-  const guard = await runGatedReadGuard({
-    operationIndex: ctx.operationIndex,
-    audit: {
-      recorder: ctx.deps.actionAuditRecorder,
-      action: base.path,
-      payload: params,
-      principal: ctx.principal,
-      correlationId: requestId,
-      report: (error) => notifyHook(ctx.deps.onError, { endpoint: "compose.initialData.audit", error }),
-    },
-    reportIndexFailure: (error) => notifyHook(ctx.deps.onError, { endpoint: "compose.initialData", error }),
+  const outcome = await session.guard(base.path, {
+    recorder: ctx.deps.actionAuditRecorder,
+    action: base.path,
+    payload: params,
+    principal: ctx.principal,
+    correlationId: ctx.requestId ?? "initial-data",
+    report: (error) => notifyHook(ctx.deps.onError, { endpoint: "compose.initialData.audit", error }),
   });
-  if (guard.kind !== "readable") return null;
+  if (outcome.kind !== "readable") {
+    session.denied.set(variant, outcome.kind);
+    return null;
+  }
   const resolved = await ctx.deps.domain.invoke(base.path, params, { principal: ctx.principal });
   return resolved as TabularData;
 }
@@ -105,6 +140,7 @@ export async function resolveVariantWithTimeout(
   ref: string,
   ctx: ToolCallContext,
   timeoutMs: number,
+  session: ReadGuardSession = createReadGuardSession(ctx),
 ): Promise<TabularData | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -114,7 +150,7 @@ export async function resolveVariantWithTimeout(
     );
   });
   try {
-    return await Promise.race([resolveVariant(ref, ctx), timeout]);
+    return await Promise.race([resolveVariant(ref, ctx, session), timeout]);
   } finally {
     if (timer != null) clearTimeout(timer);
   }
@@ -166,6 +202,7 @@ export async function resolveRefsBounded(
   ctx: ToolCallContext,
   timeoutMs: number,
   totalTimeoutMs: number,
+  session: ReadGuardSession = createReadGuardSession(ctx),
 ): Promise<Map<string, TabularData>> {
   const results = new Map<string, TabularData>();
   let deadlineExceeded = false;
@@ -197,7 +234,7 @@ export async function resolveRefsBounded(
     let resolved: TabularData | null;
     try {
       // per-ref timeout: do not let a dependency that stays pending and never returns hold up its slot forever.
-      resolved = await resolveVariantWithTimeout(ref, ctx, timeoutMs);
+      resolved = await resolveVariantWithTimeout(ref, ctx, timeoutMs, session);
     } catch (e) {
       if (deadlineExceeded) {
         await reportDiscard(ref, e);
@@ -255,12 +292,18 @@ export async function resolveRefsBounded(
  * Returns both the budget-trimmed `data` (the existing `_meta` co-embedding contract) and the full pre-budget
  * `resolved` Map, so a caller that also needs the same Spec's refs resolved for a second purpose (composeAndPackage's
  * legacyUiResource co-emission, via snapshotHtmlFor) can reuse this call's domain.invoke results instead of
- * resolving the identical ref set a second time.
+ * resolving the identical ref set a second time, and `denied`, the refs the data-plane read guard refused
+ * (SPEC ACT-RD-001) with the reason, so that second purpose neither re-asks the guard (and re-audits) nor reports a
+ * refused ref as merely unresolved.
  */
 export async function preresolveInitialData(
   spec: UISpec,
   ctx: ToolCallContext,
-): Promise<{ data: Record<string, TabularData>; resolved: Map<string, TabularData> }> {
+): Promise<{
+  data: Record<string, TabularData>;
+  resolved: Map<string, TabularData>;
+  denied: ReadonlyMap<string, ReadDenial>;
+}> {
   // Collect the initial variants across all components first, then the other bind variants (initial-display priority).
   const initialRefs: string[] = [];
   const secondaryRefs: string[] = [];
@@ -281,11 +324,13 @@ export async function preresolveInitialData(
     orderedRefs.push(ref);
   }
 
+  const session = createReadGuardSession(ctx);
   const resolved = await resolveRefsBounded(
     orderedRefs,
     ctx,
     preresolveTimeoutMs(),
     preresolveTotalTimeoutMs(),
+    session,
   );
 
   const data: Record<string, TabularData> = {};
@@ -301,5 +346,5 @@ export async function preresolveInitialData(
     used += size;
     data[ref] = value;
   }
-  return { data, resolved };
+  return { data, resolved, denied: session.denied };
 }

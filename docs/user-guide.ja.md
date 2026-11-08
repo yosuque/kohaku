@@ -389,6 +389,8 @@ Chat は生成された Intent カタログの範囲内でのみ回答し、範�
 
 > **信頼できる MCP サーバーにだけ使ってください。** `readOnlyHint` はサーバーが自分について述べるヒントです。書き込みツールを read-only と宣言するサーバーでは、そのツールが承認ゲートなしの通常の読み取りとして解決されます。自分で分類するには `isReadOnly(tool)` や `include(tool)` を渡します。
 
+> **`tierFor` と読み取りの経路。** ホストは tier `"confirm"` / `"approve"` を宣言する operation を `query://` の読み取り ref 経由では実行しません(SPEC ACT-RD-001)。しかし書き込みツールに `tierFor(tool) === "auto"` を返すと、どちらも宣言されないため、そうした ref が発行されさえすれば、そのツールは `paramsSchema` の検査なしに読み取り ref から到達できます。`createMcpIntents` は読み取り専用ツールにしか Intent を作らず、そのような ref を出しませんが、手書きの Intent や偽造された ref があれば成り立ちます。書き込みツールに `"auto"` を与えるのは、これを受け入れるときだけにしてください。
+
 ```bash
 npm install @kohaku-ui/domain-mcp @kohaku-ui/host @kohaku-ui/authz-hmac @kohaku-ui/llm zod @modelcontextprotocol/client
 ```

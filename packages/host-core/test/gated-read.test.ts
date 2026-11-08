@@ -2,7 +2,12 @@ import type { DomainPort, OperationDescriptor } from "@kohaku-ui/spec-core";
 import { actionPayloadHash } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ActionAuditRecorder } from "../src/action-audit.js";
-import { GATED_READ_MESSAGE, isGatedOperation, runGatedReadGuard } from "../src/gated-read.js";
+import {
+  createGatedReadGuard,
+  GATED_READ_MESSAGE,
+  isGatedOperation,
+  runGatedReadGuard,
+} from "../src/gated-read.js";
 import { createOperationIndex, type OperationIndexEntry } from "../src/operation-index.js";
 
 function entryOf(descriptor: OperationDescriptor): OperationIndexEntry {
@@ -48,9 +53,11 @@ describe("runGatedReadGuard", () => {
     denied: ReturnType<typeof vi.fn>,
     reportIndexFailure = vi.fn(async () => {}),
     report = vi.fn(async () => {}),
+    reportSchemaError = vi.fn(async () => {}),
   ) {
     return runGatedReadGuard({
       operationIndex: index,
+      operation: action,
       audit: {
         recorder: recorderWith(denied),
         action,
@@ -60,7 +67,7 @@ describe("runGatedReadGuard", () => {
         correlationId: "req-1",
         report,
       },
-      reportIndexFailure,
+      report: { indexFailure: reportIndexFailure, schemaError: reportSchemaError },
     });
   }
 
@@ -131,6 +138,7 @@ describe("runGatedReadGuard", () => {
   it("a recorder-less audit context is a no-op (no recorder wired)", async () => {
     const outcome = await runGatedReadGuard({
       operationIndex: indexOf({ name: "purge", description: "d", tier: "approve" }),
+      operation: "purge",
       audit: {
         recorder: undefined,
         action: "purge",
@@ -139,8 +147,81 @@ describe("runGatedReadGuard", () => {
         correlationId: "req-1",
         report: async () => {},
       },
-      reportIndexFailure: async () => {},
+      report: { indexFailure: async () => {}, schemaError: async () => {} },
     });
     expect(outcome).toEqual({ kind: "gated", tier: "approve" });
+  });
+
+  it("an operation with an invalid paramsSchema (no tier) is schemaInvalid: reported once, not audited", async () => {
+    const denied = vi.fn(async () => {});
+    const reportSchemaError = vi.fn(async () => {});
+    const index = indexOf({
+      name: "odd",
+      description: "d",
+      paramsSchema: { type: "object", $ref: "#/nope" },
+    });
+    const outcome = await run(index, "odd", denied, undefined, undefined, reportSchemaError);
+    expect(outcome).toEqual({ kind: "schemaInvalid" });
+    expect(reportSchemaError).toHaveBeenCalledTimes(1);
+    expect(denied).not.toHaveBeenCalled();
+  });
+
+  it("a gated operation with an invalid paramsSchema is refused as gated (and audited), not as schemaInvalid", async () => {
+    const denied = vi.fn(async () => {});
+    const index = indexOf({
+      name: "purge",
+      description: "d",
+      tier: "approve",
+      paramsSchema: { type: "object", $ref: "#/nope" },
+    });
+    expect(await run(index, "purge", denied)).toEqual({ kind: "gated", tier: "approve" });
+    expect(denied).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createGatedReadGuard: one guard reads the index once", () => {
+  function auditWith(denied: ReturnType<typeof vi.fn>, report = vi.fn(async () => {})) {
+    return {
+      recorder: recorderWith(denied),
+      action: "ignored",
+      payload: {},
+      principal: PRINCIPAL,
+      correlationId: "req-1",
+      report,
+    };
+  }
+
+  it("a rejected index is read, reported and audited once however many refs go through the guard", async () => {
+    let listCalls = 0;
+    const domain: DomainPort = {
+      async listOperations() {
+        listCalls++;
+        throw new Error("list failed (test)");
+      },
+      async invoke() {
+        return {};
+      },
+    };
+    const denied = vi.fn(async () => {});
+    const indexFailure = vi.fn(async () => {});
+    const guard = createGatedReadGuard({
+      operationIndex: createOperationIndex(domain),
+      report: { indexFailure, schemaError: async () => {} },
+    });
+    const outcomes = await Promise.all(["a", "b", "c", "d"].map((op) => guard(op, auditWith(denied))));
+    expect(outcomes.every((o) => o.kind === "indexUnavailable")).toBe(true);
+    expect(listCalls).toBe(1);
+    expect(indexFailure).toHaveBeenCalledTimes(1);
+    expect(denied).toHaveBeenCalledTimes(1);
+  });
+
+  it("the operation name is passed explicitly: audit.action is overwritten with it", async () => {
+    const denied = vi.fn(async () => {});
+    const guard = createGatedReadGuard({
+      operationIndex: indexOf({ name: "purge", description: "d", tier: "confirm" }),
+      report: { indexFailure: async () => {}, schemaError: async () => {} },
+    });
+    expect(await guard("purge", auditWith(denied))).toEqual({ kind: "gated", tier: "confirm" });
+    expect(denied).toHaveBeenCalledWith(expect.objectContaining({ action: "purge", tier: "confirm" }));
   });
 });

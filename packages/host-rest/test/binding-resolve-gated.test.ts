@@ -160,4 +160,21 @@ describe("GET /binding/resolve: gated operations are not readable (ACT-RD-001)",
     );
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ endpoint: "binding/resolve" }));
   });
+
+  it("a tier-less operation with an invalid paramsSchema is refused too: 500 INTERNAL, reported, no invoke (as the action path)", async () => {
+    const invokeCalls: string[] = [];
+    const onError = vi.fn();
+    const domain = domainWith(invokeCalls, {
+      name: "odd",
+      description: "d",
+      paramsSchema: { type: "object", $ref: "#/nope" },
+    });
+    const res = await resolve(depsWith(domain, { onError }), "query://sales/odd");
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("INTERNAL");
+    expect(body.error.message).toBe("action is not available on this host");
+    expect(invokeCalls).toEqual([]);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ endpoint: "binding/resolve" }));
+  });
 });

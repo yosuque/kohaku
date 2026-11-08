@@ -104,7 +104,11 @@ export {
   withFixationLock,
 } from "./fixation.js";
 export {
+  createGatedReadGuard,
   GATED_READ_MESSAGE,
+  type GatedOperationEntry,
+  type GatedReadGuard,
+  type GatedReadGuardInput,
   type GatedReadOutcome,
   isGatedOperation,
   type RunGatedReadGuardInput,

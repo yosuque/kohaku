@@ -1,13 +1,22 @@
 import type { ComposeResult } from "@kohaku-ui/composer";
-import { parseInvokableRef } from "@kohaku-ui/host-core";
+import { GATED_READ_MESSAGE, parseInvokableRef } from "@kohaku-ui/host-core";
 import type { TabularData, UISpec } from "@kohaku-ui/spec-core";
 import {
   collectComponentRefs,
+  createReadGuardSession,
   preresolveTimeoutMs,
   preresolveTotalTimeoutMs,
+  type ReadDenial,
   resolveRefsBounded,
 } from "./initial-data.js";
 import type { ToolCallContext } from "./types.js";
+
+/** The client-visible cause of each `ReadDenial` in a snapshot's `SNAPSHOT_REF_NOT_READABLE` error. */
+const READ_DENIAL_MESSAGES: Record<ReadDenial, string> = {
+  gated: GATED_READ_MESSAGE,
+  schemaInvalid: "action parameter schema unavailable",
+  indexUnavailable: "operation index unavailable",
+};
 
 /** Detects the #kohaku-snapshot placeholder (`null`) inside the shared renderer (survives even after the single-file build). */
 const SNAPSHOT_PLACEHOLDER_RE = /(<script id="kohaku-snapshot"[^>]*>)null(<\/script>)/;
@@ -65,6 +74,7 @@ export async function snapshotHtmlFor(
   ctx: ToolCallContext,
   result: ComposeResult,
   preresolved?: Map<string, TabularData>,
+  denied?: ReadonlyMap<string, ReadDenial>,
 ): Promise<string> {
   // The key is the effective ref's raw (the snapshot renderer's fetcher looks up by ref.raw).
   const refs = new Set<string>();
@@ -77,14 +87,28 @@ export async function snapshotHtmlFor(
   const resolvableRefs = [...refs].filter(
     (ref) => parseInvokableRef(ref, ctx.deps.querySource).kind !== "source_mismatch",
   );
-  const missing = resolvableRefs.filter((ref) => !preresolved?.has(ref));
+  // A ref the data-plane read guard already refused during the pre-resolution (`denied`) is neither resolved
+  // again nor asked of the guard again (that would audit the same refusal twice).
+  const missing = resolvableRefs.filter((ref) => !preresolved?.has(ref) && !denied?.has(ref));
+  const session = createReadGuardSession(ctx);
   const freshlyResolved =
     missing.length > 0
-      ? await resolveRefsBounded(missing, ctx, preresolveTimeoutMs(), preresolveTotalTimeoutMs())
+      ? await resolveRefsBounded(missing, ctx, preresolveTimeoutMs(), preresolveTotalTimeoutMs(), session)
       : new Map<string, TabularData>();
 
   const data: Record<string, TabularData> = {};
   for (const ref of resolvableRefs) {
+    // A refused ref gets an error that names the cause, not the bounded-deadline one below (SPEC ACT-RD-001).
+    const denial = denied?.get(ref) ?? session.denied.get(ref);
+    if (denial != null) {
+      // A code property marks this as a deliberate host error (host-core's isTypedHostError), as below.
+      throw Object.assign(
+        new Error(`snapshot: ref is not readable (${READ_DENIAL_MESSAGES[denial]}): ${ref}`),
+        {
+          code: "SNAPSHOT_REF_NOT_READABLE",
+        },
+      );
+    }
     const value = preresolved?.get(ref) ?? freshlyResolved.get(ref);
     if (value == null) {
       // A code property marks this as a deliberate host error (host-core's isTypedHostError), so its message

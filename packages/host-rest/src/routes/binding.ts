@@ -213,6 +213,7 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     const requestId = requestIdOf(c, deps);
     const guard = await runGatedReadGuard({
       operationIndex: () => ctx.operationIndex(),
+      operation: base.path,
       audit: {
         recorder: deps.actionAuditRecorder,
         action: base.path,
@@ -222,13 +223,22 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
         correlationId: requestId,
         report: (e: unknown) => reportHostError(deps, "binding/resolve.audit", requestId, e),
       },
-      reportIndexFailure: (e) => reportHostError(deps, "binding/resolve", requestId, e),
+      report: {
+        indexFailure: (e) => reportHostError(deps, "binding/resolve", requestId, e),
+        schemaError: (e) => reportHostError(deps, "binding/resolve", requestId, e),
+      },
     });
-    if (guard.kind === "indexUnavailable") {
-      return c.json(errorBody("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, requestId), 503);
-    }
-    if (guard.kind === "gated") {
-      return c.json(errorBody("CAPABILITY_DENIED", GATED_READ_MESSAGE, requestId), 403);
+    switch (guard.kind) {
+      case "indexUnavailable":
+        return c.json(errorBody("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, requestId), 503);
+      case "gated":
+        return c.json(errorBody("CAPABILITY_DENIED", GATED_READ_MESSAGE, requestId), 403);
+      // A declared operation whose paramsSchema failed validation is never invoked on the read path either:
+      // fail closed (500), the action path's outcome for it.
+      case "schemaInvalid":
+        return c.json(errorBody("INTERNAL", ACTION_DECLARATION_INVALID_MESSAGE, requestId), 500);
+      case "readable":
+        break;
     }
 
     try {

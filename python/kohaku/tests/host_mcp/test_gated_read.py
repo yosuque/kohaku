@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from kohaku.host_core import create_operation_index
 from kohaku.host_mcp import AttachOptions, McpHostDeps
-from kohaku.host_mcp.initial_data import _preresolve_initial_data
+from kohaku.host_mcp.initial_data import PreresolveContext, _preresolve_initial_data
+from kohaku.host_mcp.server import SnapshotRefNotReadableError, _snapshot_html_for
 from kohaku.spec import (
     IntentInput,
     InvocationContext,
@@ -192,6 +194,64 @@ class TestResolveBindingTool:
 
         asyncio.run(run())
 
+    def test_a_tier_less_operation_with_an_invalid_params_schema_is_refused_too(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            domain = _Domain(
+                OperationDescriptor(
+                    name="odd", description="d", paramsSchema={"type": "object", "$ref": "#/nope"}
+                )
+            )
+            seen: list[str] = []
+            deps = McpHostDeps(
+                compose=make_compose_ctx(tmp_path),
+                domain=domain,
+                authz=_Authz(),
+                query_source="sales",
+                on_error=lambda info: seen.append(info.endpoint),
+            )
+            async with connect(deps, _OPTIONS) as client:
+                res = await client.call_tool(
+                    "kohaku_resolve_binding", {"ref": "query://sales/odd", "capability": "cap"}
+                )
+                assert res.is_error
+                assert _text(res) == "action parameter schema unavailable"
+            assert domain.invoke_calls == []
+            assert "kohaku_resolve_binding.operationIndex" in seen
+
+        asyncio.run(run())
+
+    def test_a_throwing_recorder_does_not_change_the_denial(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            class _Throwing(_Recorder):
+                async def denied(self, **kwargs: Any) -> None:
+                    self.denied_calls.append(kwargs)
+                    raise RuntimeError("audit store down (test)")
+
+            domain = _Domain(OperationDescriptor(name="purge", description="d", tier="confirm"))
+            recorder = _Throwing()
+            seen: list[str] = []
+            deps = McpHostDeps(
+                compose=make_compose_ctx(tmp_path),
+                domain=domain,
+                authz=_Authz(),
+                query_source="sales",
+                action_audit_recorder=recorder,
+                on_error=lambda info: seen.append(info.endpoint),
+            )
+            async with connect(deps, _OPTIONS) as client:
+                res = await client.call_tool(
+                    "kohaku_resolve_binding", {"ref": "query://sales/purge", "capability": "cap"}
+                )
+                assert res.is_error
+                assert _text(res) == "capability denied: gated operation is not readable"
+            assert len(recorder.denied_calls) == 1
+            assert "kohaku_resolve_binding.audit" in seen
+            assert domain.invoke_calls == []
+
+        asyncio.run(run())
+
 
 def _spec_with(*refs: str) -> UISpec:
     intent = finalize_intent(IntentInput(canonical="sales.trend", params={}))
@@ -215,6 +275,29 @@ def _spec_with(*refs: str) -> UISpec:
     )
 
 
+def _pctx(
+    domain: _Domain,
+    tmp_path: Path,
+    *,
+    recorder: _Recorder | None = None,
+    on_error: Any = None,
+) -> PreresolveContext:
+    deps = McpHostDeps(
+        compose=make_compose_ctx(tmp_path),
+        domain=domain,
+        authz=_Authz(),
+        query_source="sales",
+        action_audit_recorder=recorder,
+        on_error=on_error,
+    )
+    return PreresolveContext(
+        deps=deps,
+        principal=_PRINCIPAL,
+        operation_index=create_operation_index(domain),
+        correlation_id="req-1",
+    )
+
+
 class TestInitialDataPreresolution:
     def test_skips_a_gated_ref_still_embeds_the_readable_ones_and_audits_the_denial(
         self, tmp_path: Path
@@ -226,21 +309,11 @@ class TestInitialDataPreresolution:
                 OperationDescriptor(name="records", description="d"),
             )
             recorder = _Recorder()
-            deps = McpHostDeps(
-                compose=make_compose_ctx(tmp_path),
-                domain=domain,
-                authz=_Authz(),
-                query_source="sales",
-                action_audit_recorder=recorder,
-            )
-            data, resolved = await _preresolve_initial_data(
+            data, resolved, _denied = await _preresolve_initial_data(
                 _spec_with(
                     "query://sales/purge", "query://sales/confirmed", "query://sales/records"
                 ),
-                deps,
-                _PRINCIPAL,
-                operation_index=create_operation_index(domain),
-                correlation_id="req-1",
+                _pctx(domain, tmp_path, recorder=recorder),
             )
             assert domain.invoke_calls == ["records"]
             assert list(data) == ["query://sales/records"]
@@ -261,21 +334,103 @@ class TestInitialDataPreresolution:
         async def run() -> None:
             domain = _BrokenIndexDomain()
             seen: list[str] = []
-            deps = McpHostDeps(
-                compose=make_compose_ctx(tmp_path),
-                domain=domain,
-                authz=_Authz(),
-                query_source="sales",
-                on_error=lambda info: seen.append(info.endpoint),
-            )
-            data, _resolved = await _preresolve_initial_data(
+            data, _resolved, _denied = await _preresolve_initial_data(
                 _spec_with("query://sales/records"),
-                deps,
-                _PRINCIPAL,
-                operation_index=create_operation_index(domain),
+                _pctx(domain, tmp_path, on_error=lambda info: seen.append(info.endpoint)),
             )
             assert data == {}
             assert domain.invoke_calls == []
             assert "compose.initialData" in seen
+
+        asyncio.run(run())
+
+    def test_a_dead_list_operations_is_read_once_one_report_and_one_audit_record(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            class _Counting(_BrokenIndexDomain):
+                calls = 0
+
+                async def list_operations(self) -> list[OperationDescriptor]:
+                    _Counting.calls += 1
+                    raise RuntimeError("domain unavailable (test)")
+
+            domain = _Counting()
+            seen: list[str] = []
+            recorder = _Recorder()
+            data, _resolved, denied = await _preresolve_initial_data(
+                _spec_with(
+                    "query://sales/a", "query://sales/b", "query://sales/c", "query://sales/d"
+                ),
+                _pctx(
+                    domain,
+                    tmp_path,
+                    recorder=recorder,
+                    on_error=lambda info: seen.append(info.endpoint),
+                ),
+            )
+            assert data == {}
+            assert _Counting.calls == 1
+            assert seen.count("compose.initialData") == 1
+            assert len(recorder.denied_calls) == 1
+            assert set(denied.values()) == {"indexUnavailable"}
+            assert len(denied) == 4
+
+        asyncio.run(run())
+
+    def test_returns_the_refused_refs_with_their_reason(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            domain = _Domain(
+                OperationDescriptor(name="purge", description="d", tier="approve"),
+                OperationDescriptor(
+                    name="odd", description="d", paramsSchema={"type": "object", "$ref": "#/nope"}
+                ),
+                OperationDescriptor(name="records", description="d"),
+            )
+            _data, _resolved, denied = await _preresolve_initial_data(
+                _spec_with("query://sales/purge", "query://sales/odd", "query://sales/records"),
+                _pctx(domain, tmp_path),
+            )
+            assert denied == {
+                "query://sales/purge": "gated",
+                "query://sales/odd": "schemaInvalid",
+            }
+
+        asyncio.run(run())
+
+
+class TestSnapshotPath:
+    def test_standalone_names_the_cause_never_invokes_and_audits_once(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            domain = _Domain(OperationDescriptor(name="purge", description="d", tier="approve"))
+            recorder = _Recorder()
+            result: Any = SimpleNamespace(spec=_spec_with("query://sales/purge"))
+            with pytest.raises(SnapshotRefNotReadableError) as exc_info:
+                await _snapshot_html_for(
+                    result, _OPTIONS, _pctx(domain, tmp_path, recorder=recorder)
+                )
+            assert exc_info.value.code == "SNAPSHOT_REF_NOT_READABLE"
+            assert "gated operation is not readable" in str(exc_info.value)
+            assert domain.invoke_calls == []
+            assert len(recorder.denied_calls) == 1
+
+        asyncio.run(run())
+
+    def test_after_a_preresolution_that_already_denied_the_ref_there_is_no_second_audit(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            domain = _Domain(OperationDescriptor(name="purge", description="d", tier="approve"))
+            recorder = _Recorder()
+            pctx = _pctx(domain, tmp_path, recorder=recorder)
+            spec = _spec_with("query://sales/purge")
+            _data, resolved, denied = await _preresolve_initial_data(spec, pctx)
+            assert len(recorder.denied_calls) == 1
+            result: Any = SimpleNamespace(spec=spec)
+            with pytest.raises(SnapshotRefNotReadableError) as exc_info:
+                await _snapshot_html_for(result, _OPTIONS, pctx, resolved, denied)
+            assert "gated operation is not readable" in str(exc_info.value)
+            assert len(recorder.denied_calls) == 1
+            assert domain.invoke_calls == []
 
         asyncio.run(run())
