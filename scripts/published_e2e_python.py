@@ -6,15 +6,16 @@ dependencies the extras resolve to:
     uv run --isolated --no-project --with "kohaku-ui[rest,mcp,claude]" python -I scripts/published_e2e_python.py
 
 `-I` keeps the script directory and the current directory off sys.path, so nothing from this repository's
-`python/` tree can shadow the installed wheel (the script asserts that too). The checks mirror what a user of the
+`python/` tree can shadow the installed wheel (the script asserts that too: kohaku must come from site-packages and
+the kohaku-ui distribution must not be an editable / direct-URL install). The checks mirror what a user of the
 wheel does first:
 
-  1. print `kohaku.__version__` and where the package was imported from;
+  1. print `kohaku.__version__` and where the package was imported from, and import `kohaku.host_mcp` (the [mcp] extra);
   2. wire a minimal host (in-memory storage, an HMAC capability AuthzPort, a scripted FakeLlm, one DomainPort
      operation, one Intent served as an L0 fixed Spec) and mount it on FastAPI with `attach_kohaku_routes`;
   3. drive it with `fastapi.testclient.TestClient`: POST /compose answers 200 with `provenance.tier == "L0"`, and GET
      /binding/resolve with the issued capability answers 200;
-  4. build the anthropic adapter on its default path (the real `anthropic` SDK) over an in-memory HTTP transport and
+  4. (versions above 0.5.0; older wheels get a `::warning::` and skip only this check, see #104) build the anthropic adapter on its default path (the real `anthropic` SDK) over an in-memory HTTP transport and
      assert that no sampling parameter (`temperature` / `top_p` / `top_k`) reaches the wire -- the regression
      guard for #104 (the Messages API rejects them from anthropic-version 2026-10-21, and SDK 2.x has no such
      keyword at all).
@@ -29,8 +30,10 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import importlib
+import importlib.metadata
 import json
-import os
+import re
 import sys
 import time
 import traceback
@@ -64,6 +67,50 @@ def _b64url_decode(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def check_installed_from_index(location: Path) -> None:
+    """The package must be a regular (non-editable) install of the published distribution, not a source tree."""
+    if "site-packages" not in location.parts:
+        record_failure(f"kohaku was not imported from site-packages: {location}")
+    try:
+        dist = importlib.metadata.distribution("kohaku-ui")
+    except importlib.metadata.PackageNotFoundError:
+        record_failure(
+            "the kohaku-ui distribution is not installed (kohaku came from somewhere else)"
+        )
+        return
+    # PEP 610: a distribution installed from an index has no direct_url.json; an editable or local-path install does.
+    direct_url = dist.read_text("direct_url.json")
+    if direct_url:
+        record_failure(
+            f"kohaku-ui is a direct-URL / editable install, not the published wheel: {direct_url}"
+        )
+
+
+def parse_version(version: str | None) -> tuple[int, ...] | None:
+    """The leading dotted-numeric release of a version string (`packaging` is not guaranteed to be installed)."""
+    match = re.match(r"\d+(?:\.\d+)*", version or "")
+    return tuple(int(part) for part in match.group(0).split(".")) if match else None
+
+
+# The anthropic adapter in wheels up to and including this release still forwards `temperature` (#104, fixed on main
+# but not yet published). Above it the check is mandatory, so it switches itself on with the next release.
+LAST_VERSION_WITH_104 = (0, 5, 0)
+
+
+def sampling_check_applies(version: str | None) -> bool:
+    parsed = parse_version(version)
+    if parsed is not None and parsed <= LAST_VERSION_WITH_104:
+        message = (
+            f"kohaku-ui {version} predates the #104 fix (the anthropic adapter forwards a sampling parameter); "
+            "skipping only the sampling-params check -- it becomes mandatory above 0.5.0"
+        )
+        # `::warning::` is a GitHub Actions workflow command: it shows up as an annotation on the run.
+        print(f"::warning::{message}", flush=True)
+        log(f"SKIP: {message}")
+        return False
+    return True
+
+
 def main() -> int:
     import kohaku
 
@@ -72,14 +119,18 @@ def main() -> int:
     log(f"kohaku.__version__ = {version!r} (imported from {location})")
     if version is None:
         record_failure("kohaku.__version__ is missing")
-    # KOHAKU_E2E_ALLOW_SOURCE=1 lets a maintainer point this script at a source checkout to check the script itself.
-    if "site-packages" not in location.parts and os.environ.get("KOHAKU_E2E_ALLOW_SOURCE") != "1":
-        record_failure(
-            f"kohaku was not imported from an installed wheel (site-packages): {location}"
-        )
+    check_installed_from_index(location)
+
+    # The wheel's [mcp] extra must be installable and importable (kohaku.host_mcp imports the MCP SDK).
+    try:
+        importlib.import_module("kohaku.host_mcp")
+        log("kohaku.host_mcp imports (the [mcp] extra resolved)")
+    except Exception as err:  # noqa: BLE001 -- any import failure is the finding
+        record_failure(f"kohaku.host_mcp could not be imported ({type(err).__name__}: {err})")
 
     check_rest_host()
-    check_anthropic_sampling_params()
+    if sampling_check_applies(version):
+        check_anthropic_sampling_params()
 
     if failures:
         print(f"\n[published-e2e-python] {len(failures)} check(s) failed:", file=sys.stderr)

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "cli version or dist-tag to check (the PyPI job always checks the latest wheel)"
+        description: "cli version or dist-tag to check (npm legs only; the PyPI job always checks the latest wheel)"
         required: false
         default: "latest"
 

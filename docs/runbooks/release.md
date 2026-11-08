@@ -164,9 +164,15 @@ twenty-nine packages via OIDC trusted publishing with provenance, then `pypi` pu
 `summary` job's step summary lists which packages this run actually published, and links to the npm
 package page, the PyPI project page, and the GitHub release.
 
-Once the run is green, confirm what the registries now serve with `gh workflow run published-e2e.yml -f version=X.Y.Z`
-(`published-e2e.yml` also runs nightly): it generates a project from the published CLI, then tests, type-checks and
-serves it, in plain and `--mcp` form on Node 24 and 26, and smokes the published wheel on Python 3.12 and 3.13.
+Once the publish run (`release.yml`) is green, confirm what the registries now serve with
+`gh workflow run published-e2e.yml -f version=X.Y.Z` (`published-e2e.yml` also runs nightly). The npm legs generate a
+project from the published CLI, then test, type-check and serve it, in plain and `--mcp` form on Node 24 and 26; `-f
+version=` affects only these legs. The PyPI legs always smoke the latest published wheel on Python 3.12 and 3.13,
+whatever `version` says. The npm init step retries for about 8 minutes on registry propagation errors (`ETARGET` /
+`E404`), so a run started immediately after publishing is fine. If a run is still red, first re-run it once in case it
+is propagation lag; a red that persists means investigate, then decide between deprecating (npm) or yanking (PyPI)
+the release (§7). While the published wheel is 0.5.0 or older, the PyPI job emits a `::warning::` and skips only the
+anthropic sampling-params check (#104); it becomes mandatory automatically above 0.5.0.
 
 ## 6. Re-running a failed publish
 
