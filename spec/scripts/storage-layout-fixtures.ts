@@ -19,17 +19,17 @@
  */
 import type { LineageEventRecord, LineageFilter } from "@kohaku-ui/spec-core";
 import {
-  chooseCandidateIndex,
-  indexValues,
-  isIndexExhaustive,
-} from "../../packages/storage-redis/src/lineage.js";
-import { redisKeys, tenantSegment } from "../../packages/storage-redis/src/keys.js";
-import {
   correlationColumnValue,
   lineageCorrelationDdl,
   POSTGRES_SCHEMA_VERSION,
   postgresSchemaSql,
 } from "../../packages/storage-postgres/src/schema.js";
+import { redisKeys, tenantSegment } from "../../packages/storage-redis/src/keys.js";
+import {
+  chooseCandidateIndex,
+  indexValues,
+  isIndexExhaustive,
+} from "../../packages/storage-redis/src/lineage.js";
 
 const PREFIXES = ["kohaku", "app1", "we:ird prefix"];
 
@@ -113,7 +113,7 @@ const FILTERS: LineageFilter[] = [
 ];
 
 /** The record texts: values chosen to exercise JSON.stringify's escaping and non-ASCII handling. */
-const NASTY_STRING = "quote\" back\\slash\n tab\t ctl\u0001 ü 日本 \u{1f600} </script>  ";
+const NASTY_STRING = 'quote" back\\slash\n tab\t ctl\u0001 ü 日本 \u{1f600} </script>  ';
 
 export interface StorageLayoutFixtures {
   redis: {
@@ -181,7 +181,11 @@ export function buildStorageLayoutFixtures(pinnedSpec: unknown): StorageLayoutFi
   const lineageEvents: LineageEventRecord[] = [
     eventOf("view.composed", { intentHash: "sha256:a", correlationId: "c1" }, "acme"),
     eventOf("component.used", {}),
-    eventOf("intent.fixated", { note: NASTY_STRING, nested: { zzz: 1, a: [1, 2, { b: null }], bb: true } }, "t"),
+    eventOf(
+      "intent.fixated",
+      { note: NASTY_STRING, nested: { zzz: 1, a: [1, 2, { b: null }], bb: true } },
+      "t",
+    ),
     eventOf("action.performed", { n: 1, f: 1.5, neg: -2, big: 9007199254740991 }, undefined, {
       kind: "user",
       id: "u-1",

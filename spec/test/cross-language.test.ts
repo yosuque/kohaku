@@ -83,7 +83,10 @@ import {
   pinnedCapabilityToken,
   withFixedNow,
 } from "../scripts/authz-hmac-fixtures.js";
-import { buildStorageLayoutFixtures, type StorageLayoutFixtures } from "../scripts/storage-layout-fixtures.js";
+import {
+  buildStorageLayoutFixtures,
+  type StorageLayoutFixtures,
+} from "../scripts/storage-layout-fixtures.js";
 import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
 
 /**

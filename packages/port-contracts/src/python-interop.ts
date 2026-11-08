@@ -96,9 +96,12 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
       const namespace = options.namespace();
       const ts = await options.open(url, namespace);
       try {
-        await ts.storage.putPromotionState(promotion("ts-1", "candidate", { verdict: { ok: true }, zzz: 1 }), {
-          expectedRevision: null,
-        });
+        await ts.storage.putPromotionState(
+          promotion("ts-1", "candidate", { verdict: { ok: true }, zzz: 1 }),
+          {
+            expectedRevision: null,
+          },
+        );
         await ts.storage.putFixation(fixation("ts-1", "fp-ts"), { expectedRevision: null });
         await ts.storage.putSpecCache("ts-spec", SPEC);
         await ts.storage.appendLineage(tsEvent);
@@ -111,7 +114,9 @@ export function describeStoragePythonInterop(name: string, options: StoragePytho
         };
 
         // Python read exactly what TS wrote, including the pinned Spec after a trip through its own model.
-        expect(report.seen["promotion"]).toEqual(promotion("ts-1", "candidate", { verdict: { ok: true }, zzz: 1 }));
+        expect(report.seen["promotion"]).toEqual(
+          promotion("ts-1", "candidate", { verdict: { ok: true }, zzz: 1 }),
+        );
         expect(report.seen["fixation"]).toEqual(fixation("ts-1", "fp-ts"));
         expect(report.seen["spec"]).toEqual(SPEC);
         expect(report.seen["tenantPromotions"]).toEqual(["a1"]);
