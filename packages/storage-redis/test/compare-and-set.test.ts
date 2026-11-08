@@ -56,6 +56,32 @@ describe.skipIf(backend.mode === "skip")("createRedisStoragePort: compare-and-se
     }
   });
 
+  it('lets exactly one of two instances win a write from the same unversioned base ("")', async () => {
+    await openPair();
+    try {
+      for (let round = 0; round < 10; round++) {
+        const { revision: _omit, ...legacy } = state("x");
+        await a.putPromotionState({ ...legacy, artifactId: `u${round}` }); // predates `revision`
+        const settled = await Promise.allSettled([
+          a.putPromotionState(
+            { ...state(`a${round}`, "approved"), artifactId: `u${round}` },
+            { expectedRevision: "" },
+          ),
+          b.putPromotionState(
+            { ...state(`b${round}`, "rejected"), artifactId: `u${round}` },
+            { expectedRevision: "" },
+          ),
+        ]);
+        expect(settled.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+        const loser = settled.find((r) => r.status === "rejected") as PromiseRejectedResult;
+        expect(loser.reason).toMatchObject({ code: "STORAGE_CONFLICT" });
+      }
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  });
+
   it("does not let a plain (non-CAS) write on the shared connection clear a pending watch", async () => {
     await openPair();
     try {

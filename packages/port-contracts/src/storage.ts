@@ -486,6 +486,52 @@ export function describeStoragePortContract(
         },
       );
 
+      casIt(
+        'putPromotionState: "" means the record exists but carries no revision (matches only an unversioned record)',
+        async () => {
+          // Matches a record that predates `revision`, and the write proceeds.
+          await port.putPromotionState(promotion("x", "a"));
+          await port.putPromotionState(
+            { ...promotion("x", "a", "r1"), status: "approved" },
+            { expectedRevision: "" },
+          );
+          expect((await port.getPromotionState("x", "a"))?.revision).toBe("r1");
+          // Once the record is versioned, "" conflicts and writes nothing.
+          await expectConflict(() =>
+            port.putPromotionState(
+              { ...promotion("x", "a", "r2"), status: "rejected" },
+              { expectedRevision: "" },
+            ),
+          );
+          const stored = await port.getPromotionState("x", "a");
+          expect(stored?.revision).toBe("r1");
+          expect(stored?.status).toBe("approved");
+          // An absent record conflicts too (it is neither "absent" (null) nor "unversioned").
+          await expectConflict(() =>
+            port.putPromotionState(promotion("x", "b", "r1"), { expectedRevision: "" }),
+          );
+          expect(await port.getPromotionState("x", "b")).toBeNull();
+        },
+      );
+
+      casIt(
+        'putPromotionState: of two concurrent writes from the same unversioned base ("") exactly one wins',
+        async () => {
+          await port.putPromotionState(promotion("x", "a"));
+          const outcome = await race(
+            port.putPromotionState(
+              { ...promotion("x", "a", "rA"), status: "approved" },
+              { expectedRevision: "" },
+            ),
+            port.putPromotionState(
+              { ...promotion("x", "a", "rB"), status: "rejected" },
+              { expectedRevision: "" },
+            ),
+          );
+          expect(outcome).toEqual({ ok: 1, conflict: 1 });
+        },
+      );
+
       casIt("putPromotionState: of two concurrent writes from the same base, exactly one wins", async () => {
         await port.putPromotionState(promotion("x", "a", "r1"));
         const outcome = await race(
@@ -564,6 +610,31 @@ export function describeStoragePortContract(
         );
         expect(outcome).toEqual({ ok: 1, conflict: 1 });
       });
+
+      casIt(
+        'putFixation / deleteFixation: "" matches only a fixation that carries no revision (conflicts with a versioned or absent one)',
+        async () => {
+          if (port.deleteFixation == null) throw missingExtension("deleteFixation");
+          await port.putFixation(fixation("h", "a")); // predates `revision`
+          await port.putFixation(fixation("h", "a", "r1"), { expectedRevision: "" });
+          expect((await port.getFixation("h", "a"))?.revision).toBe("r1");
+          await expectConflict(() => port.putFixation(fixation("h", "a", "r2"), { expectedRevision: "" }));
+          await expectConflict(() => port.deleteFixation!("h", "a", { expectedRevision: "" }));
+          expect((await port.getFixation("h", "a"))?.revision).toBe("r1");
+          // ifPresent + "" : applied to a present unversioned record, a silent no-op on an absent one.
+          await port.putFixation(fixation("h", "b")); // unversioned
+          await port.putFixation(fixation("h", "b", "r1"), { ifPresent: true, expectedRevision: "" });
+          expect((await port.getFixation("h", "b"))?.revision).toBe("r1");
+          await port.putFixation(fixation("h", "c", "r1"), { ifPresent: true, expectedRevision: "" });
+          expect(await port.getFixation("h", "c")).toBeNull();
+          // An absent record conflicts without ifPresent, and deleting an unversioned one with "" works.
+          await expectConflict(() => port.putFixation(fixation("h", "c", "r1"), { expectedRevision: "" }));
+          await expectConflict(() => port.deleteFixation!("h", "c", { expectedRevision: "" }));
+          await port.putFixation(fixation("h", "d"));
+          await port.deleteFixation("h", "d", { expectedRevision: "" });
+          expect(await port.getFixation("h", "d")).toBeNull();
+        },
+      );
 
       casIt("deleteFixation: expectedRevision deletes on a match and throws on a mismatch", async () => {
         if (port.deleteFixation == null) throw missingExtension("deleteFixation");

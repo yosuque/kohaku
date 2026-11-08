@@ -143,9 +143,9 @@ export interface FixationRecord {
 
 /**
  * Conditional-write option of `putPromotionState` (the optional compare-and-set extension, see
- * `StoragePort.supportsCompareAndSet`). Tri-state: omitted = unconditional; `null` = the state must not
- * exist yet; a string = the stored state's `revision` must equal it. A mismatch throws
- * `StorageConflictError`.
+ * `StoragePort.supportsCompareAndSet`). Four states: omitted = unconditional; `null` = the state must not
+ * exist yet; `""` = the state must exist and carry no `revision` (it predates the field); any other string =
+ * the stored state's `revision` must equal it. A mismatch throws `StorageConflictError`.
  */
 export interface PutPromotionStateOptions {
   expectedRevision?: string | null;
@@ -153,7 +153,7 @@ export interface PutPromotionStateOptions {
 
 /**
  * Conditional-write options of `putFixation`. `ifPresent` (no-op unless a fixation exists) and
- * `expectedRevision` (same tri-state as {@link PutPromotionStateOptions}) combine: `ifPresent` is applied
+ * `expectedRevision` (same four states as {@link PutPromotionStateOptions}) combine: `ifPresent` is applied
  * first, so an absent record is a silent no-op even when `expectedRevision` is a string; `ifPresent: true`
  * with `expectedRevision: null` is contradictory ("must exist" and "must not exist") and always throws
  * `StorageConflictError` on a CAS adapter.
@@ -163,7 +163,10 @@ export interface PutFixationOptions {
   expectedRevision?: string | null;
 }
 
-/** Conditional-delete option of `deleteFixation`: the stored fixation's `revision` must equal this. */
+/**
+ * Conditional-delete option of `deleteFixation`: the stored fixation's `revision` must equal this (`""` = the
+ * fixation exists and carries no `revision`, as in {@link PutPromotionStateOptions}).
+ */
 export interface DeleteFixationOptions {
   expectedRevision?: string;
 }
@@ -183,11 +186,14 @@ export interface DeleteFixationOptions {
  * **Optional compare-and-set (CAS)**: an adapter that sets `supportsCompareAndSet: true` additionally
  * honors `expectedRevision` on `putPromotionState`, `putFixation` and `deleteFixation`, which makes the
  * read-modify-write safe **across processes** sharing one backend (several host instances on one redis /
- * postgres). `expectedRevision` is tri-state: omitted (`undefined`) = no check (the legacy unconditional
- * write, and what a caller passes for a record that predates `revision`); `null` = the record MUST NOT exist
- * yet; a string = the stored record's `revision` MUST equal it. A mismatch (including a record that is absent
- * when a string was expected) MUST throw `StorageConflictError` and MUST NOT modify anything; the check
- * and the write are one atomic step. An adapter that does not declare `supportsCompareAndSet` MAY ignore the
+ * postgres). `expectedRevision` has four states: omitted (`undefined`) = no check (the legacy unconditional
+ * write, and what a caller that has not read the record passes); `null` = the record MUST NOT exist yet;
+ * `""` (the empty string) = the record MUST exist and carry no `revision` (it predates the field), so a caller
+ * that read such a record is guarded like any other instead of writing unconditionally; any other string = the
+ * stored record's `revision` MUST equal it. For a present record the last two are
+ * `(stored.revision ?? "") === expectedRevision`. A mismatch (including a record that is absent when a string
+ * was expected) MUST throw `StorageConflictError` and MUST NOT modify anything; the check and the write are
+ * one atomic step. An adapter that does not declare `supportsCompareAndSet` MAY ignore the
  * option (unconditional write, as before), so the in-process mutex stays the only protection there; hosts
  * warn about such an adapter at start-up. The conditional-write option `ifPresent` on `putFixation` is an
  * older, independent hook that narrows one specific race (a stale self-heal resurrecting a fixation deleted

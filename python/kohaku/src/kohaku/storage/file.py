@@ -113,16 +113,21 @@ def _check_expected_revision(
 ) -> None:
     """The compare-and-set check shared by the promotion and fixation writes (twin of the TS port's
     checkExpectedRevision, storage-memory/src/shared.ts): raises StorageConflictError unless `existing` (the
-    stored wire record, None when absent) satisfies the tri-state `expected`. UNSET = no check; None = the
-    record must be absent; a str = the record must be present and carry exactly that `revision` (a record
-    with no revision never matches a str)."""
+    stored wire record, None when absent) satisfies the four-state `expected`. UNSET = no check; None = the
+    record must be absent; "" = the record must be present and carry no `revision` (it predates the field);
+    any other str = the record must be present and carry exactly that `revision`. Both of the last two are
+    `(revision or "") == expected` on a present record, so a record with no revision never matches a
+    non-empty str."""
     if expected is UNSET:
         return
     if expected is None:
         if existing is not None:
             raise StorageConflictError(kind, record_id)
         return
-    if existing is None or existing.get("revision") != expected:
+    if existing is None:
+        raise StorageConflictError(kind, record_id)
+    revision = existing.get("revision")
+    if (revision if isinstance(revision, str) else "") != expected:
         raise StorageConflictError(kind, record_id)
 
 

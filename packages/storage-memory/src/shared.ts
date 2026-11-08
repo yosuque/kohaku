@@ -58,8 +58,10 @@ export function filterLineage(
 /**
  * The compare-and-set check shared by the memory and file ports (`StoragePort.supportsCompareAndSet`):
  * throws {@link StorageConflictError} unless `existing` (the stored record, `undefined` when absent) satisfies
- * the tri-state `expected`. `undefined` = no check; `null` = the record must be absent; a string = the record
- * must be present and carry exactly that `revision` (a record with no revision never matches a string).
+ * the four-state `expected`. `undefined` = no check; `null` = the record must be absent; `""` = the record must
+ * be present and carry no `revision` (it predates the field); any other string = the record must be present and
+ * carry exactly that `revision`. Both of the last two are `(existing.revision ?? "") === expected` on a present
+ * record, so a record with no revision never matches a non-empty string.
  */
 export function checkExpectedRevision(
   kind: "promotion" | "fixation",
@@ -72,7 +74,9 @@ export function checkExpectedRevision(
     if (existing !== undefined) throw new StorageConflictError(kind, key);
     return;
   }
-  if (existing === undefined || existing.revision !== expected) throw new StorageConflictError(kind, key);
+  if (existing === undefined || (existing.revision ?? "") !== expected) {
+    throw new StorageConflictError(kind, key);
+  }
 }
 
 /**

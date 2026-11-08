@@ -14,7 +14,8 @@ export interface TenantKeyedTable<T> {
   /**
    * Upserts one record, keeping its first-insertion `seq`. `expectedRevision` makes it a compare-and-set
    * (omitted = the plain upsert): `null` = insert only if the row is absent, a string = update only if the
-   * stored payload's `revision` equals it; a miss throws `StorageConflictError`.
+   * stored payload's `revision` equals it (`""` matches a stored payload that carries no `revision`); a miss
+   * throws `StorageConflictError`.
    */
   put(tenant: string | undefined, id: string, record: T, expectedRevision?: string | null): Promise<void>;
   /**
@@ -65,7 +66,8 @@ export function tenantKeyedTable<T>(
   kind: "promotion" | "fixation",
 ): TenantKeyedTable<T> {
   // The payload is stored as text (see schema.ts), so the revision predicate casts it to jsonb. No DDL: the
-  // compare-and-set is one conditional statement whose rowCount says whether it applied.
+  // compare-and-set is one conditional statement whose rowCount says whether it applied. A payload with no
+  // `revision` reads as '' (COALESCE), which is what the wire value `""` of `expectedRevision` means.
   const revisionOf = `(${payloadColumn}::jsonb ->> 'revision')`;
   return {
     async get(tenant, id) {
@@ -94,7 +96,7 @@ export function tenantKeyedTable<T>(
         const updated = await conditional(kind, id, () =>
           pool.query(
             `UPDATE ${table} SET ${payloadColumn} = $3
-             WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $4::text`,
+             WHERE tenant = $1 AND ${idColumn} = $2 AND COALESCE(${revisionOf}, '') = $4::text`,
             [normalizeTenant(tenant) ?? "", id, JSON.stringify(record), expectedRevision],
           ),
         );
@@ -120,7 +122,7 @@ export function tenantKeyedTable<T>(
       const updated = await conditional(kind, id, () =>
         pool.query(
           `UPDATE ${table} SET ${payloadColumn} = $3
-           WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $4::text`,
+           WHERE tenant = $1 AND ${idColumn} = $2 AND COALESCE(${revisionOf}, '') = $4::text`,
           [normalized, id, JSON.stringify(record), expectedRevision],
         ),
       );
@@ -169,7 +171,7 @@ export function tenantKeyedTable<T>(
       if (expectedRevision !== undefined) {
         const deleted = await conditional(kind, id, () =>
           pool.query(
-            `DELETE FROM ${table} WHERE tenant = $1 AND ${idColumn} = $2 AND ${revisionOf} = $3::text`,
+            `DELETE FROM ${table} WHERE tenant = $1 AND ${idColumn} = $2 AND COALESCE(${revisionOf}, '') = $3::text`,
             [normalizeTenant(tenant) ?? "", id, expectedRevision],
           ),
         );

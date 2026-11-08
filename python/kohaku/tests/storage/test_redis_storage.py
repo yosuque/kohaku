@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -826,6 +827,37 @@ class TestCompareAndSetAcrossInstances:
 
         _run(go())
 
+    def test_lets_exactly_one_of_two_instances_win_a_write_from_the_same_unversioned_base(
+        self, redis_url: str
+    ) -> None:
+        async def go() -> None:
+            prefix = _prefix()
+            a = create_redis_storage_port(url=redis_url, key_prefix=prefix)
+            b = create_redis_storage_port(url=redis_url, key_prefix=prefix)
+            try:
+                for round_ in range(10):
+                    artifact = f"u{round_}"
+                    await a.put_promotion_state(_state(artifact))  # predates `revision`
+                    settled = await asyncio.gather(
+                        a.put_promotion_state(
+                            _state(artifact, status="approved", revision=f"a{round_}"),
+                            expected_revision="",
+                        ),
+                        b.put_promotion_state(
+                            _state(artifact, status="rejected", revision=f"b{round_}"),
+                            expected_revision="",
+                        ),
+                        return_exceptions=True,
+                    )
+                    losers = [r for r in settled if isinstance(r, BaseException)]
+                    assert len(losers) == 1
+                    assert isinstance(losers[0], StorageConflictError)
+            finally:
+                await a.close()
+                await b.close()
+
+        _run(go())
+
     def test_plain_writes_interleaved_with_cas_writes_do_not_clear_a_pending_watch(
         self, redis_url: str
     ) -> None:
@@ -886,6 +918,57 @@ class TestCompareAndSetAcrossInstances:
                 assert len(pool._in_use_connections) == 0
             finally:
                 await client.aclose()
+
+        _run(go())
+
+
+class TestExecCommandErrors:
+    """Mirror of the TS `exec-errors.test.ts`. A MULTI/EXEC whose EXEC succeeds but one of its COMMANDS fails at run time
+    (here a ZADD / ZREM on a key holding a string: WRONGTYPE, after an earlier command already applied). redis-py's
+    `Pipeline.execute()` raises the first such error (`raise_on_error=True` by default), unlike ioredis, which hands
+    back `[error, result]` pairs the TS port has to inspect itself. Pinned so a refactor to
+    `execute(raise_on_error=False)` cannot silently turn it into a success, and so the error is never a conflict."""
+
+    @staticmethod
+    async def _expect_wrongtype(awaitable: Awaitable[object]) -> None:
+        from redis.exceptions import ResponseError
+
+        with pytest.raises(ResponseError, match="WRONGTYPE") as raised:
+            await awaitable
+        assert not isinstance(raised.value, StorageConflictError)
+
+    def test_every_exec_site_raises_a_non_conflict_error_on_a_failed_command(
+        self, redis_url: str
+    ) -> None:
+        async def go() -> None:
+            raw = Redis.from_url(redis_url, decode_responses=True)
+            try:
+                # (name, key to corrupt, the write)
+                prefix = _prefix()
+                keys = redis_keys(prefix)
+                port = create_redis_storage_port(url=redis_url, key_prefix=prefix)
+                try:
+                    await raw.set(keys.promotion_index(None), "not-a-zset")
+                    await self._expect_wrongtype(
+                        port.put_promotion_state(_state("a1"), expected_revision=None)
+                    )
+                    await self._expect_wrongtype(port.put_promotion_state(_state("a2")))
+                    await self._expect_wrongtype(
+                        port.put_promotion_states([_state("a3"), _state("a4")])
+                    )
+                    await raw.set(keys.lineage.by_seq, "not-a-zset")
+                    await self._expect_wrongtype(port.append_lineage(_ev("e1")))
+                    await port.put_fixation(_fixation("h1"))
+                    await port.put_fixation(replace(_fixation("h2"), revision="r1"))
+                    await raw.set(keys.fixation_index(None), "not-a-zset")
+                    await self._expect_wrongtype(port.delete_fixation("h1", None))
+                    await self._expect_wrongtype(
+                        port.delete_fixation("h2", None, expected_revision="r1")
+                    )
+                finally:
+                    await port.close()
+            finally:
+                await raw.aclose()
 
         _run(go())
 

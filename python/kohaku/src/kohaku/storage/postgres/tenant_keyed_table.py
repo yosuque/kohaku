@@ -38,7 +38,9 @@ class TenantKeyedTable[T]:
         self._from_wire = from_wire
         # The payload is stored as text (see schema.py), so the revision predicate casts it to jsonb. No DDL: the
         # compare-and-set is one conditional statement whose rowcount says whether it applied.
-        self._revision_of = f"({payload_column}::jsonb ->> 'revision')"
+        # A payload with no `revision` reads as '' (COALESCE): the wire value "" of `expected_revision` means
+        # "present and unversioned". No DDL change.
+        self._revision_of = f"COALESCE(({payload_column}::jsonb ->> 'revision'), '')"
 
     async def _cas_query(self, record_id: str, sql: str, params: list[Any]) -> QueryResult:
         """Runs a conditional (compare-and-set) statement. SQLSTATE 40001 (serialization failure -- what a
@@ -71,7 +73,8 @@ class TenantKeyedTable[T]:
     ) -> None:
         """Upserts one record, keeping its first-insertion ``seq``. ``expected_revision`` makes it a
         compare-and-set (UNSET = the plain upsert): None = insert only if the row is absent, a str = update only if the
-        stored payload's ``revision`` equals it; a miss raises `StorageConflictError`."""
+        stored payload's ``revision`` equals it ("" matches a stored payload that carries no ``revision``); a miss
+        raises `StorageConflictError`."""
         normalized = normalize_tenant(tenant) or ""
         payload = self._to_json(record)
         if expected_revision is None:
