@@ -1,7 +1,7 @@
 import { createHmacApprovalPort, createMemoryApprovalStore } from "@kohaku-ui/authz-hmac";
 import { createJwtAuthzPort } from "@kohaku-ui/authz-jwt";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
-import type { KohakuPolicyFile, LineageEventRecord, UISpec } from "@kohaku-ui/spec-core";
+import type { KohakuPolicyFile, UISpec } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
