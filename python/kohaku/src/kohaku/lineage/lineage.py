@@ -30,6 +30,7 @@ from kohaku.spec import (
 
 from .events import (
     COMPONENT_EVENT_TYPES,
+    ActionApprovalIssuedPayload,
     ActionApprovalRequestedPayload,
     ActionApprovedPayload,
     ActionDeniedPayload,
@@ -589,6 +590,26 @@ class Lineage:
         if event.get("correlationId") is not None:
             payload["correlationId"] = event["correlationId"]
         await self.record("action.approved", payload, actor, tenant)
+
+    async def action_approval_issued(
+        self,
+        event: ActionApprovalIssuedPayload,
+        actor: LineageActor | None = None,
+        tenant: str | None = None,
+    ) -> None:
+        """Records action.approvalIssued (design.md #72) -- an approver minted an approval token. The
+        `actor` the caller passes is the *approver* (see ActionApprovalIssuedPayload)."""
+        payload: dict[str, Any] = {
+            "action": event["action"],
+            "payloadHash": event["payloadHash"],
+            "requesterId": event["requesterId"],
+            "approverId": event["approverId"],
+            "ttlSeconds": event["ttlSeconds"],
+            "expiresAt": event["expiresAt"],
+        }
+        if event.get("correlationId") is not None:
+            payload["correlationId"] = event["correlationId"]
+        await self.record("action.approvalIssued", payload, actor, tenant)
 
     async def explain_view(self, spec_hash: str) -> list[LineageEventRecord]:
         """The audit query for "why this screen was displayed"."""

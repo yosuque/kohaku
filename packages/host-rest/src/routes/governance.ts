@@ -1,6 +1,11 @@
-import { errorMessage } from "@kohaku-ui/host-core";
+import { errorMessage, failOpen } from "@kohaku-ui/host-core";
 import type { LineageFilter, LineagePageRequest, Surface } from "@kohaku-ui/spec-core";
-import { APPROVAL_ISSUE_ERROR_CODE, LineageCursorError, parseIso8601 } from "@kohaku-ui/spec-core";
+import {
+  APPROVAL_ISSUE_ERROR_CODE,
+  DEFAULT_APPROVAL_TTL_SECONDS,
+  LineageCursorError,
+  parseIso8601,
+} from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import { ApprovalRequestBodySchema, TelemetryBodySchema } from "./schemas.js";
@@ -225,8 +230,9 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
       return c.json(errorBody("BAD_REQUEST", "an approver cannot approve their own request"), 400);
     }
     const tenant = await resolveTenant(c, deps);
+    let token: string;
     try {
-      const token = await deps.approvals.issueApproval(
+      token = await deps.approvals.issueApproval(
         {
           action: body.action,
           payloadHash: body.payloadHash,
@@ -236,7 +242,6 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
         },
         body.ttlSeconds != null ? { ttlSeconds: body.ttlSeconds } : undefined,
       );
-      return c.json({ approval: token });
     } catch (e) {
       await reportHostError(deps, "approvals", requestId, e);
       if ((e as { code?: unknown } | null)?.code === APPROVAL_ISSUE_ERROR_CODE) {
@@ -244,6 +249,33 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
       }
       return c.json(errorBody("INTERNAL", APPROVAL_INTERNAL_ERROR_MESSAGE, requestId), 500);
     }
+    // Audit the issuance (design.md #72), only now that it succeeded and fail-open like every other action.*
+    // record: a recording failure must never turn a minted token into an error response. The event carries
+    // the approver as its actor and never the token itself. The ApprovalPort does not report its own expiry,
+    // so `expiresAt` is issue time + the requested TTL (or DEFAULT_APPROVAL_TTL_SECONDS). That is advisory: it
+    // differs from the real expiry when the port's own default TTL differs from that constant, or when the
+    // port clamps the TTL. Future fix: have `ApprovalPort.issueApproval` return the expiry.
+    const recorder = deps.actionAuditRecorder;
+    if (recorder?.approvalIssued != null) {
+      const ttlSeconds = body.ttlSeconds ?? DEFAULT_APPROVAL_TTL_SECONDS;
+      const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+      await failOpen(
+        async () => {
+          await recorder.approvalIssued?.({
+            action: body.action,
+            payloadHash: body.payloadHash,
+            requesterId: body.requesterId,
+            approverId: approver.id,
+            ttlSeconds,
+            expiresAt,
+            principal: approver,
+            ...(tenant != null ? { tenant } : {}),
+          });
+        },
+        (e) => reportHostError(deps, "approvals.audit", requestId, e),
+      );
+    }
+    return c.json({ approval: token });
   });
 }
 

@@ -40,7 +40,7 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
   const [issued, setIssued] = useState<IssuedToken | null>(null);
   const [copied, setCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const now = useNowMs(issued != null);
+  const now = useNowMs(issued != null || row.issued != null);
 
   const issue = () => {
     if (row.requesterId == null) return;
@@ -89,6 +89,12 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
   const requestAgeSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(row.latestTs)) / 1000));
   const issuedAgeSeconds = issued != null ? Math.max(0, Math.floor((now - issued.issuedAt) / 1000)) : 0;
   const expired = issued != null && issuedAgeSeconds >= DEFAULT_APPROVAL_TTL_SECONDS;
+  // A token minted earlier (possibly by another approver, or before this page was loaded) is known only from the
+  // lineage; it is shown while its recorded expiry is still ahead of the live clock, and not once it has passed.
+  const recordedRemainingSeconds =
+    row.issued != null ? Math.ceil((Date.parse(row.issued.expiresAt) - now) / 1000) : 0;
+  const recordedIssued =
+    issued == null && row.issued != null && recordedRemainingSeconds > 0 ? row.issued : null;
   // Why Approve is unavailable, if it is: no requester to bind the token to, a recorded payload that is not the
   // one the hash covers, or a token that was already issued and is still valid (a new one would only confuse).
   const disabledReason =
@@ -96,7 +102,7 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
       ? t.approvals.requesterUnknown
       : row.payloadHashState === "mismatch"
         ? t.approvals.approveDisabledMismatch
-        : issued != null && !expired
+        : (issued != null && !expired) || recordedIssued != null
           ? t.approvals.approveDisabledIssued
           : null;
   // After the TTL only Re-issue (next to the token) is offered.
@@ -140,6 +146,11 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
           </span>
         )}
       </div>
+      {recordedIssued != null && (
+        <div role="status" style={{ color: V.muted, fontSize: 12.5 }}>
+          {t.approvals.issuedBy(recordedIssued.approverId, recordedRemainingSeconds)}
+        </div>
+      )}
       {row.payloadHashState === "mismatch" && (
         <div role="alert" style={{ color: V.negativeText, fontSize: 12.5 }}>
           {t.approvals.payloadMismatch}

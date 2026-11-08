@@ -32,6 +32,7 @@ from kohaku.lineage import (
     sign_manifest,
     verify_manifest_signature,
 )
+from kohaku.llm.base_url import normalize_vendor_base_url
 from kohaku.registry.core import core_catalog
 from kohaku.spec import (
     ALLOWED_ATTRS,
@@ -175,6 +176,15 @@ def test_export_distillation_dataset(cross_language_fixture: dict[str, Any]) -> 
         export_distillation_dataset([record], [spec])
         == cross_language_fixture["distillation"]["jsonl"]
     )
+
+
+def test_llm_base_url_normalisation(cross_language_fixture: dict[str, Any]) -> None:
+    """normalize_vendor_base_url must reproduce the TS-generated KOHAKU_LLM_BASE_URL goldens (the real-SDK
+    request URLs are asserted by the llm wire tests, which read the same fixture)."""
+    cases = cross_language_fixture["llmBaseUrl"]
+    assert cases
+    for case in cases:
+        assert normalize_vendor_base_url(case["provider"], case["baseUrl"]) == case["root"], case
 
 
 def test_design_kit_prompt_fragment(cross_language_fixture: dict[str, Any]) -> None:

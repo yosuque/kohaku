@@ -1,4 +1,5 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
+import type { ActionAuditRecorder } from "@kohaku-ui/host-core";
 import { ApprovalIssueError, type ApprovalPort, type AuthzPort, type DomainPort } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import { createKohakuRoutes, type KohakuHostDeps } from "../src/index.js";
@@ -257,5 +258,146 @@ describe("POST /approvals", () => {
 
     await postApprovals(deps, { ...VALID_BODY, ttlSeconds: 60 });
     expect(issueApproval.mock.calls[0]![1]).toEqual({ ttlSeconds: 60 });
+  });
+
+  describe("action.approvalIssued audit", () => {
+    function approvalsPort(): ApprovalPort {
+      return {
+        issueApproval: async () => "kohaku-approval.v2.secret-token",
+        verifyApproval: async () => ({ ok: true }),
+      };
+    }
+    function recorderWith(approvalIssued: ActionAuditRecorder["approvalIssued"]): ActionAuditRecorder {
+      return {
+        invoked: async () => {},
+        denied: async () => {},
+        approvalRequested: async () => {},
+        approved: async () => {},
+        approvalIssued,
+      };
+    }
+
+    it("records one approvalIssued event (approver as principal, host-computed expiresAt) after a successful issue", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-08T00:00:00.000Z"));
+      try {
+        const approvalIssued = vi.fn(
+          async (_args: Parameters<NonNullable<ActionAuditRecorder["approvalIssued"]>>[0]) => {},
+        );
+        const deps = baseDeps({
+          approvals: approvalsPort(),
+          auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+          actionAuditRecorder: recorderWith(approvalIssued),
+          tenant: async () => "tenant-a",
+        });
+
+        const res = await postApprovals(deps, { ...VALID_BODY, ttlSeconds: 60 });
+        expect(res.status).toBe(200);
+        expect(approvalIssued).toHaveBeenCalledTimes(1);
+        const args = approvalIssued.mock.calls[0]![0];
+        expect(args).toMatchObject({
+          action: "delete",
+          payloadHash: VALID_BODY.payloadHash,
+          requesterId: "requester-1",
+          approverId: "approver-1",
+          ttlSeconds: 60,
+          expiresAt: "2026-11-08T00:01:00.000Z",
+          principal: { id: "approver-1" },
+          tenant: "tenant-a",
+        });
+        // The token (or anything that could rebuild it) must never reach the audit trail.
+        expect(JSON.stringify(args)).not.toContain("secret-token");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("uses the default approval TTL when the body omits ttlSeconds", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-08T00:00:00.000Z"));
+      try {
+        const approvalIssued = vi.fn(
+          async (_args: Parameters<NonNullable<ActionAuditRecorder["approvalIssued"]>>[0]) => {},
+        );
+        const deps = baseDeps({
+          approvals: approvalsPort(),
+          auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+          actionAuditRecorder: recorderWith(approvalIssued),
+        });
+        await postApprovals(deps, VALID_BODY);
+        expect(approvalIssued.mock.calls[0]![0]).toMatchObject({
+          ttlSeconds: 300,
+          expiresAt: "2026-11-08T00:05:00.000Z",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays 200 when the recorder throws (fail-open) and reports the failure to onError", async () => {
+      const onError = vi.fn();
+      const deps = baseDeps({
+        approvals: approvalsPort(),
+        auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+        actionAuditRecorder: recorderWith(async () => {
+          throw new Error("lineage store down");
+        }),
+        onError,
+      });
+      const res = await postApprovals(deps, VALID_BODY);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { approval: string }).approval).toBe("kohaku-approval.v2.secret-token");
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ endpoint: "approvals.audit" }));
+    });
+
+    it("records nothing when issuance fails or is refused", async () => {
+      const approvalIssued = vi.fn(async () => {});
+      const failing: ApprovalPort = {
+        issueApproval: async () => {
+          throw new ApprovalIssueError("nope");
+        },
+        verifyApproval: async () => ({ ok: true }),
+      };
+      const refused = baseDeps({
+        approvals: failing,
+        auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+        actionAuditRecorder: recorderWith(approvalIssued),
+      });
+      expect((await postApprovals(refused, VALID_BODY)).status).toBe(400);
+      const selfApproval = baseDeps({
+        approvals: approvalsPort(),
+        auth: async () => ({ id: "requester-1", roles: ["approver"] }),
+        actionAuditRecorder: recorderWith(approvalIssued),
+      });
+      expect((await postApprovals(selfApproval, VALID_BODY)).status).toBe(400);
+      expect(approvalIssued).not.toHaveBeenCalled();
+    });
+
+    it("records nothing and answers a fixed-text 500 when issueApproval throws a generic error", async () => {
+      const approvalIssued = vi.fn(async () => {});
+      const broken: ApprovalPort = {
+        issueApproval: async () => {
+          throw new Error("store connection string leaked");
+        },
+        verifyApproval: async () => ({ ok: true }),
+      };
+      const deps = baseDeps({
+        approvals: broken,
+        auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+        actionAuditRecorder: recorderWith(approvalIssued),
+      });
+      const res = await postApprovals(deps, VALID_BODY);
+      expect(res.status).toBe(500);
+      expect(approvalIssued).not.toHaveBeenCalled();
+    });
+
+    it("is skipped quietly when the recorder does not implement approvalIssued", async () => {
+      const deps = baseDeps({
+        approvals: approvalsPort(),
+        auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+        actionAuditRecorder: recorderWith(undefined),
+      });
+      expect((await postApprovals(deps, VALID_BODY)).status).toBe(200);
+    });
   });
 });

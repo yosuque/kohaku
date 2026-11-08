@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..abort import AbortSignal, TimeoutAbortError
+from ..base_url import normalize_vendor_base_url
 from ..env import LlmConfig
 from ..port import (
     GenerateObjectRequest,
@@ -413,8 +414,15 @@ def _build_sdk_transports(
         "api_key": config.api_key or "not-required",
         "max_retries": 0,
     }
-    if config.base_url:
-        client_kwargs["base_url"] = config.base_url
+    # The vendor root without `/v1`: the SDK appends `/v1/messages` itself (see base_url.py).
+    base_url = normalize_vendor_base_url(config.provider, config.base_url)
+    if base_url is not None:
+        client_kwargs["base_url"] = base_url
+        if config.api_key:
+            # SDK 2.x authenticates `api_key=` with `Authorization: Bearer`, while a gateway in front of the
+            # Anthropic API may read only the classic `x-api-key` header. Send both when a gateway is
+            # configured; the direct api.anthropic.com path (no base_url) is left exactly as the SDK does it.
+            client_kwargs["default_headers"] = {"X-Api-Key": config.api_key}
     client = anthropic.AsyncAnthropic(**client_kwargs)
     return _SdkTransport(client, config), _SdkStreamTransport(client, config)
 

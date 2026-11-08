@@ -49,6 +49,13 @@ export interface LlmConfig {
    * complementary prompt-content cache).
    */
   promptCache: boolean;
+  /**
+   * Test-only transport injection: forwarded as the `fetch` option of the provider SDK factory so a test can
+   * run the REAL provider SDK against a scripted transport and assert what actually goes on the wire.
+   * Never set from the environment (resolveLlmEnv leaves it undefined). It is deliberately not part of any
+   * cache key.
+   */
+  fetch?: typeof globalThis.fetch;
 }
 
 /** Retry defaults (conservative). The backoff factor and jitter are not exposed via env; they are fixed constants. */

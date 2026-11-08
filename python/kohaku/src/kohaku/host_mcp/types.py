@@ -265,6 +265,23 @@ class AttachOptions:
     SEP-1865 and render only mcp-ui's UIResource (`ui://` prefix detection). The HTML bundles the shared renderer at
     about 1MB/result, so do not enable it on modern hosts (Claude / ChatGPT). An assembly failure is swallowed,
     reported to the observation hook, and answered normally without co-emission (fail-open)."""
+    tasks_enabled: bool = False
+    """Product-level switch for the MCP Tasks extension (io.modelcontextprotocol/tasks, 2026-07-28; same field as
+    TS AttachOptions.tasksEnabled). Default off — a product decision independent of SDK support: a
+    `CreateTaskResult` replaces the synchronous result for every client that declares the extension, and no real
+    MCP host has been verified to poll `io.modelcontextprotocol/tasks` yet (docs/design.md section 11).
+
+    **On**: `${prefix}_compose` and the intent tools become task-capable for a request that opts in via its
+    per-request `_meta` envelope (`clientCapabilities.extensions["io.modelcontextprotocol/tasks"]`) — such a
+    request gets a `CreateTaskResult` (`resultType: "task"`) back immediately and polls `tasks/get` / cancels with
+    `tasks/cancel`; the server also declares the extension in `ServerCapabilities.extensions`. A request that does
+    not declare it still gets today's synchronous, byte-identical result (a spec MUST).
+
+    **Left at its default (False)**:
+     - the server does not declare the extension in `ServerCapabilities.extensions`,
+     - `tasks/get` / `tasks/cancel` are not registered at all (the SDK answers METHOD_NOT_FOUND),
+     - `${prefix}_compose` / the intent tools execute synchronously exactly as they did before this extension
+       existed — byte-identical, even for a request that declares the extension capability on itself."""
 
 
 # Internal: the source of a compose (NL / structured Intent / already-finalized CanonicalIntent).

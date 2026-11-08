@@ -1,0 +1,5 @@
+---
+"@kohaku-ui/host-mcp-apps": patch
+---
+
+Security: MCP Tasks (`tasksEnabled: true` only; the default is off) are now bound to the caller that created them. Previously anyone who learned a task id could `tasks/get` it, and a completed task's `result` carries the bearer write capability in `_meta`, so a leaked id leaked a write token; `tasks/cancel` could likewise abort someone else's compose. `TaskStore.create` now takes an `owner` (breaking for a direct `createTaskStore` caller: `get(taskId, owner)`, `requestCancel(taskId, owner)`), derived from the key the rate limiter uses (`rateLimitKey`, else the resolved principal's id, else the session id, else `"anonymous"`), and a mismatching owner gets exactly the unknown-task answer (InvalidParams). Wire `resolvePrincipal` or `rateLimitKey` for a per-caller binding; without either, callers that share a connection (everyone, on stateless HTTP and stdio) share an owner. Also: a still-working task whose TTL elapses is now aborted when it is purged, and the task id echoed in the unknown-task error is capped at 128 characters. The Python port (`kohaku.host_mcp`, PyPI) has the same fix.
