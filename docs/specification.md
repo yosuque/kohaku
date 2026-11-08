@@ -510,7 +510,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 | `KOHAKU_LLM_MODEL` | Per-provider default (claude-sonnet-5 / gpt-4.1 / gemini-2.5-flash / llama3.3) | `llama` must be specified explicitly |
 | `KOHAKU_LLM_BASE_URL` | ollama: `http://localhost:11434/v1` | Required for `llama` (OpenAI-compatible) |
 | `KOHAKU_LLM_API_KEY` | — | Highest-priority key. If absent, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` |
-| `KOHAKU_LLM_TEMPERATURE` / `KOHAKU_LLM_MAX_OUTPUT_TOKENS` | 0 / 4096 | For L2 free generation, the cap is widened 3× (default 12288) by `outputBudgetFactor=3` |
+| `KOHAKU_LLM_TEMPERATURE` / `KOHAKU_LLM_MAX_OUTPUT_TOKENS` | 0 / 4096 | For L2 free generation, the cap is widened 3× (default 12288) by `outputBudgetFactor=3`. The Python `claude` adapter does not forward the temperature (the Anthropic API rejects sampling parameters from `anthropic-version` 2026-10-21; see `python/README.md`) |
 | `KOHAKU_LLM_STRUCTURED_MODE` | `auto` | `auto` (native → prompt JSON on failure) / `strict` / `prompt` |
 | `KOHAKU_LLM_TIMEOUT_MS` | 60000 | Timeout for a single LLM call (ms). L2 free generation (long output of full HTML) is widened 3× (default 180s) by `outputBudgetFactor=3` |
 | `KOHAKU_LLM_RETRY_MAX` / `KOHAKU_LLM_RETRY_INITIAL_MS` | 2 / 250 | Jittered exponential-backoff retry for PROVIDER failures (429/5xx). `0` disables. Does not exceed `KOHAKU_LLM_TIMEOUT_MS` overall |

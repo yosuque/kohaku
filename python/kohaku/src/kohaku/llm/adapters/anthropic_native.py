@@ -198,12 +198,20 @@ class AnthropicTool:
 
 @dataclass(frozen=True)
 class AnthropicRequest:
-    """Input for a single messages call. If `tool` is None it is plain text; when set it is forced tool-use."""
+    """Input for a single messages call. If `tool` is None it is plain text; when set it is forced tool-use.
+
+    There is deliberately no `temperature` (nor any other sampling parameter): this adapter never sends one.
+    The anthropic SDK's `messages.create` has no such keyword (passing it raises `TypeError`), and under
+    anthropic-version 2026-10-21 — what SDK 2.x sends — the Messages API answers 400 to any request that
+    carries `temperature` / `top_p` / `top_k`; Claude 4.7+ models only accept their default sampling anyway.
+    The identical-display guarantee comes from the Spec cache, with temperature 0 only auxiliary, so nothing
+    functional is lost; on older models the temperature-0 nudge is, and the TS adapter (which still sends it
+    through `@ai-sdk/anthropic`) intentionally differs here.
+    """
 
     model: str
     system: str | None
     prompt: str
-    temperature: float
     max_tokens: int
     tool: AnthropicTool | None
     prompt_parts: PromptParts | None = None
@@ -291,7 +299,6 @@ class AnthropicNativeLlm(StructuredLlmBase):
             model=config.model,
             system=req.system,
             prompt=req.prompt,
-            temperature=req.temperature if req.temperature is not None else config.temperature,
             max_tokens=max_output_tokens,
             tool=self._tool(req),
             prompt_parts=req.prompt_parts,
@@ -321,13 +328,14 @@ class AnthropicNativeLlm(StructuredLlmBase):
         prompt_parts: PromptParts | None = None,
         effort: LlmEffort | None = None,
     ) -> GenerateTextResult:
+        # `temperature` is part of the shared `_text_once` contract but is deliberately not forwarded (see
+        # `AnthropicRequest`).
         config = self._config
         signal.throw_if_aborted()
         areq = AnthropicRequest(
             model=config.model,
             system=system,
             prompt=prompt,
-            temperature=temperature,
             max_tokens=max_tokens,
             tool=None,
             prompt_parts=prompt_parts,
@@ -351,7 +359,6 @@ class AnthropicNativeLlm(StructuredLlmBase):
             model=config.model,
             system=req.system,
             prompt=req.prompt,
-            temperature=req.temperature if req.temperature is not None else config.temperature,
             max_tokens=max_output_tokens,
             tool=self._tool(req),
             prompt_parts=req.prompt_parts,
@@ -503,7 +510,6 @@ class _SdkTransport:
         params: dict[str, Any] = {
             "model": req.model,
             "max_tokens": req.max_tokens,
-            "temperature": req.temperature,
             "messages": [{"role": "user", "content": _user_content(req, self._config)}],
             "timeout": max(0.1, timeout_ms / 1000.0),
             **_tool_params(req),
@@ -567,7 +573,6 @@ class _SdkStreamTransport:
         params: dict[str, Any] = {
             "model": req.model,
             "max_tokens": req.max_tokens,
-            "temperature": req.temperature,
             "messages": [{"role": "user", "content": _user_content(req, self._config)}],
             "timeout": max(0.1, timeout_ms / 1000.0),
             **_tool_params(req),
