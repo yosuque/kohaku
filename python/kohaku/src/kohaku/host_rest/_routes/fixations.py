@@ -14,7 +14,7 @@ from starlette.responses import Response
 
 from kohaku.host_core import IntentSourceIntent, is_typed_host_error
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
-from kohaku.spec import GovernanceErrorDiscriminators
+from kohaku.spec import GovernanceErrorDiscriminators, is_storage_conflict_error
 
 from ..bodies import SessionBody, parse_compose_body
 from ..deps import KohakuHostDeps
@@ -29,6 +29,7 @@ from .shared import (
     _message,
     _read_json,
     _resolve_tenant,
+    _storage_conflict,
     report_host_error,
     request_id_of,
     require_governance,
@@ -96,6 +97,10 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             )
             intent = resolved.intent
         except BaseException as e:
+            # fixate is an unconditional overwrite so it cannot lose a compare-and-set race itself, but a
+            # wrapped port may still raise one; answer it with the contract's CONFLICT rather than a 500.
+            if is_storage_conflict_error(e):
+                return _storage_conflict(request, deps)
             await report_host_error(deps, "fixations/approve", request_id, e)
             return _intent_invalid(e, request_id)
         try:
@@ -151,6 +156,8 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             async with _get_lock(deps, _fixation_key(tenant, intent_hash)):
                 await fixations.unfixate(intent_hash, principal, tenant=tenant)
         except BaseException as e:
+            if is_storage_conflict_error(e):
+                return _storage_conflict(request, deps)
             if getattr(e, "code", None) == GovernanceErrorDiscriminators.FIXATION_UNSUPPORTED_CODE:
                 return _error("NOT_IMPLEMENTED", _message(e), 501)
             request_id = request_id_of(request, deps)

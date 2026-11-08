@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import math
-import random
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
@@ -31,11 +29,13 @@ from kohaku.spec import (
     StoragePort,
     UISpec,
     compute_structure_hash,
+    supports_compare_and_set,
     validate_fixation_record,
 )
 
 from .events import Clock, now_iso
 from .lineage import Lineage
+from .revision import generate_revision
 
 FixationErrorEndpoint = Literal["storage.record.invalid"]
 """The single call site `Fixations`' `on_error` hook fires from (port of TS FixationErrorEndpoint): a
@@ -141,30 +141,6 @@ class _IntentAcc:
     uses: int = 0
     sessions: set[str] = field(default_factory=set)
     structures: dict[str, int] = field(default_factory=dict)
-
-
-_BASE36_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
-
-
-def _to_base36(n: int) -> str:
-    """Mirrors JS's `Number.prototype.toString(36)` for a non-negative integer (used only by
-    _generate_revision; no need to handle negative numbers)."""
-    if n == 0:
-        return "0"
-    digits: list[str] = []
-    while n > 0:
-        n, rem = divmod(n, 36)
-        digits.append(_BASE36_ALPHABET[rem])
-    return "".join(reversed(digits))
-
-
-def _generate_revision() -> str:
-    """Generates a coarse ulid-like, per-write revision token (port of TS's generateRevision): a base36 ms
-    timestamp plus a random suffix. Not the full `ulid` scheme (no cross-service sortability guarantee is
-    needed here) — only "distinguishable from the previous write even inside the same millisecond" matters,
-    which fixatedAt (an ms-precision ISO timestamp) cannot provide (D7: an unfixate -> fixate pair landing in
-    the same ms would otherwise share a TOCTOU guard token with the fixation it replaced)."""
-    return f"{_to_base36(int(time.time() * 1000))}-{_to_base36(random.getrandbits(40))}"
 
 
 class Fixations:
@@ -304,7 +280,7 @@ class Fixations:
             structureHash=compute_structure_hash(pinned_spec),
             pinnedSpec=pinned_spec,
             fixatedAt=self._clock(),
-            revision=_generate_revision(),
+            revision=generate_revision(),
             approver=approver,
             # Stamp this tenant's catalog fingerprint at fixation time (the fast-path basis for materialize's staleness detection).
             catalogFingerprint=(
@@ -312,6 +288,11 @@ class Fixations:
             ),
             tenant=tenant,
         )
+        # Deliberately unconditional even on a compare-and-set port: fixate derives nothing from an earlier
+        # read (the record is built from the freshly composed Spec and a human approval), so it is an
+        # authoritative overwrite -- re-approving an intent must always be possible. It stamps a fresh
+        # revision, which is what makes a concurrent refresh_fingerprint / replace / invalidate that read the
+        # old record fail their own conditional write instead of clobbering this one.
         await self._storage.put_fixation(record)
         await self._lineage.record(
             "intent.fixated",
@@ -326,6 +307,33 @@ class Fixations:
         )
         return record
 
+    async def _delete_fixation(
+        self, intent_hash: str, tenant: str | None, revision: str | None
+    ) -> None:
+        """delete_fixation shared by unfixate and invalidate: an unimplemented delete (NotImplementedError)
+        becomes FixationUnsupportedError (fail-fast). On a compare-and-set port, for a record that carries a
+        revision, the delete is conditional on the revision the caller just read, so a fixation re-approved or
+        replaced by another instance in between is not swept away (StorageConflictError; nothing is audited).
+        Otherwise the call keeps its pre-CAS shape (a legacy record with no revision is deleted
+        unconditionally, as before)."""
+        try:
+            if revision is not None and supports_compare_and_set(self._storage):
+                await self._storage.delete_fixation(intent_hash, tenant, expected_revision=revision)
+            else:
+                await self._storage.delete_fixation(intent_hash, tenant)
+        except NotImplementedError as e:
+            raise FixationUnsupportedError() from e
+
+    async def _rewrite_fixation(self, record: FixationRecord, revision: str | None) -> None:
+        """put_fixation for a read-modify-write over a record read with `revision` (refresh_fingerprint,
+        replace): always if_present, plus -- on a compare-and-set port, for a record that carries a revision
+        -- expected_revision, so a stale in-memory copy can neither resurrect a deleted fixation nor
+        overwrite a newer one (e.g. put an old pinned_spec back over a concurrent replace)."""
+        if revision is not None and supports_compare_and_set(self._storage):
+            await self._storage.put_fixation(record, if_present=True, expected_revision=revision)
+        else:
+            await self._storage.put_fixation(record, if_present=True)
+
     async def unfixate(
         self, intent_hash: str, approver: Principal, tenant: str | None = None
     ) -> None:
@@ -334,10 +342,7 @@ class Fixations:
             return
         # Do the state change (deletion) first, and record the audit event only on success (the event log is the source of truth).
         # An unimplemented deleteFixation surfaces as NotImplementedError -> convert to FixationUnsupportedError and fail-fast.
-        try:
-            await self._storage.delete_fixation(intent_hash, tenant)
-        except NotImplementedError as e:
-            raise FixationUnsupportedError() from e
+        await self._delete_fixation(intent_hash, tenant, existing.revision)
         await self._lineage.record(
             "intent.unfixated",
             {"intentHash": intent_hash, "approver": approver.id},
@@ -381,10 +386,7 @@ class Fixations:
             if_fingerprint = guard.get("ifCatalogFingerprint")
             if if_fingerprint is not None and existing.catalogFingerprint != if_fingerprint:
                 return
-        try:
-            await self._storage.delete_fixation(intent_hash, tenant)
-        except NotImplementedError as e:
-            raise FixationUnsupportedError() from e
+        await self._delete_fixation(intent_hash, tenant, existing.revision)
         # Since this is self-healing invalidation, the actor is system (distinguished from human-approved unfixate).
         payload: dict[str, Any] = {"intentHash": intent_hash, "reason": reason}
         if detail is not None:
@@ -406,9 +408,10 @@ class Fixations:
         # get and put another writer (a management-plane unfixate, or another process sharing storage) may
         # have deleted the fixation. Without a conditional write, put would resurrect it from this stale
         # in-memory copy; if_present makes the write a no-op unless the fixation still exists on disk.
-        await self._storage.put_fixation(
-            dataclasses.replace(existing, catalogFingerprint=catalog_fingerprint),
-            if_present=True,
+        # On a compare-and-set port the write is also conditional on the revision just read (kept unchanged: a
+        # fingerprint re-stamp is not a governance decision), so it cannot overwrite a concurrent replace.
+        await self._rewrite_fixation(
+            dataclasses.replace(existing, catalogFingerprint=catalog_fingerprint), existing.revision
         )
 
     async def replace(
@@ -462,7 +465,7 @@ class Fixations:
             pinnedSpec=pinned_spec,
             structureHash=compute_structure_hash(pinned_spec),
             fixatedAt=self._clock(),
-            revision=_generate_revision(),
+            revision=generate_revision(),
             approver=approver,
             catalogFingerprint=(
                 self._catalog_for(tenant).fingerprint
@@ -472,7 +475,7 @@ class Fixations:
         )
         # if_present=True guards the same race refresh_fingerprint's own write does (a concurrent unfixate
         # between this method's get and put must not resurrect the fixation from this stale in-memory copy).
-        await self._storage.put_fixation(record, if_present=True)
+        await self._rewrite_fixation(record, existing.revision)
         payload: dict[str, Any] = {
             "intentHash": intent_hash,
             "structureHash": record.structureHash,

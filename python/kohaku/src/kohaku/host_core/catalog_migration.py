@@ -40,6 +40,7 @@ from kohaku.spec import (
     UISpec,
     canonical_stringify,
     compute_structure_hash,
+    is_storage_conflict_error,
     sha256_hex,
 )
 
@@ -371,14 +372,22 @@ async def apply_catalog_migration(
             guard["ifRevision"] = step.beforeRevision
         if step.beforeCatalogFingerprint is not None:
             guard["ifCatalogFingerprint"] = step.beforeCatalogFingerprint
-        replace_result = await fixations.replace(
-            step.intentHash,
-            step.pinnedSpec,
-            approver=approver,
-            tenant=step.tenant,
-            guard=guard,
-            plan_id=plan.planHash,
-        )
+        try:
+            replace_result = await fixations.replace(
+                step.intentHash,
+                step.pinnedSpec,
+                approver=approver,
+                tenant=step.tenant,
+                guard=guard,
+                plan_id=plan.planHash,
+            )
+        except Exception as e:
+            # A compare-and-set StoragePort found the fixation changed by another writer between the guard
+            # check and the write: the same "changed underneath the plan" outcome the guard itself reports, so
+            # skip this step (and keep going with the rest) rather than aborting the whole apply.
+            if not is_storage_conflict_error(e):
+                raise
+            replace_result = None
         entry = {"intentHash": step.intentHash, "tenant": step.tenant}
         if replace_result is None:
             skipped.append(entry)

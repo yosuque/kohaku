@@ -591,6 +591,7 @@ class PromotionStateModel(_WireModel):
     updatedAt: str
     data: JsonObject = Field(default_factory=dict)
     tenant: str | None = None
+    revision: str | None = None
 
 
 class LineageEventRecordModel(_WireModel):
