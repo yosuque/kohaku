@@ -253,9 +253,9 @@ class _RemoteJwks:
                 # Mark it RUNNING at once: a RUNNING future cannot be cancelled, so `asyncio.wrap_future`'s
                 # cancel-propagation (a cancelled waiter calls `cancel()` on the future it wraps) is a no-op
                 # instead of cancelling the fetch for every sibling waiter -- and `set_result` /
-                # `set_exception` below can never hit InvalidStateError on a cancelled future. (Chosen over
-                # `asyncio.shield` because this class is shared across event loops; a Future owned by one
-                # loop's task would not be.)
+                # `set_exception` below can never hit InvalidStateError on a cancelled future. (Fixing it at
+                # the shared future's source makes every present and future awaiter safe, whereas
+                # `asyncio.shield` would have to be remembered at each await site.)
                 inflight.set_running_or_notify_cancel()
         if not owner:
             await asyncio.wrap_future(inflight)
