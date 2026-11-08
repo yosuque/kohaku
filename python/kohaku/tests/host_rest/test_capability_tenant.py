@@ -29,6 +29,8 @@ from kohaku.spec import (
     Principal,
     RateLimitResult,
     Scope,
+    VerifyRequest,
+    VerifyResult,
 )
 
 from .conftest import PREFIX, Harness, build_harness
@@ -310,3 +312,160 @@ class TestIssuanceBindsTheResolvedTenant:
         )
         assert res.status_code == 200
         assert harness.authz.issue_kwargs == [{"tenant": "acme"}]
+
+
+class _LegacyAuthz:
+    """A port written before the `tenant` keyword existed (the signature a custom port may still have)."""
+
+    def __init__(self) -> None:
+        self.issued = 0
+
+    async def issue_capability(
+        self, principal: Principal, scopes: list[Scope], *, ttl_seconds: int | None = None
+    ) -> str:
+        self.issued += 1
+        return f"legacy-{self.issued}"
+
+    async def verify(self, token: str, req: VerifyRequest) -> VerifyResult:
+        return VerifyResult(ok=True, principal=Principal(id="legacy"))
+
+
+class _KwargsAuthz:
+    def __init__(self) -> None:
+        self.kwargs: list[dict[str, Any]] = []
+
+    async def issue_capability(
+        self, principal: Principal, scopes: list[Scope], **kwargs: Any
+    ) -> str:
+        self.kwargs.append(kwargs)
+        return "kw"
+
+    async def verify(self, token: str, req: VerifyRequest) -> VerifyResult:
+        return VerifyResult(ok=True, principal=Principal(id="kw"))
+
+
+class TestLegacySignatureAuthz:
+    """A custom port without a `tenant` keyword degrades to tenant-less issuance (detected with
+    inspect.signature, never by catching TypeError) and is reported once through on_error."""
+
+    def test_legacy_port_with_a_resolved_tenant_is_issued_without_it_and_reported_once(
+        self, tmp_path: Path
+    ) -> None:
+        errors: list[Any] = []
+        harness = build_harness(tmp_path, tenant=_header_tenant, on_error=errors.append)
+        legacy = _LegacyAuthz()
+        harness.deps.authz = legacy  # type: ignore[assignment]  # a legacy signature, on purpose
+        for _ in range(2):
+            res = harness.client.post(
+                _url("/compose"),
+                json={"intent": harness.intent_body},
+                headers={"x-kohaku-tenant": "acme"},
+            )
+            assert res.status_code == 200
+            assert res.json()["capability"].startswith("legacy-")
+        assert legacy.issued == 2
+        reported = [e for e in errors if e.endpoint == "capability.tenant_unsupported"]
+        assert len(reported) == 1
+        assert "_LegacyAuthz" in str(reported[0].error)
+
+    def test_legacy_port_without_a_tenant_is_never_reported(self, tmp_path: Path) -> None:
+        errors: list[Any] = []
+        harness = build_harness(tmp_path, on_error=errors.append)
+        harness.deps.authz = _LegacyAuthz()  # type: ignore[assignment]  # a legacy signature, on purpose
+        res = harness.client.post(_url("/compose"), json={"intent": harness.intent_body})
+        assert res.status_code == 200
+        assert [e for e in errors if e.endpoint == "capability.tenant_unsupported"] == []
+
+    def test_a_port_taking_kwargs_receives_the_tenant(self, tmp_path: Path) -> None:
+        harness = build_harness(tmp_path, tenant=_header_tenant)
+        kw = _KwargsAuthz()
+        harness.deps.authz = kw
+        res = harness.client.post(
+            _url("/compose"),
+            json={"intent": harness.intent_body},
+            headers={"x-kohaku-tenant": "acme"},
+        )
+        assert res.status_code == 200
+        assert kw.kwargs and kw.kwargs[0].get("tenant") == "acme"
+
+    def test_authz_accepts_tenant_inspects_the_signature(self) -> None:
+        from kohaku.host_core import authz_accepts_tenant
+
+        assert authz_accepts_tenant(_LegacyAuthz()) is False  # type: ignore[arg-type]
+        assert authz_accepts_tenant(_KwargsAuthz()) is True
+        assert authz_accepts_tenant(FakeAuthzForInspect()) is True
+
+
+class FakeAuthzForInspect:
+    async def issue_capability(
+        self,
+        principal: Principal,
+        scopes: list[Scope],
+        *,
+        ttl_seconds: int | None = None,
+        tenant: str | None = None,
+    ) -> str:
+        return "x"
+
+    async def verify(self, token: str, req: VerifyRequest) -> VerifyResult:
+        return VerifyResult(ok=True)
+
+
+class TestCheapRejectionsAndRateLimitAccounting:
+    def test_a_missing_bearer_is_401_before_the_body_is_read(self, tmp_path: Path) -> None:
+        harness = build_harness(tmp_path)
+        res = harness.client.post(
+            _url("/binding/action"),
+            content="{not json",
+            headers={"content-type": "application/json"},
+        )
+        assert res.status_code == 401
+        assert res.json()["error"]["code"] == "CAPABILITY_REQUIRED"
+
+    def test_a_request_tenant_equal_to_the_capability_passes_and_no_tenant_leaves_it_unset(
+        self, tmp_path: Path
+    ) -> None:
+        bound = build_harness(tmp_path / "a", tenant=_header_tenant)
+        token = bound.issue([Scope(kind="write", ref="annotate")], tenant="acme")
+        res = _act(bound, token, {"action": "annotate", "payload": {}}, {"x-kohaku-tenant": "acme"})
+        assert res.status_code == 200
+        assert _contexts(bound)[0].tenant == "acme"
+
+        none = build_harness(tmp_path / "b")
+        token = none.issue([Scope(kind="write", ref="annotate")])
+        assert _act(none, token, {"action": "annotate", "payload": {}}).status_code == 200
+        assert _contexts(none)[0].tenant is None
+
+    def test_a_tenant_mismatch_403_does_not_consume_a_rate_limit_token(
+        self, tmp_path: Path
+    ) -> None:
+        limiter = _StubLimiter()
+        harness = build_harness(tmp_path, rate_limiter=limiter, tenant=_header_tenant)
+        token = harness.issue([Scope(kind="write", ref="annotate")], tenant="acme")
+        res = _act(
+            harness, token, {"action": "annotate", "payload": {}}, {"x-kohaku-tenant": "globex"}
+        )
+        assert res.status_code == 403
+        assert limiter.calls == []
+
+    def test_a_429_runs_neither_the_action_gate_nor_domain_invoke(self, tmp_path: Path) -> None:
+        approvals = _Approvals429()
+        limiter = _StubLimiter(RateLimitResult(allow=False, retryAfterMs=1000))
+        harness = build_harness(tmp_path, rate_limiter=limiter, approvals=approvals)
+        token = harness.issue([Scope(kind="write", ref="annotate")], tenant="acme")
+        res = _act(harness, token, {"action": "annotate", "payload": {}, "approval": "tok"})
+        assert res.status_code == 429
+        assert approvals.verify_calls == 0
+        assert _contexts(harness) == []
+
+
+class _Approvals429:
+    def __init__(self) -> None:
+        self.verify_calls = 0
+
+    async def issue_approval(self, **kwargs: Any) -> str:
+        raise AssertionError("not used")
+
+    async def verify_approval(self, token: str, **kwargs: Any) -> Any:
+        self.verify_calls += 1
+        raise AssertionError("the gate must not run behind a 429")

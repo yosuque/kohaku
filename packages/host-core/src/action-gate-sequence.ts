@@ -22,7 +22,7 @@ export interface RunActionGateInput {
    * The audit context for every audit site of the sequence. It also supplies what the gate request needs:
    * `action` is the operation looked up and gated, `payload` the payload checked, `principal.id` the
    * requester bound into an approval, and `tenant` the tenant passed to `gate.check` -- exactly the value
-   * the audit records carry, so a profile that resolves no tenant (MCP) omits it here and the gate never
+   * the audit records carry, so a profile that resolves no tenant (MCP) passes only the tenant a verified capability binds (if any), else omits it and the gate never
    * sees one; this function never invents a tenant.
    */
   audit: ActionAuditContext;

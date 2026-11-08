@@ -17,7 +17,7 @@ export type RateLimitRouteClass = "compose" | "action" | "resolve";
  *
  * Shared by the middleware below (compose-family routes, keyed by the request's own identity) and by the
  * `/binding/*` handlers, which call it themselves *after* verifying the capability so the key is the
- * capability's signed tenant and subject rather than whatever the request headers claim (SPEC CAP-TEN-001).
+ * capability's signed tenant and subject rather than whatever the request headers claim (SPEC CAP-TEN-002).
  */
 export async function takeRateLimit(
   ctx: RouteContext,

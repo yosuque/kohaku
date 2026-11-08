@@ -98,7 +98,7 @@ async def _effective_tenant(
     return bound
 
 
-async def _authorize_capability(
+async def _authorize_and_rate_limit(
     deps: KohakuHostDeps,
     request: Request,
     req: VerifyRequest,
@@ -211,7 +211,7 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 404,
             )
         base, params = parsed.ref.base, parsed.ref.params
-        authorized = await _authorize_capability(
+        authorized = await _authorize_and_rate_limit(
             deps, request, VerifyRequest(kind="read", ref=base.raw), token, "resolve"
         )
         if isinstance(authorized, Response):
@@ -234,15 +234,17 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     # --- Direct write path ----------------------------------------------------
     @router.post("/binding/action")
     async def binding_action(request: Request) -> Response:
-        body = parse_action_body(await _read_json(request))
-        if body is None:
-            return _error("BAD_REQUEST", "action is required", 400)
+        # The bearer's presence is checked before the body is read and parsed: with the rate limiter now behind
+        # capability verification, a flood of unauthenticated requests should be turned away as cheaply as possible.
         token = _bearer_token(request)
         if token is None:
             return _error(
                 "CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required", 401
             )
-        authorized = await _authorize_capability(
+        body = parse_action_body(await _read_json(request))
+        if body is None:
+            return _error("BAD_REQUEST", "action is required", 400)
+        authorized = await _authorize_and_rate_limit(
             deps, request, VerifyRequest(kind="write", ref=body.action), token, "action"
         )
         if isinstance(authorized, Response):

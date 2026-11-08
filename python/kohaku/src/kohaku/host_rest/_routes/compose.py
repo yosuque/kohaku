@@ -71,6 +71,7 @@ from .shared import (
     _read_json,
     _resolve_tenant,
     allowed_actions,
+    capability_tenant_for,
     check_rate_limit,
     operation_index,
     report_host_error,
@@ -140,6 +141,7 @@ async def issue_capability_for_spec(
     # on_dropped_action (kohaku.host_core's contract) is synchronous, so dropped action names are collected
     # here and reported with a real await afterward, rather than firing an unawaited task per drop.
     dropped: list[str] = []
+    tenant = await capability_tenant_for(deps, tenant, request_id)
     token = await _host_core_issue_capability_for_spec(
         deps.authz,
         principal,
@@ -161,9 +163,11 @@ async def issue_capability_for_refs(
     refs: Sequence[str],
     deps: KohakuHostDeps,
     tenant: str | None = None,
+    request_id: str = "",
 ) -> str:
     """Issue a read capability covering the resolved QueryHandle URIs (for the streaming skeleton). `tenant`
     is bound into the capability when given (SPEC CAP-TEN-001); the keyword is omitted otherwise."""
+    tenant = await capability_tenant_for(deps, tenant, request_id)
     unique = list(dict.fromkeys(refs))
     scopes = [Scope(kind="read", ref=ref) for ref in unique]
     ttl = (
@@ -536,7 +540,7 @@ async def _compose_stream_body(
                         )
                         if ev.final
                         else await issue_capability_for_refs(
-                            principal, list(ev.refs), deps, session.tenant
+                            principal, list(ev.refs), deps, session.tenant, request_id
                         )
                     )
                 ev_actions = await _actions_for(deps, ev.spec, "compose/stream", request_id)

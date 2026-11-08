@@ -91,7 +91,7 @@ export async function issueSpecCapabilitySafely(
   allowedActions: () => Promise<ReadonlySet<string>>,
   report: (error: unknown) => void | Promise<void>,
   ttlSeconds?: number,
-  options?: { tenant?: string },
+  options?: Pick<IssueCapabilityOptions, "tenant">,
 ): Promise<string> {
   let allowed: ReadonlySet<string>;
   try {
@@ -160,7 +160,7 @@ export async function issueCapabilityForRefs(
   principal: Principal,
   refs: string[],
   ttlSeconds: number = DEFAULT_CAPABILITY_TTL_SECONDS,
-  options?: { tenant?: string },
+  options?: Pick<IssueCapabilityOptions, "tenant">,
 ): Promise<string> {
   const scopes = [...new Set(refs)].map((ref) => ({ kind: "read" as const, ref }));
   return authz.issueCapability(principal, scopes, issueOptions(ttlSeconds, options?.tenant));

@@ -320,7 +320,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
   //
   // Identity does not vanish there: /compose binds the JWT's tenant into the capability it issues, and the
   // data plane takes tenant, principal (capability `sub`) and rate-limit key from that signed capability
-  // rather than from headers (SPEC CAP-TEN-001), so an approve-tier Action's approval token (bound to the
+  // rather than from headers (SPEC CAP-TEN-002), so an approve-tier Action's approval token (bound to the
   // approver's tenant) matches the requester's tenant here too.
   const identityMiddleware = identity.middleware;
   if (identityMiddleware != null) {

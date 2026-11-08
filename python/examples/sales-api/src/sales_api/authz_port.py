@@ -30,6 +30,19 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+# Longest tenant claim `issue_capability` signs and `verify` accepts (TS: MAX_CAPABILITY_TENANT_LENGTH, in
+# UTF-16 code units; identical for the BMP identifiers this is meant for).
+MAX_CAPABILITY_TENANT_LENGTH = 256
+
+
+def _is_valid_tenant_claim(tenant: str) -> bool:
+    """A tenant claim is a short identifier: at most 256 characters and no control characters (SPEC
+    CAP-TEN-001), the same rule as TS's isValidTenantClaim."""
+    return len(tenant) <= MAX_CAPABILITY_TENANT_LENGTH and not any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F for ch in tenant
+    )
+
+
 class HmacAuthzPort:
     """An AuthzPort that issues and verifies HMAC-SHA256 capability tokens.
 
@@ -72,6 +85,11 @@ class HmacAuthzPort:
         }
         # An empty tenant is no tenant: it is never signed, so verify cannot return an empty-string tenant.
         if tenant:
+            if not _is_valid_tenant_claim(tenant):
+                raise ValueError(
+                    f"capability tenant must be at most {MAX_CAPABILITY_TENANT_LENGTH} characters "
+                    "with no control characters"
+                )
             payload_obj["tenant"] = tenant
         # Like TS's JSON.stringify: no separators, non-ASCII kept as UTF-8.
         payload = _b64url_encode(
@@ -113,8 +131,11 @@ class HmacAuthzPort:
         if not isinstance(scopes, list) or not isinstance(claims.get("sub"), str):
             return VerifyResult(ok=False, reason="malformed payload")
         scope_list = scopes
+        # An explicit `"tenant": null` is malformed, like TS's isHmacClaims (absent is fine).
         raw_tenant = claims.get("tenant")
-        if raw_tenant is not None and not isinstance(raw_tenant, str):
+        if "tenant" in claims and (
+            not isinstance(raw_tenant, str) or not _is_valid_tenant_claim(raw_tenant)
+        ):
             return VerifyResult(ok=False, reason="malformed payload")
         # An empty tenant claim (never signed by this issuer) counts as no tenant.
         tenant = raw_tenant or None

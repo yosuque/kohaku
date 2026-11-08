@@ -113,6 +113,15 @@ export function describeAuthzPortContract<P extends AuthzPort = AuthzPort>(
         expect(result.tenant).toBeUndefined();
       });
 
+      it("treats an empty-string tenant as tenant-less", async () => {
+        const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
+          tenant: "",
+        });
+        const result = await authz.verify(cap, { kind: "read", ref: "query://s/x" });
+        expect(result.ok).toBe(true);
+        expect(result.tenant).toBeUndefined();
+      });
+
       it("keeps the tenant out of reach of tampering (a modified token is rejected)", async () => {
         const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
           tenant: "acme",

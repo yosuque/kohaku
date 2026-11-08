@@ -12,6 +12,8 @@ import hashlib
 import hmac
 import json
 
+import pytest
+
 from kohaku.spec import Principal, Scope, VerifyRequest
 from sales_api.authz_port import create_hmac_authz_port
 
@@ -303,5 +305,72 @@ class TestTenantClaim:
             assert result.principal is not None and result.principal.id == "interop-user"
             strict = create_hmac_authz_port("interop-secret", require_tenant=True)
             assert (await strict.verify(_TS_TENANT_TOKEN, _TS_REQ)).ok is True
+
+        asyncio.run(run())
+
+
+# Issued by this port (secret "interop-secret", fixed clock, tenant "acme"); the identical literal is verified
+# by the TS test packages/authz-hmac/test/authz-port.test.ts, so the interop is bidirectional.
+_PY_TENANT_TOKEN = (
+    "eyJzdWIiOiJweS11c2VyIiwic2NvcGVzIjpbeyJraW5kIjoicmVhZCIsInJlZiI6InF1ZXJ5Oi8vc2FsZXMvc3VtbWFyeT9meT0yMDI2In1d"
+    "LCJleHAiOjQxMDI0NDQ4MDAsInRlbmFudCI6ImFjbWUifQ.vf71x9NdeJ2ilagq-UuWcnUBzwzfT6zuFCqA8q-sKEk"
+)
+
+
+def _signed_with(secret: str, **claims: object) -> str:
+    base: dict[str, object] = {
+        "sub": "u",
+        "scopes": [{"kind": "read", "ref": "query://s/x"}],
+        "exp": 4102444800,
+    }
+    base.update(claims)
+    payload = (
+        base64.urlsafe_b64encode(json.dumps(base, separators=(",", ":")).encode("utf-8"))
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    digest = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
+    return f"{payload}.{base64.urlsafe_b64encode(digest).rstrip(b'=').decode('ascii')}"
+
+
+class TestTenantClaimValidationAndInterop:
+    def test_issues_the_python_wire_token_the_ts_test_verifies(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("interop-secret", now=lambda: 1000.0)
+            token = await authz.issue_capability(
+                Principal(id="py-user"),
+                [Scope(kind="read", ref="query://sales/summary?fy=2026")],
+                ttl_seconds=4102444800 - 1000,
+                tenant="acme",
+            )
+            assert token == _PY_TENANT_TOKEN
+            result = await create_hmac_authz_port("interop-secret").verify(
+                _PY_TENANT_TOKEN,
+                _TS_REQ,
+            )
+            assert result.ok is True and result.tenant == "acme"
+
+        asyncio.run(run())
+
+    def test_an_explicit_null_tenant_claim_is_malformed(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("s")
+            req = VerifyRequest(kind="read", ref="query://s/x")
+            denied = await authz.verify(_signed_with("s", tenant=None), req)
+            assert denied.ok is False and denied.reason == "malformed payload"
+            assert (await authz.verify(_signed_with("s"), req)).ok is True
+
+        asyncio.run(run())
+
+    def test_over_long_or_control_character_tenants_are_rejected_on_verify_and_issue(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("s")
+            req = VerifyRequest(kind="read", ref="query://s/x")
+            assert (await authz.verify(_signed_with("s", tenant="a" * 256), req)).ok is True
+            for tenant in ("a" * 257, "ac\nme", "ac\x00me", "ac\x7fme"):
+                denied = await authz.verify(_signed_with("s", tenant=tenant), req)
+                assert denied.ok is False and denied.reason == "malformed payload"
+                with pytest.raises(ValueError, match="tenant"):
+                    await authz.issue_capability(PRINCIPAL, [], tenant=tenant)
 
         asyncio.run(run())

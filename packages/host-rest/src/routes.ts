@@ -217,7 +217,7 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
   app.use("/compose/stream", createRateLimitMiddleware(ctx, "compose"));
   app.use("/events", createRateLimitMiddleware(ctx, "compose"));
   // /binding/action and /binding/resolve are rate limited inside their handlers, after the capability is
-  // verified, keyed by the capability's tenant and subject (routes/binding.ts; SPEC CAP-TEN-001).
+  // verified, keyed by the capability's tenant and subject (routes/binding.ts; SPEC CAP-TEN-002).
 
   registerComposeRoutes(app, ctx);
   registerBindingRoutes(app, ctx);

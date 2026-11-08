@@ -314,6 +314,9 @@ class KohakuHostDeps:
     _routes.shared.operation_index). Not part of the public constructor — built lazily on first use, one
     per `KohakuHostDeps` instance (list_operations is async and must not be re-awaited on every action
     invoke / compose)."""
+    _tenant_unsupported_reported: bool = field(default=False, init=False, repr=False, compare=False)
+    """Whether the one-time `capability.tenant_unsupported` report was already made for `authz` (see
+    _routes.shared.capability_tenant_for). Not part of the public constructor."""
     _action_gate: ActionGate | None = field(default=None, init=False, repr=False, compare=False)
     """Memoized `ActionGate` (host_core's `create_action_gate`, design.md #62/#63; see
     _routes.shared.action_gate_for). Not part of the public constructor."""

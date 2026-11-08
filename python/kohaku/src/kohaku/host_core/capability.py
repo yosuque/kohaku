@@ -2,12 +2,53 @@
 
 from __future__ import annotations
 
+import inspect
+import weakref
 from collections.abc import Callable
 
 from kohaku.spec import AuthzPort, Principal, Scope, UISpec, collect_capability_scopes
 
 # Default capability TTL (seconds) when a host does not override it. Shared by the REST and MCP profiles.
 DEFAULT_CAPABILITY_TTL_SECONDS = 600
+
+
+_TENANT_SUPPORT_CACHE: weakref.WeakKeyDictionary[Callable[..., object], bool] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def authz_accepts_tenant(authz: AuthzPort) -> bool:
+    """Whether `authz.issue_capability` can be called with a `tenant` keyword (SPEC CAP-TEN-001): it names a
+    `tenant` parameter or takes `**kwargs`. Determined by `inspect.signature` (never by catching a TypeError
+    from a real call, which could mask an unrelated bug inside the port), once per underlying function: the
+    answer is cached, so a host that asks on every request pays for the inspection once. A port written
+    before the `tenant` keyword existed answers False; the host then issues without a tenant binding."""
+    method = authz.issue_capability
+    key: Callable[..., object] = getattr(method, "__func__", method)
+    try:
+        cached = _TENANT_SUPPORT_CACHE.get(key)
+    except TypeError:  # not weak-referenceable: inspect on every call
+        cached = None
+    if cached is not None:
+        return cached
+    try:
+        params = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        # No introspectable signature (a C callable, say): assume the contract is honoured.
+        return True
+    accepts = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD
+        or (
+            p.name == "tenant"
+            and p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        )
+        for p in params
+    )
+    try:
+        _TENANT_SUPPORT_CACHE[key] = accepts
+    except TypeError:
+        pass
+    return accepts
 
 
 class WriteScopeDroppedError(ValueError):
@@ -62,12 +103,13 @@ async def issue_capability_for_spec(
     name flowing unvalidated into a bearer write scope. Read scopes are untouched by this filter.
 
     `tenant` is the tenant to bind into the capability (SPEC CAP-TEN-001), when the host resolved one. The
-    `tenant=` keyword is passed to `authz.issue_capability` only when set, so a port that predates the option
-    sees exactly the call shape it always did.
+    `tenant=` keyword is passed to `authz.issue_capability` only when set and only when the port's signature
+    accepts it (`authz_accepts_tenant`): a port that predates the option sees exactly the call shape it always
+    did and the capability is issued without a tenant binding (the host reports that once; see host_rest).
     """
     scopes = _filter_allowed_scopes(
         collect_capability_scopes(spec), allowed_actions, on_dropped_action
     )
-    if tenant is None:
+    if tenant is None or not authz_accepts_tenant(authz):
         return await authz.issue_capability(principal, scopes, ttl_seconds=ttl_seconds)
     return await authz.issue_capability(principal, scopes, ttl_seconds=ttl_seconds, tenant=tenant)

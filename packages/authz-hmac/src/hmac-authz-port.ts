@@ -64,6 +64,17 @@ interface HmacClaims {
   tenant?: string;
 }
 
+/** Longest tenant claim `issueCapability` signs and `verify` accepts (UTF-16 code units). */
+const MAX_CAPABILITY_TENANT_LENGTH = 256;
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+
+/** A tenant claim is a short identifier: at most 256 code units and no control characters (SPEC CAP-TEN-001). */
+function isValidTenantClaim(tenant: string): boolean {
+  return tenant.length <= MAX_CAPABILITY_TENANT_LENGTH && !CONTROL_CHARACTERS.test(tenant);
+}
+
 function isHmacClaims(value: unknown): value is HmacClaims {
   if (typeof value !== "object" || value === null) return false;
   const c = value as Record<string, unknown>;
@@ -72,7 +83,7 @@ function isHmacClaims(value: unknown): value is HmacClaims {
     typeof c.exp === "number" &&
     Number.isFinite(c.exp) &&
     (c.jti === undefined || typeof c.jti === "string") &&
-    (c.tenant === undefined || typeof c.tenant === "string") &&
+    (c.tenant === undefined || (typeof c.tenant === "string" && isValidTenantClaim(c.tenant))) &&
     Array.isArray(c.scopes) &&
     c.scopes.every(
       (scope) =>
@@ -143,6 +154,11 @@ export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = 
 
   return {
     async issueCapability(principal: Principal, scopes: Scope[], opts = {}) {
+      if (opts.tenant != null && !isValidTenantClaim(opts.tenant)) {
+        throw new TypeError(
+          `capability tenant must be at most ${MAX_CAPABILITY_TENANT_LENGTH} characters with no control characters`,
+        );
+      }
       const payload = Buffer.from(
         JSON.stringify({
           sub: principal.id,

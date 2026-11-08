@@ -37,6 +37,7 @@ from .shared import (
     _promotion_key,
     _read_json,
     _resolve_tenant,
+    capability_tenant_for,
     report_host_error,
     request_id_of,
     require_governance,
@@ -295,13 +296,16 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             )
             preview_principal = await _get_principal(deps, request)
             preview_scopes = [Scope(kind="read", ref=ref)]
-            if ctx.tenant is None:
+            preview_tenant = await capability_tenant_for(
+                deps, ctx.tenant, request_id_of(request, deps)
+            )
+            if preview_tenant is None:
                 capability = await deps.authz.issue_capability(
                     preview_principal, preview_scopes, ttl_seconds=ttl
                 )
             else:
                 capability = await deps.authz.issue_capability(
-                    preview_principal, preview_scopes, ttl_seconds=ttl, tenant=ctx.tenant
+                    preview_principal, preview_scopes, ttl_seconds=ttl, tenant=preview_tenant
                 )
         preview: dict[str, Any] = {"html": html, "sha256": sha256}
         if ref is not None and capability is not None:

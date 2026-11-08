@@ -43,3 +43,9 @@ The packages in this scope share a single version and are designed to be install
 - Source: https://github.com/yosuque/kohaku/tree/main/packages/authz-hmac
 
 Licensed under the Apache License, Version 2.0.
+
+## Tenant claim
+
+`issueCapability(principal, scopes, { tenant })` signs an optional `tenant` claim into the token (payload `{ sub, scopes, exp, jti, tenant? }`), and `verify` returns it as `VerifyResult.tenant` (SPEC CAP-TEN-001 / CAP-TEN-002). A REST host passes the tenant its own request resolution produced, and the data plane then treats this signed value as authoritative over any tenant the request carries. An older verifier ignores the unknown claim, so a token with a tenant still verifies there. The claim is a short identifier: at most 256 characters and no control characters. `issueCapability` throws on an invalid one, `verify` treats it (or an explicit `"tenant": null`) as a malformed payload, and an empty string is no tenant at all (never signed).
+
+**`requireTenant`**: `options.requireTenant` (default `false`) makes `verify` reject a token that carries no tenant claim (reason `"capability lacks tenant"`), the same shape as `requireJti`. Roll it out in two steps: first upgrade every host that issues capabilities, then enable it, because tokens minted by an older host are tenant-less for up to the capability TTL. Leave it off while a profile that never resolves a tenant (the MCP host) shares the port, or for single-tenant deployments.

@@ -12,7 +12,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { createKohakuRoutes, type KohakuHostDeps } from "../src/index.js";
 
-// SPEC CAP-TEN-001: on the REST data plane (/binding/resolve, /binding/action) the tenant signed into the
+// SPEC CAP-TEN-002: on the REST data plane (/binding/resolve, /binding/action) the tenant signed into the
 // capability is authoritative over the one the request itself resolves (deps.tenant), a disagreement is a
 // 403, a tenant-less (pre-upgrade) capability falls back to deps.tenant, and the rate-limit key is the
 // verified (tenant, capability sub, routeClass), taken only after the capability verified.
@@ -79,7 +79,7 @@ async function act(deps: KohakuHostDeps, body: unknown, headers: Record<string, 
   });
 }
 
-describe("/binding/*: the capability's tenant is authoritative (CAP-TEN-001)", () => {
+describe("/binding/*: the capability's tenant is authoritative (CAP-TEN-002)", () => {
   it("resolve: the capability's tenant reaches the DomainPort even when deps.tenant resolves nothing", async () => {
     const rec = recordingDomain();
     const deps = depsWith({
@@ -274,5 +274,70 @@ describe("/binding/*: rate limiting runs after verification, keyed by the capabi
     expect(onRateLimited).toHaveBeenCalledWith(
       expect.objectContaining({ tenant: "acme", principal: "cap-user", routeClass: "resolve" }),
     );
+  });
+});
+
+describe("/binding/action: cheap rejections and rate-limit accounting", () => {
+  it("a missing bearer is 401 before the body is read (even a malformed body)", async () => {
+    const deps = depsWith({ domain: recordingDomain().domain, authz: authzBinding({}) });
+    const res = await createKohakuRoutes(deps).request("/binding/action", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_REQUIRED");
+  });
+
+  it("a request tenant equal to the capability's passes and no tenant anywhere leaves the tenant unset", async () => {
+    const rec = recordingDomain({ name: "annotate", description: "d" });
+    const bound = depsWith({
+      domain: rec.domain,
+      authz: authzBinding({ tenant: "acme" }),
+      tenant: headerTenant,
+    });
+    expect(
+      (await act(bound, { action: "annotate", payload: {} }, { "x-kohaku-tenant": "acme" })).status,
+    ).toBe(200);
+    expect(rec.invocations[0]!.ctx.tenant).toBe("acme");
+
+    const none = recordingDomain({ name: "annotate", description: "d" });
+    expect(
+      (
+        await act(depsWith({ domain: none.domain, authz: authzBinding({}) }), {
+          action: "annotate",
+          payload: {},
+        })
+      ).status,
+    ).toBe(200);
+    expect("tenant" in none.invocations[0]!.ctx).toBe(false);
+  });
+
+  it("a tenant-mismatch 403 does not consume a rate-limit token", async () => {
+    const take = vi.fn(async () => ({ allow: true as const }));
+    const deps = depsWith({
+      domain: recordingDomain({ name: "annotate", description: "d" }).domain,
+      authz: authzBinding({ tenant: "acme" }),
+      tenant: headerTenant,
+      rateLimiter: { take },
+    });
+    const res = await act(deps, { action: "annotate", payload: {} }, { "x-kohaku-tenant": "globex" });
+    expect(res.status).toBe(403);
+    expect(take).not.toHaveBeenCalled();
+  });
+
+  it("a 429 runs neither the action gate nor domain.invoke", async () => {
+    const rec = recordingDomain({ name: "delete", description: "d", tier: "approve" });
+    const verifyApproval = vi.fn();
+    const deps = depsWith({
+      domain: rec.domain,
+      authz: authzBinding({ tenant: "acme" }),
+      approvals: { issueApproval: vi.fn(), verifyApproval } as unknown as ApprovalPort,
+      rateLimiter: { take: async () => ({ allow: false as const, retryAfterMs: 1000 }) },
+    });
+    const res = await act(deps, { action: "delete", payload: {}, approval: "tok" });
+    expect(res.status).toBe(429);
+    expect(verifyApproval).not.toHaveBeenCalled();
+    expect(rec.invocations).toHaveLength(0);
   });
 });

@@ -216,7 +216,10 @@ class AuthzPort(Protocol):
         tenant: str | None = None,
     ) -> str:
         """Issues a capability token. `tenant`, when given, is bound into the signed token and echoed back as
-        `VerifyResult.tenant` by `verify` (SPEC CAP-TEN-001). A port that cannot carry a tenant MAY ignore it."""
+        `VerifyResult.tenant` by `verify` (SPEC CAP-TEN-001). A port that cannot carry a tenant MAY ignore its
+        value, but it MUST accept the keyword: the REST host detects a port whose signature does not
+        (`kohaku.host_core.authz_accepts_tenant`), issues without a tenant binding for it, and reports that
+        once through `on_error` (endpoint `capability.tenant_unsupported`)."""
         ...
 
     async def verify(self, token: str, req: VerifyRequest) -> VerifyResult: ...

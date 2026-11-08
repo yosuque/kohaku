@@ -565,6 +565,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         action: str,
         payload: JsonObject,
         principal: Principal,
+        tenant: str | None,
         correlation_id: str | None,
     ) -> mcp_types.CallToolResult | None:
         """Maps one ActionGate.check outcome onto the MCP tool response (design.md #62/#63), the wire-mapping
@@ -572,8 +573,8 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
         audit trail and the client-visible messages are host_core's `record_action_gate_result` (shared with
         REST); this keeps only the tool-error mapping. Returns the CallToolResult to send back (invalid /
         approvalRequired / denied), or None when the gate allowed the invoke and the caller should proceed to
-        domain.invoke. This profile never resolves a tenant, so `tenant` is always None on every recorded
-        event (mirrors `rate_limiter`'s doc comment)."""
+        domain.invoke. This profile never resolves a tenant of its own: `tenant` is only the one the verified
+        capability binds (SPEC CAP-TEN-002), None for a tenant-less capability."""
         outcome = await record_action_gate_result(
             gate_result,
             ActionAuditContext(
@@ -581,7 +582,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 action=action,
                 payload=payload,
                 principal=principal,
-                tenant=None,
+                tenant=tenant,
                 correlation_id=correlation_id,
                 report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
             ),
@@ -914,10 +915,16 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             verdict = await deps.authz.verify(capability, VerifyRequest(kind="read", ref=base.raw))
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
+            # The capability's signed tenant, when it binds one (a REST-issued capability replayed here), is
+            # carried through to the invocation; this profile resolves no tenant of its own (CAP-TEN-002).
             data = await deps.domain.invoke(
                 base.path,
                 params,
-                InvocationContext(principal=verdict.principal or principal, capability=capability),
+                InvocationContext(
+                    principal=verdict.principal or principal,
+                    capability=capability,
+                    tenant=verdict.tenant or None,
+                ),
             )
             rows = len(data.rows) if isinstance(data, TabularData) else 0
             return mcp_types.CallToolResult(
@@ -1087,6 +1094,8 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
             resolved_principal = verdict.principal or principal
+            # The tenant the capability itself binds (CAP-TEN-002); this profile resolves none of its own.
+            tenant = verdict.tenant or None
             # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
             # domain.invoke ever runs, symmetric with the REST surface's /binding/action. An action absent
             # from the DomainPort's own operation index -- whether because the index and DomainPort
@@ -1095,7 +1104,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # rather than let through ungated (fail-closed; ACT-PRM-001, MCPAPP-ACT-001). A rejected
             # operation index (list_operations() raising) is likewise fail-closed for this call, and a declared
             # operation whose paramsSchema failed validation is fail-closed for that operation alone.
-            # The audit context is built once for every denial site below (this profile resolves no tenant).
+            # The audit context is built once for every denial site below.
             # A gate that cannot decide at all -- the operation index rejecting, or the gate / ApprovalPort
             # raising -- is audited as `action.denied` through host_core's
             # record_action_gate_unavailable_denial (ACT-APR-001), REST's `_gate_unavailable` counterpart.
@@ -1104,7 +1113,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 action=action,
                 payload=payload,
                 principal=resolved_principal,
-                tenant=None,
+                tenant=tenant,
                 correlation_id=_correlation_id_of(ctx),
                 report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
             )
@@ -1132,7 +1141,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                         confirmed=confirmed,
                         approval=approval,
                         requester_id=resolved_principal.id,
-                        tenant=None,
+                        tenant=tenant,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 — the gate could not decide: a fail-closed denial
@@ -1148,6 +1157,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 action=action,
                 payload=payload,
                 principal=resolved_principal,
+                tenant=tenant,
                 correlation_id=_correlation_id_of(ctx),
             )
             if gated is not None:
@@ -1155,7 +1165,9 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             result = await deps.domain.invoke(
                 action,
                 payload,
-                InvocationContext(principal=resolved_principal, capability=capability),
+                InvocationContext(
+                    principal=resolved_principal, capability=capability, tenant=tenant
+                ),
             )
             # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions
             # into the response (same shape as REST). The write is already committed; a side-effect-declaration

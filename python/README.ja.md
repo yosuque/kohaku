@@ -453,6 +453,10 @@ Python 側ではそもそも独立パッケージ境界を持たないため(TS 
 `test_approval_port.py` は、TS サンプル自身の統制された Action デモを写している(全体の手順は
 [ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。
 
+## capability のテナント(TS と対称)
+
+`AuthzPort.issue_capability(principal, scopes, *, ttl_seconds=None, tenant=None)` と `VerifyResult.tenant` は TS の契約を写す(SPEC CAP-TEN-001 / CAP-TEN-002、design.md #75): REST の発行は解決済みテナントを束縛し、`/binding/*` は capability のテナントを正として扱い(`InvocationContext.tenant`。不一致は 403 `CAPABILITY_DENIED`)、MCP のデータ面ツールは検証済み capability が束縛するテナントを運ぶ。**独自 Port には破壊的**: 独自の Python `AuthzPort` は `issue_capability` に `tenant: str | None = None` を足すべきである(値は無視してよい)— Protocol がこのキーワードを要求するため、古いシグネチャは mypy で失敗する。実行時には REST ホストがシグネチャを一度だけ検査し(`inspect.signature`。`try/except TypeError` は使わない)、キーワードを持たない Port に対してはテナント束縛**なし**で capability を発行して `on_error`(エンドポイント `capability.tenant_unsupported`)に一度だけ報告する。したがってそうした Port では束縛が黙って失われる — アップグレードすること。sales-api の `HmacAuthzPort` は `tenant` claim(と `require_tenant=True`)を持ち、TS とワイヤ互換である。
+
 ## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)
 
 `kohaku.host_core.format_error_chain`(Python の例外連鎖属性 `__cause__` を辿る。TS の ES2022

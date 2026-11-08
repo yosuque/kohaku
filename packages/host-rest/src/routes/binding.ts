@@ -97,7 +97,7 @@ function resolvePrincipal(deps: KohakuHostDeps, c: Context, verdict: VerifyResul
 const CAPABILITY_TENANT_MISMATCH_MESSAGE = "capability tenant does not match the request tenant";
 
 /**
- * The tenant a verified capability runs under (SPEC CAP-TEN-001). The tenant signed into the capability is
+ * The tenant a verified capability runs under (SPEC CAP-TEN-002). The tenant signed into the capability is
  * authoritative: when the host also resolves a tenant for this request (`deps.tenant`) and it differs, the
  * request is denied (fail-closed) rather than silently preferring either side. A capability that binds no
  * tenant (issued by a host that never resolved one, or before tenants were signed) falls back to the host's
@@ -117,7 +117,7 @@ async function effectiveTenant(
   return bound;
 }
 
-/** What `authorizeCapability` hands a capability-gated handler: who acts, and under which tenant. */
+/** What `authorizeAndRateLimit` hands a capability-gated handler: who acts, and under which tenant. */
 interface AuthorizedCapability {
   principal: Principal;
   tenant: string | undefined;
@@ -132,7 +132,7 @@ interface AuthorizedCapability {
  * from unauthenticated request headers. Returns the Response to return as-is on any denial, or the resolved
  * principal and tenant.
  */
-async function authorizeCapability(
+async function authorizeAndRateLimit(
   ctx: RouteContext,
   c: Context,
   endpoint: string,
@@ -193,7 +193,7 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     }
     const { base, params } = parsed.ref;
 
-    const authorized = await authorizeCapability(
+    const authorized = await authorizeAndRateLimit(
       ctx,
       c,
       "binding/resolve",
@@ -228,13 +228,15 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
 
   // --- Write-through path (presentForm submit, etc.) ---
   app.post("/binding/action", async (c) => {
-    const body = await parseBody(c, ActionBodySchema, "action is required");
-    if (body instanceof Response) return body;
+    // The bearer's presence is checked before the body is read and parsed: with the rate limiter now behind
+    // capability verification, a flood of unauthenticated requests should be turned away as cheaply as possible.
     const token = bearerToken(c);
     if (token == null) {
       return c.json(errorBody("CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required"), 401);
     }
-    const authorized = await authorizeCapability(
+    const body = await parseBody(c, ActionBodySchema, "action is required");
+    if (body instanceof Response) return body;
+    const authorized = await authorizeAndRateLimit(
       ctx,
       c,
       "binding/action",
@@ -243,7 +245,7 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
       "action",
     );
     if (authorized instanceof Response) return authorized;
-    // The tenant is the capability's signed one (SPEC CAP-TEN-001), not the request header's: it scopes the
+    // The tenant is the capability's signed one (SPEC CAP-TEN-002), not the request header's: it scopes the
     // approval token binding below, the audit record and the domain invocation alike.
     const { principal, tenant } = authorized;
     // body.payload is already a validated JsonObject | undefined (ActionBodySchema); no cast needed.

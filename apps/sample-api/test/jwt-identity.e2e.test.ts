@@ -163,7 +163,7 @@ describe("sample-api with KOHAKU_AUTHZ=jwt wiring", () => {
     });
   });
 
-  describe("the data plane under JWT: the capability carries the tenant (SPEC CAP-TEN-001)", () => {
+  describe("the data plane under JWT: the capability carries the tenant (SPEC CAP-TEN-002)", () => {
     const RECORDS_GUI = {
       input: { kind: "gui", action: "view.select", params: { intent: "sales.records" } },
     };

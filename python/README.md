@@ -490,6 +490,10 @@ part of the sample app, not as separately importable packages). `python/examples
 / `test_approval_port.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
 
+## Capability tenant (symmetric with TS)
+
+`AuthzPort.issue_capability(principal, scopes, *, ttl_seconds=None, tenant=None)` and `VerifyResult.tenant` mirror the TS contract (SPEC CAP-TEN-001 / CAP-TEN-002; design.md #75): REST issuance binds the resolved tenant, `/binding/*` treats the capability's tenant as authoritative (`InvocationContext.tenant`; mismatch is 403 `CAPABILITY_DENIED`), and the MCP data-plane tools carry a tenant a verified capability binds. **Breaking for custom ports**: a custom Python `AuthzPort` should add `tenant: str | None = None` to `issue_capability` (it may ignore the value) — the Protocol now requires the keyword, so an older signature fails mypy. At runtime the REST host inspects the signature once (`inspect.signature`, never `try/except TypeError`); for a port without the keyword it issues the capability **without** a tenant binding and reports once through `on_error` (endpoint `capability.tenant_unsupported`). The binding is therefore silently absent for such a port — upgrade it. The sales-api `HmacAuthzPort` carries a `tenant` claim (and `require_tenant=True`), wire-compatible with TS.
+
 ## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
 
 `kohaku.host_core.format_error_chain` (walks Python's `__cause__` exception-chaining attribute, the
