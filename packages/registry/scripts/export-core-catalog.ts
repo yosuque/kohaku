@@ -15,7 +15,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { coreCatalog } from "../src/core/index.js";
-import { toPropsJsonSchema } from "../src/json-schema.js";
+import { toCoreCatalogEntry } from "./core-catalog-entry.js";
 
 const OUT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -25,21 +25,7 @@ mkdirSync(dirname(OUT_PATH), { recursive: true });
 
 const components = [...coreCatalog.components]
   .sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : 0))
-  .map((def) => ({
-    type: def.type,
-    version: def.version,
-    description: def.description,
-    capabilities: def.capabilities,
-    implementation: def.implementation ?? { kind: "native" },
-    ...(def.generation != null ? { generation: def.generation } : {}),
-    ...(def.fallback != null ? { fallbackType: def.fallback.type } : {}),
-    // migrateProps is a function (like fallback.mapProps) and cannot be serialized; only a marker is
-    // exported, and the function is hand-ported into the Python _MIGRATE_PROPS table. deprecated is plain
-    // data, so it is exported as-is when present.
-    ...(def.migrateProps != null ? { hasMigrateProps: true } : {}),
-    ...(def.deprecated != null ? { deprecated: def.deprecated } : {}),
-    propsSchema: toPropsJsonSchema(def),
-  }));
+  .map(toCoreCatalogEntry);
 
 writeFileSync(
   OUT_PATH,

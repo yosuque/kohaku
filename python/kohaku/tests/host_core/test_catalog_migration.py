@@ -6,6 +6,8 @@ import asyncio
 from dataclasses import dataclass, replace
 from typing import Any
 
+import pytest
+
 from kohaku.host_core import (
     CatalogMigrationApplyResult,
     CatalogMigrationFixationReplacer,
@@ -325,6 +327,65 @@ def test_rewrites_type_and_version_even_without_migrate_props() -> None:
     # replacedBy did not pin a version, so the old version pin is cleared rather than carried over.
     assert rewritten.version is None
     assert rewritten.props == {"label": "Revenue"}
+
+
+def _plan_with_migrate_props(
+    migrate: Any, *, new_type: ComponentDefinition | None = None
+) -> CatalogMigrationPlan:
+    old = replace(_old_clean_type_def(), migrate_props=migrate)
+    catalog = resolve_catalog(
+        core_catalog(), Catalog(components=[new_type or _new_type_def(), old])
+    )
+    storage = _StubStorage({None: [_clean_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    return asyncio.run(run())
+
+
+def test_a_migrate_props_that_throws_propagates_out_of_the_plan() -> None:
+    # Same as TS: planCatalogMigration does not catch a throwing migrateProps.
+    def boom(_props: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("migrate exploded")
+
+    with pytest.raises(RuntimeError, match="migrate exploded"):
+        _plan_with_migrate_props(boom)
+
+
+@pytest.mark.parametrize("bad_result", [None, [], "x", 0])
+def test_a_non_object_migrate_props_result_is_blocked_with_the_reason(bad_result: Any) -> None:
+    # The replacement has no required fields here, so a None/[] result would otherwise validate (Python's
+    # catalog.validate collapses a falsy props to {}) and pin props=None. TS rejects it in safeParse.
+    label_only = define_component(
+        ComponentDefinition(
+            type=NEW_TYPE,
+            version="2.0.0",
+            description="new kpi card (no required fields)",
+            propsSchema=PropsSchema(
+                {"type": "object", "properties": {"label": {"type": "string"}}}
+            ),
+            capabilities=CapabilityDecl(events=[], data="required", children="none"),
+        )
+    )
+    plan = _plan_with_migrate_props(lambda _p: bad_result, new_type=label_only)
+    assert plan.steps == []
+    assert len(plan.blocked) == 1
+    blocked = plan.blocked[0]
+    assert blocked.intentHash == INTENT_HASH_CLEAN
+    assert blocked.types == [OLD_CLEAN_TYPE]
+    assert blocked.issues == [
+        f"kpi1: migrate_props returned {type(bad_result).__name__}, expected an object"
+    ]
+
+
+def test_reshaped_props_that_still_fail_the_replacement_schema_are_blocked() -> None:
+    # migrate_props runs but yields props the replacement rejects (format outside the enum).
+    plan = _plan_with_migrate_props(lambda p: {"label": p["label"], "format": "bogus"})
+    assert plan.steps == []
+    assert len(plan.blocked) == 1
+    assert plan.blocked[0].types == [OLD_CLEAN_TYPE]
+    assert "kpi1:" in plan.blocked[0].issues[0]
 
 
 def test_skips_a_fixation_referencing_no_deprecated_type_entirely() -> None:

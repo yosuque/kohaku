@@ -93,13 +93,24 @@ def _rewrite_node(
     node: ComponentNode,
     to: dict[str, str],
     migrate_props: Callable[[JsonObject], JsonObject] | None,
-) -> ComponentNode:
+) -> tuple[ComponentNode, str | None]:
     """Rewrites a node's type/version and, when the deprecated part declares migrate_props, its props
-    (otherwise the props are carried over unchanged)."""
+    (otherwise the props are carried over unchanged).
+
+    Returns (node, shape_issue). A migrate_props result that is not an object (a dict) yields a
+    shape_issue and the node is returned unrewritten: Python's ResolvedCatalog.validate collapses a falsy
+    `props` to `{}`, so letting a None through could pin `props=None` where TS's safeParse(undefined)
+    would reject it. The caller reports the issue in `blocked`. An exception raised by migrate_props is
+    not caught (as in TS): it propagates out of plan_catalog_migration."""
     update: dict[str, Any] = {"type": to["type"], "version": to.get("version")}
     if migrate_props is not None:
-        update["props"] = migrate_props(node.props)
-    return node.model_copy(update=update)
+        migrated = migrate_props(node.props)
+        if not isinstance(migrated, dict):
+            return node, (
+                f"{node.id}: migrate_props returned {type(migrated).__name__}, expected an object"
+            )
+        update["props"] = migrated
+    return node.model_copy(update=update), None
 
 
 @dataclass(frozen=True)
@@ -201,6 +212,7 @@ async def plan_catalog_migration(
             rewritten_node_ids: list[str] = []
             touched_types: set[str] = set()
             rewritten_components: list[ComponentNode] = []
+            shape_issues: list[str] = []
             for node in fixation.pinnedSpec.components:
                 match = migration_map.get(node.type)
                 if match is None:
@@ -208,9 +220,23 @@ async def plan_catalog_migration(
                     continue
                 rewritten_node_ids.append(node.id)
                 touched_types.add(node.type)
-                rewritten_components.append(_rewrite_node(node, match.to, match.migrate_props))
+                rewritten_node, shape_issue = _rewrite_node(node, match.to, match.migrate_props)
+                if shape_issue is not None:
+                    shape_issues.append(shape_issue)
+                rewritten_components.append(rewritten_node)
             if len(rewritten_node_ids) == 0:
                 continue  # this fixation does not reference any migrated type
+
+            if len(shape_issues) > 0:
+                blocked.append(
+                    CatalogMigrationBlocked(
+                        intentHash=fixation.intentHash,
+                        tenant=tenant,
+                        types=sorted(touched_types),
+                        issues=shape_issues,
+                    )
+                )
+                continue
 
             new_pinned_spec = fixation.pinnedSpec.model_copy(
                 update={"components": rewritten_components}
