@@ -9,3 +9,5 @@ against exactly the same behavior instead of each writing its own ad hoc asserti
 This package is private and test-only: it is never published, holds no runtime behavior of its own, and
 exists purely so the port contract is defined once and consumed from each implementation's own test suite
 (e.g. `packages/storage-memory/test/contract.test.ts`, `packages/authz-hmac/test/contract.test.ts`).
+
+Optional `StoragePort` extensions are opt-in per suite (`requirePaging`, `requirePutPromotionStates`, `requireDeleteFixation`, `requireCompareAndSet`): an enabled extension is mandatory (a port missing it fails), an omitted one registers its cases as skipped so the report shows they did not run. An adapter that sets `supportsCompareAndSet: true` must pass `requireCompareAndSet: true`: exact / stale / `null` / absent `expectedRevision` on `putPromotionState`, `putFixation` (with and without `ifPresent`) and `deleteFixation`, the legacy record without a `revision`, per-tenant scoping, and two concurrent writes from the same base with exactly one winner.

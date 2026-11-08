@@ -83,8 +83,8 @@ describe("conformance manifest metadata", () => {
     const musts = REQUIREMENTS.filter((r) => r.level === "MUST");
     const shoulds = REQUIREMENTS.filter((r) => r.level === "SHOULD");
     expect(musts.length, "total MUST count").toBe(37);
-    expect(shoulds.length, "total SHOULD count").toBe(15);
-    expect(REQUIREMENTS.length, "total requirement count").toBe(52);
+    expect(shoulds.length, "total SHOULD count").toBe(16);
+    expect(REQUIREMENTS.length, "total requirement count").toBe(53);
   });
 
   it("pins the per-target MUST breakdown", () => {
