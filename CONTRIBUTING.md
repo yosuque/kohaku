@@ -40,7 +40,7 @@ An LLM key is not required to get started: the L0 fixed Specs (and everything `p
 
 ## 5. Generated artifacts
 
-Several files in this repository are generated, not hand-written. CI regenerates each one and fails the build on any diff (`git diff --exit-code`), so **a change that requires regeneration must include the regenerated output in the same commit**. Never hand-edit a generated file listed below.
+Several files in this repository are generated, not hand-written. CI regenerates each one and fails the build on any diff (`git diff --exit-code`; the init goldens are instead byte-compared by `pnpm test`), so **a change that requires regeneration must include the regenerated output in the same commit**. Never hand-edit a generated file listed below.
 
 | Command | Output | When it is needed |
 |---|---|---|

@@ -51,7 +51,9 @@ for (const step of STEPS) {
     env: { ...process.env, ...step.env },
   });
   if (result.status !== 0) {
-    console.error(`\nregen stopped: "${step.label}" failed (exit ${result.status ?? result.signal}).`);
+    // `error` is set when the spawn itself failed (e.g. ENOENT: pnpm is not on PATH); status is then null.
+    const reason = result.error?.message ?? `exit ${result.status ?? result.signal}`;
+    console.error(`\nregen stopped: "${step.label}" failed (${reason}).`);
     process.exit(result.status ?? 1);
   }
 }
