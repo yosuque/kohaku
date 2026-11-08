@@ -78,14 +78,24 @@ describe.each(SNIPPETS)("$page ⇄ $snippet", ({ page, snippet, maxLines, nth })
  * prompt a reader copies is always the one this suite checked. The prompts are English in both languages: they
  * are instructions for a model, and the repository's own API names, package names and commands are English.
  */
-const PROMPTS: { page: string; prompt: string }[] = [
-  { page: "docs/paths/react-dashboard.md", prompt: "snippets/agent-prompts/react-dashboard.md" },
-  { page: "docs/paths/mcp-apps.md", prompt: "snippets/agent-prompts/mcp-apps.md" },
-  { page: "docs/paths/full-stack.md", prompt: "snippets/agent-prompts/full-stack.md" },
-  { page: "python/README.md", prompt: "snippets/agent-prompts/python-host.md" },
+const PROMPTS: { page: string; prompt: string; lang: "ts" | "py" }[] = [
+  { page: "docs/paths/react-dashboard.md", prompt: "snippets/agent-prompts/react-dashboard.md", lang: "ts" },
+  { page: "docs/paths/mcp-apps.md", prompt: "snippets/agent-prompts/mcp-apps.md", lang: "ts" },
+  { page: "docs/paths/full-stack.md", prompt: "snippets/agent-prompts/full-stack.md", lang: "ts" },
+  { page: "python/README.md", prompt: "snippets/agent-prompts/python-host.md", lang: "py" },
 ];
 
-const PROMPT_MAX_LINES = 40;
+/** 40 held for the first round; the mandatory auth / secret / `--intent` / L0 requirements need up to 45. */
+const PROMPT_MAX_LINES = 45;
+
+/** The body of a prompt's `HEADING` section (sections are blank-line-separated blocks led by an ALL-CAPS line). */
+function section(prompt: string, heading: string): string | null {
+  const block = prompt
+    .trimEnd()
+    .split(/\n\n(?=[A-Z][A-Z ]+\n)/)
+    .find((b) => b.startsWith(`${heading}\n`));
+  return block == null ? null : block.slice(heading.length + 1);
+}
 
 /** Every fenced ```text block of a Markdown string, in order. */
 function textBlocks(markdown: string): string[] {
@@ -112,36 +122,78 @@ describe.each(PROMPTS)("$page ⇄ $prompt (agent prompt)", ({ page, prompt }) =>
   it(`fits in ${PROMPT_MAX_LINES} lines`, () => {
     expect(source.split("\n").length).toBeLessThanOrEqual(PROMPT_MAX_LINES);
   });
+
+  it("has every section, and ends with a conformance check against the prompt's own Intent", () => {
+    for (const heading of ["GOAL", "INSTALL", "RULES", "STEPS", "DONE WHEN"]) {
+      expect(section(source, heading), heading).not.toBeNull();
+    }
+    const done = section(source, "DONE WHEN") ?? "";
+    expect(done).toContain("conformance --rest");
+    // Without --intent the CLI checks the sample's sales.quarterly_summary, which a new app does not serve.
+    expect(done).toContain("--intent");
+  });
 });
 
-/** Source roots a prompt's API names must resolve in: every package, the CLI, the Python port and its sample. */
-function sourceFiles(dir: string): string[] {
+describe("the RULES block is identical in every prompt (each prompt stays self-contained, so it is copied, not shared)", () => {
+  const rules = PROMPTS.map(({ prompt }) => section(readFileSync(join(SITE_DIR, prompt), "utf8"), "RULES"));
+
+  it("exists, and every prompt carries the same one", () => {
+    expect(rules[0]).not.toBeNull();
+    for (const r of rules) expect(r).toBe(rules[0]);
+  });
+
+  it("covers auth, the capability secret and the no-real-LLM rule", () => {
+    expect(rules[0]).toContain("ANONYMOUS");
+    expect(rules[0]).toContain("KOHAKU_CAPABILITY_SECRET");
+    expect(rules[0]).toContain("FakeLlm");
+  });
+});
+
+/** Every `.ts` / `.tsx` (kind "ts") or `.py` (kind "py") file under `dir`. */
+function sourceFiles(dir: string, kind: "ts" | "py"): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) continue;
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...sourceFiles(full));
-    else if (/\.(ts|tsx|py)$/.test(entry.name)) out.push(full);
+    if (entry.isDirectory()) out.push(...sourceFiles(full, kind));
+    else if ((kind === "ts" ? /\.tsx?$/ : /\.py$/).test(entry.name)) out.push(full);
   }
   return out;
+}
+
+/** The concatenated source of every file of `kind` under `roots`. */
+function corpusOf(roots: string[], kind: "ts" | "py"): string {
+  return roots
+    .filter((r) => existsSync(r))
+    .flatMap((r) => sourceFiles(r, kind))
+    .map((f) => readFileSync(f, "utf8"))
+    .join("\n");
+}
+
+interface WorkspacePackage {
+  name: string;
+  private?: boolean;
+  exports?: Record<string, unknown>;
 }
 
 /** Names that look like code but are product / prose words, or illustrative placeholders. */
 const NOT_API_NAMES = new Set(["FastAPI", "sales_summary"]);
 
 describe("agent prompts only name things that exist in this repository", () => {
-  const roots = [
-    ...readdirSync(join(REPO_ROOT, "packages")).map((p) => join(REPO_ROOT, "packages", p, "src")),
-    join(REPO_ROOT, "cli/src"),
-    join(REPO_ROOT, "python/kohaku/src"),
-    join(REPO_ROOT, "python/examples"),
-  ].filter((p) => existsSync(p));
-  const corpus = roots
-    .flatMap((r) => sourceFiles(r))
-    .map((f) => readFileSync(f, "utf8"))
-    .join("\n");
+  // A TypeScript prompt may only name TypeScript things, a Python prompt only Python things: matching a Python
+  // prompt's identifiers against the TS sources (or the reverse) would pass an API that exists in the wrong port.
+  const corpus = {
+    ts: corpusOf(
+      [
+        ...readdirSync(join(REPO_ROOT, "packages")).map((p) => join(REPO_ROOT, "packages", p, "src")),
+        join(REPO_ROOT, "cli/src"),
+      ],
+      "ts",
+    ),
+    py: corpusOf([join(REPO_ROOT, "python/kohaku/src"), join(REPO_ROOT, "python/examples")], "py"),
+  };
 
-  const workspacePackages = new Set<string>();
+  const workspacePackages = new Map<string, WorkspacePackage>();
   for (const dir of ["packages", "cli", "spec"]) {
     const base = join(REPO_ROOT, dir);
     const manifests =
@@ -149,26 +201,42 @@ describe("agent prompts only name things that exist in this repository", () => {
         ? readdirSync(base).map((p) => join(base, p, "package.json"))
         : [join(base, "package.json")];
     for (const m of manifests) {
-      if (existsSync(m))
-        workspacePackages.add((JSON.parse(readFileSync(m, "utf8")) as { name: string }).name);
+      if (!existsSync(m)) continue;
+      const pkg = JSON.parse(readFileSync(m, "utf8")) as WorkspacePackage;
+      workspacePackages.set(pkg.name, pkg);
     }
   }
 
-  describe.each(PROMPTS)("$prompt", ({ prompt }) => {
+  describe.each(PROMPTS)("$prompt", ({ prompt, lang }) => {
     const source = readFileSync(join(SITE_DIR, prompt), "utf8");
 
-    it("every @kohaku-ui/* package is a workspace package", () => {
-      const named = [...source.matchAll(/@kohaku-ui\/[a-z0-9-]+/g)].map((m) => m[0]);
-      expect([...new Set(named)].filter((n) => !workspacePackages.has(n))).toEqual([]);
+    it("every @kohaku-ui/* package is a published workspace package", () => {
+      const named = [...new Set([...source.matchAll(/@kohaku-ui\/[a-z0-9-]+/g)].map((m) => m[0]))];
+      const bad = named.filter((n) => {
+        const pkg = workspacePackages.get(n);
+        return pkg == null || pkg.private === true;
+      });
+      expect(bad).toEqual([]);
     });
 
-    it("every CamelCase / camelCase / snake_case identifier is defined somewhere in the source", () => {
+    it("every @kohaku-ui/<pkg>/<subpath> is an entry in that package's exports", () => {
+      const subpaths = [...source.matchAll(/(@kohaku-ui\/[a-z0-9-]+)\/([a-z0-9-]+(?:\/[a-z0-9-]+)*)/g)];
+      const bad = subpaths
+        .filter(([, name, sub]) => {
+          const exportsMap = workspacePackages.get(name ?? "")?.exports ?? {};
+          return !(`./${sub}` in exportsMap);
+        })
+        .map(([whole]) => whole);
+      expect(bad).toEqual([]);
+    });
+
+    it("every CamelCase / camelCase / snake_case identifier is defined in this prompt's own language", () => {
       const names = new Set(
         source.match(/\b(?:[A-Z][a-z0-9]+){2,}\b|\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[a-z]+(?:_[a-z0-9]+)+\b/g) ??
           [],
       );
       const missing = [...names].filter(
-        (n) => !NOT_API_NAMES.has(n) && !new RegExp(`\\b${n}\\b`).test(corpus),
+        (n) => !NOT_API_NAMES.has(n) && !new RegExp(`\\b${n}\\b`).test(corpus[lang]),
       );
       expect(missing).toEqual([]);
     });
