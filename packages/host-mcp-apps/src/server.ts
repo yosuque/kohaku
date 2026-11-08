@@ -1389,17 +1389,19 @@ async function mcpRateLimitKey(
  * The identity a task is bound to (`tasks/get` / `tasks/cancel` match the caller against it). Deliberately
  * NOT `mcpRateLimitKey`: a transport-identity `rateLimitKey` (a client IP behind a NAT) is shared by distinct
  * authenticated callers, which would let one read another's task result (a bearer capability) and cancel it.
- * In order: the resolved principal's id when `resolvePrincipal` is wired (a genuine per-call identity);
- * else `deps.rateLimitKey(extra)`; else `ServerContext.sessionId`; else the literal `"anonymous"`. Without
- * `resolvePrincipal` the principal is the constant anonymous one and would merge every caller, so it is only
- * consulted when wired.
+ * In order: the resolved principal's id when `resolvePrincipal` is wired AND it resolved a caller-specific
+ * identity (an id other than the default principal's, `deps.principal ?? ANONYMOUS`, which a resolver returns
+ * for a guest / unauthenticated call and which would merge every such caller into one owner); else
+ * `deps.rateLimitKey(extra)`; else `ServerContext.sessionId`; else the literal `"anonymous"`. Without
+ * `resolvePrincipal` the principal is the constant default one, so it is only consulted when wired.
+ * `resolvePrincipal` must therefore return a distinct id per caller.
  */
 async function mcpTaskOwnerKey(
   deps: McpHostDeps,
   principal: Principal,
   extra: ServerContext,
 ): Promise<string> {
-  if (deps.resolvePrincipal != null) return principal.id;
+  if (deps.resolvePrincipal != null && principal.id !== (deps.principal ?? ANONYMOUS).id) return principal.id;
   if (deps.rateLimitKey != null) return deps.rateLimitKey(extra);
   return extra.sessionId ?? "anonymous";
 }

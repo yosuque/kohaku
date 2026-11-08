@@ -727,6 +727,42 @@ class TestTaskOwnerIsThePrincipalNotTheRateLimitKey:
 
         asyncio.run(run())
 
+    def test_a_resolver_returning_the_default_guest_principal_falls_back_to_the_rate_limit_key(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            ip = {"v": "ip-1"}
+            server = Server("kohaku-tasks-guest-test")
+            attach_kohaku_to_mcp_server(
+                server,
+                McpHostDeps(
+                    compose=make_compose_ctx(tmp_path),
+                    domain=_DOMAIN,
+                    authz=_AUTHZ,
+                    query_source="sales",
+                    resolve_principal=lambda _ctx: Principal(id="mcp-user", roles=["user"]),
+                    rate_limit_key=lambda _ctx: ip["v"],
+                ),
+                AttachOptions(renderer_html=RENDERER_HTML_PLAIN, tasks_enabled=True),
+            )
+            async with Client(
+                server, mode="2026-07-28", cache=None, extensions=[advertise(TASKS_EXTENSION_ID)]
+            ) as client:
+                created = await _raw_call_tool(
+                    client, "kohaku_compose", {"question": "Monthly revenue trend"}
+                )
+                task_id = created["taskId"]
+                await _tick()
+                assert _store_of(server).get(task_id, "ip-1") is not None
+                assert _store_of(server).get(task_id, "mcp-user") is None
+                ip["v"] = "ip-2"
+                for send in (_raw_tasks_get, _raw_tasks_cancel):
+                    with pytest.raises(MCPError) as denied:
+                        await send(client, task_id)
+                    assert denied.value.code == mcp_types.INVALID_PARAMS
+
+        asyncio.run(run())
+
     def test_the_task_is_attributed_to_the_resolved_principal_id(self, tmp_path: Path) -> None:
         async def run() -> None:
             current = {"id": "carol"}

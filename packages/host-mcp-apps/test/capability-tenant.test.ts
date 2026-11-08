@@ -223,6 +223,7 @@ describe("MCP: the verified capability's tenant is carried through (CAP-TEN-002)
       });
       expect(result.isError).toBe(true);
       expect((result.structuredContent as { error?: { code?: string } }).error?.code).toBe("RATE_LIMITED");
+      expect(takes).toHaveLength(1);
       expect(takes[0]).toMatchObject({ tenant: "A", routeClass: "action" });
       expect(contexts).toHaveLength(0);
       expect(onRateLimited).toHaveBeenCalledWith(
@@ -270,6 +271,36 @@ describe("MCP: the verified capability's tenant is carried through (CAP-TEN-002)
       });
       expect(result.isError).toBe(true);
       expect(takes).toHaveLength(0);
+    });
+
+    it("kohaku_action: a capability that fails verification never reaches the limiter or onRateLimited", async () => {
+      const takes: PolicyRateLimiterTakeParams[] = [];
+      const onRateLimited = vi.fn();
+      const client = await connect({
+        compose: NO_COMPOSE,
+        domain: recordingDomain([]),
+        authz: {
+          async issueCapability() {
+            return "cap";
+          },
+          async verify() {
+            return { ok: false, reason: "bad" };
+          },
+        },
+        querySource: "sales",
+        rateLimiter: tenantRuleLimiter(takes),
+        onRateLimited,
+      });
+      const result = await client.callTool({
+        name: "kohaku_action",
+        arguments: { action: "delete", payload: {}, capability: "cap" },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.structuredContent as { error?: { code?: string } } | undefined)?.error?.code).not.toBe(
+        "RATE_LIMITED",
+      );
+      expect(takes).toHaveLength(0);
+      expect(onRateLimited).not.toHaveBeenCalled();
     });
   });
 });

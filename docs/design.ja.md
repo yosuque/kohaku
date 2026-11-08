@@ -901,8 +901,9 @@ Tasks 拡張は、時間のかかるツール呼び出しを JSON-RPC のやり�
 
 - **タスクは作成者に束縛される**: `TaskStore.create` は `owner` を取り、`get` / `requestCancel` は別の owner に
   対しては未知の ID と全く同じ応答を返す(漏れたタスク ID だけでは、タスクの存在も、完了結果〈`_meta` に bearer
-  の書き込み capability を含む〉も、キャンセルもできない)。owner は、`resolvePrincipal` が配線されていれば解決済み
-  principal の id、なければ `rateLimitKey`、なければセッション id、なければ `"anonymous"` である。レートリミットの
+  の書き込み capability を含む〉も、キャンセルもできない)。owner は、`resolvePrincipal` が配線され、かつ呼び出し元固有の id
+  (既定 principal の id ではない。ゲスト用にリゾルバが返すとゲスト全員が 1 つの owner に統合されてしまう)に解決された
+  場合はその principal の id、そうでなければ `rateLimitKey`、なければセッション id、なければ `"anonymous"` である。レートリミットの
   キーを先に使わないのは意図的で、NAT の内側にいる別々の認証済み principal は IP ベースの `rateLimitKey` を共有し、
   互いのタスクを読み取り・キャンセルできてしまうためである。`resolvePrincipal` が無い場合の principal は定数の匿名
   principal で全員が一致してしまうので、配線されているときだけ参照する。したがって束縛の強さは残りのキー次第で、

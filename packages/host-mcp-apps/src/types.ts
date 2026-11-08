@@ -78,6 +78,11 @@ export interface McpHostDeps {
    * for a shared Streamable HTTP deployment — see `principal`'s doc comment above for why a single static
    * `principal` is unsafe there. When unwired, every call runs as `principal ?? ANONYMOUS`, unchanged from
    * before this field existed.
+   *
+   * It must return a **distinct id per caller**: the id also binds MCP Tasks (`tasks/get` / `tasks/cancel`
+   * ownership). A resolver that returns the default principal's id (or any shared guest id) for several callers
+   * makes them one task owner; a call that resolves the default principal's id is owned by `rateLimitKey` /
+   * the session id instead.
    */
   resolvePrincipal?: (extra: ServerContext) => Principal | Promise<Principal>;
   /**

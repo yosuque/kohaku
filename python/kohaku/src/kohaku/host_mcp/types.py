@@ -166,7 +166,12 @@ class McpHostDeps:
     Required for a shared Streamable HTTP deployment (`sales_api.mcp_http`, which builds one `Server` shared by
     every session) — see `principal`'s doc comment above for why a single static `principal` is unsafe there.
     When unwired, every call runs as `principal` or the built-in anonymous principal, unchanged from before
-    this field existed."""
+    this field existed.
+
+    It must return a **distinct id per caller**: the id also binds MCP Tasks (`tasks/get` / `tasks/cancel`
+    ownership). A resolver that returns the default principal's id (or any shared guest id) for several callers
+    makes them one task owner; a call that resolves the default principal's id is owned by `rate_limit_key` /
+    the connection id instead."""
     fixation_lookup: Callable[[str, SessionContext], Awaitable[FixationRecord | None]] | None = None
     """Fixation lookup (intentHash, session -> FixationRecord | None). The session (surface
     "mcp-app" + the caller-provided locale) is passed so products can gate delivery — e.g. serve

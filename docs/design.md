@@ -913,7 +913,8 @@ in place of `tasks/update`).
 - **Tasks are bound to their creator**: `TaskStore.create` takes an `owner`, and `get` / `requestCancel` answer exactly
   like an unknown id for any other owner (a leaked task id alone does not reveal the task, return its completed
   result — which carries the bearer write capability in `_meta` — or cancel it). The owner is the resolved principal's id
-  when `resolvePrincipal` is wired, else `rateLimitKey`, else the session id, else `"anonymous"` — deliberately not
+  when `resolvePrincipal` is wired and resolved a caller-specific id (not the default principal's, which a resolver
+  returns for a guest and which would merge every guest into one owner), else `rateLimitKey`, else the session id, else `"anonymous"` — deliberately not
   the rate-limit key first, because an IP-based `rateLimitKey` is shared by distinct authenticated principals behind
   one NAT, who could then read (and cancel) each other's tasks. Without `resolvePrincipal` the principal is the
   constant anonymous one, so it is only consulted when wired; the binding is then only as strong as the remaining

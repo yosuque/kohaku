@@ -261,6 +261,7 @@ class TestRateLimitIsKeyedByTheCapabilityTenant:
                 )
                 assert res.is_error
                 assert (res.structured_content or {})["error"]["code"] == "RATE_LIMITED"
+            assert len(limiter.calls) == 1
             assert limiter.calls[0].tenant == "A"
             assert limiter.calls[0].routeClass == "action"
             assert domain.contexts == []
@@ -305,5 +306,30 @@ class TestRateLimitIsKeyedByTheCapabilityTenant:
                 )
                 assert res.is_error
             assert limiter.calls == []
+
+        asyncio.run(run())
+
+    def test_action_with_a_capability_that_fails_verification_never_reaches_the_limiter(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            limiter = _TenantRuleLimiter()
+            seen: list[RateLimitedInfo] = []
+            deps = McpHostDeps(
+                compose=make_compose_ctx(tmp_path),
+                domain=_Domain(),
+                authz=_DenyAuthz(None),
+                query_source="sales",
+                rate_limiter=limiter,
+                on_rate_limited=seen.append,
+            )
+            async with connect(deps, _OPTIONS) as client:
+                res = await client.call_tool(
+                    "kohaku_action", {"action": "delete", "payload": {}, "capability": "cap"}
+                )
+                assert res.is_error
+                assert (res.structured_content or {}).get("error", {}).get("code") != "RATE_LIMITED"
+            assert limiter.calls == []
+            assert seen == []
 
         asyncio.run(run())

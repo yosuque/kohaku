@@ -191,11 +191,14 @@ async def _mcp_task_owner_key(
     """The identity a task is bound to (`tasks/get` / `tasks/cancel` match the caller against it).
     Deliberately NOT `_mcp_rate_limit_key`: a transport-identity `rate_limit_key` (a client IP behind a NAT)
     is shared by distinct authenticated callers, which would let one read another's task result (a bearer
-    capability) and cancel it. In order: the resolved principal's id when `resolve_principal` is wired (a
-    genuine per-call identity); else `deps.rate_limit_key(ctx)`; else the per-connection id. Without
-    `resolve_principal` the principal is the constant anonymous one and would merge every caller, so it is
-    only consulted when wired. Port of TS `mcpTaskOwnerKey`."""
-    if deps.resolve_principal is not None:
+    capability) and cancel it. In order: the resolved principal's id when `resolve_principal` is wired AND it
+    resolved a caller-specific identity (an id other than the default principal's, `deps.principal` or
+    `_ANONYMOUS`, which a resolver returns for a guest / unauthenticated call and which would merge every such
+    caller into one owner); else `deps.rate_limit_key(ctx)`; else the per-connection id. Without
+    `resolve_principal` the principal is the constant default one, so it is only consulted when wired.
+    `resolve_principal` must therefore return a distinct id per caller. Port of TS `mcpTaskOwnerKey`."""
+    default_principal = deps.principal if deps.principal is not None else _ANONYMOUS
+    if deps.resolve_principal is not None and principal.id != default_principal.id:
         return principal.id
     if deps.rate_limit_key is not None:
         key = deps.rate_limit_key(ctx)

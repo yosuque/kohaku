@@ -813,6 +813,32 @@ describe("task ownership binds to the resolved principal, not the (shareable) ra
     expect(cancel.json["error"]).toBeUndefined();
   });
 
+  it("a resolvePrincipal that returns the default (guest) principal id falls back to rateLimitKey, not one shared owner", async () => {
+    let ip = "ip-1";
+    const server = new McpServer({ name: "kohaku-tasks-guest-test", version: "0.1.0" });
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: fixedSpecComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        resolvePrincipal: () => ({ id: "mcp-user", roles: ["user"] }),
+        rateLimitKey: () => ip,
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>", tasksEnabled: true },
+    );
+    const taskId = await startTask(server);
+    await tick();
+    expect(__getTaskStoreForTest(server)!.get(taskId, "ip-1")).toBeDefined();
+    expect(__getTaskStoreForTest(server)!.get(taskId, "mcp-user")).toBeUndefined();
+    ip = "ip-2";
+    for (const method of ["tasks/get", "tasks/cancel"] as const) {
+      const res = await rawTasks(server, method, taskId);
+      expect((res.json["error"] as { code?: number } | undefined)?.code).toBe(-32602);
+    }
+  });
+
   it("the task is attributed to the resolved principal's id", async () => {
     const server = buildWithPrincipals();
     currentPrincipal = "carol";
