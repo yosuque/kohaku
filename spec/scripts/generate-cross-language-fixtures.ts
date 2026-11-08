@@ -64,6 +64,10 @@ import {
   signManifest,
   verifyManifestSignature,
 } from "../../packages/lineage/src/index.js";
+// Relative for the same reason: base-url.ts imports only a *type* from llm's env.ts, so nothing of
+// @kohaku-ui/llm (and its process.env usage) is pulled into this script.
+import { normalizeVendorBaseUrl } from "../../packages/llm/src/base-url.js";
+import type { LlmProvider } from "../../packages/llm/src/env.js";
 // Relative (not "@kohaku-ui/registry") import: the spec package deliberately does not declare
 // @kohaku-ui/registry as a dependency (this generator is its only consumer of the catalog's
 // fallback.mapProps functions), so this reaches the source file directly rather than adding a
@@ -458,6 +462,45 @@ async function main(): Promise<void> {
     promptRevision: PROMPT_REVISION,
   };
 
+  // KOHAKU_LLM_BASE_URL normalisation (docs/specification.md, "LLM providers"): claude / gemini take the vendor
+  // root with or without the API-version path and both spellings must name the same endpoint in both
+  // languages; openai / ollama / llama keep the OpenAI-compatible value untouched. `root` pins
+  // normalizeVendorBaseUrl / normalize_vendor_base_url; `requestUrl` (claude / gemini, model "m") is the
+  // final URL the REAL provider SDK of each language must hit, asserted by each language's wire test
+  // (packages/llm/test/ai-sdk-wire.test.ts, python/kohaku/tests/llm/test_*_wire / _sdk tests).
+  const llmBaseUrlInputs: { provider: LlmProvider; baseUrl: string }[] = [
+    { provider: "claude", baseUrl: "" },
+    { provider: "claude", baseUrl: "   " },
+    { provider: "claude", baseUrl: "https://gw.example" },
+    { provider: "claude", baseUrl: "https://gw.example/" },
+    { provider: "claude", baseUrl: "https://gw.example/v1" },
+    { provider: "claude", baseUrl: "https://gw.example/v1/" },
+    { provider: "claude", baseUrl: "https://gw.example/anthropic" },
+    { provider: "claude", baseUrl: "https://gw.example/anthropic/v1" },
+    { provider: "claude", baseUrl: "http://localhost:8080/v1" },
+    { provider: "gemini", baseUrl: "" },
+    { provider: "gemini", baseUrl: "https://gw.example" },
+    { provider: "gemini", baseUrl: "https://gw.example/v1beta" },
+    { provider: "gemini", baseUrl: "https://gw.example/v1beta/" },
+    { provider: "gemini", baseUrl: "https://gw.example/google" },
+    { provider: "gemini", baseUrl: "https://gw.example/google/v1beta" },
+    { provider: "openai", baseUrl: "" },
+    { provider: "openai", baseUrl: "https://gw.example/v1" },
+    { provider: "openai", baseUrl: "https://gw.example/v1/" },
+    { provider: "ollama", baseUrl: "http://localhost:11434/v1" },
+    { provider: "llama", baseUrl: "http://llama.example:8080/v1" },
+  ];
+  const llmBaseUrl = llmBaseUrlInputs.map(({ provider, baseUrl }) => {
+    const root = normalizeVendorBaseUrl(provider, baseUrl) ?? null;
+    const requestUrl =
+      provider === "claude"
+        ? `${root ?? "https://api.anthropic.com"}/v1/messages`
+        : provider === "gemini"
+          ? `${root ?? "https://generativelanguage.googleapis.com"}/v1beta/models/m:generateContent`
+          : null;
+    return { provider, baseUrl, root, requestUrl };
+  });
+
   // Pins byte compatibility of the distillation-dataset JSONL export (@kohaku-ui/evals's
   // exportDistillationDataset / kohaku.evals's export_distillation_dataset). Reuses the same example
   // Spec + its already-computed structureHash as a single human-approved FixationRecord, so a language
@@ -680,6 +723,7 @@ async function main(): Promise<void> {
         distillation,
         fallback: fallbackCases,
         promptFragments,
+        llmBaseUrl,
       },
       null,
       2,

@@ -559,9 +559,9 @@ failed catalog/structure validation」という文言とは別物にし、この
   そのノードの `description` に退避する(`@ai-sdk/anthropic` の `sanitizeJsonSchema` と
   同じ変換であり、TS と Python の両アダプタは同じスキーマに対して同じ劣化のしかたをする)。
   返ってきたオブジェクトの検証は、退避前の元のスキーマに対して行われる。
-- **Python の `claude` アダプタは `temperature` を送らない**(`KOHAKU_LLM_TEMPERATURE` と
-  呼び出しごとの `temperature` は受け付けるが Anthropic へは転送しない。TS のアダプタは
-  `@ai-sdk/anthropic` 経由で今も送る)。`anthropic` SDK の `messages.create` にはこの
+- **`claude` アダプタは `temperature` を送らない**(`KOHAKU_LLM_TEMPERATURE` と
+  呼び出しごとの `temperature` は受け付けるが Anthropic へは転送しない。TS のアダプタも
+  送らなくなったので、両言語は一致している)。`anthropic` SDK の `messages.create` にはこの
   パラメータが無く、SDK 2.x が送る `anthropic-version: 2026-10-21` では `temperature` /
   `top_p` / `top_k` を含むリクエストを Messages API が 400 で拒否するため。kohaku の
   同一表示の保証は Spec キャッシュによるもので temperature 0 は補助にすぎず、旧モデルでの

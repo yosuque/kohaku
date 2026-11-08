@@ -72,6 +72,8 @@ Example `.env` settings:
 | **Ollama (no key needed, local)** | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b`, etc. (the default when no model is specified is `llama3.3`) |
 | llama.cpp / vLLM, etc. | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL=http://…/v1` + `KOHAKU_LLM_MODEL=…` |
 
+`KOHAKU_LLM_BASE_URL` points any provider at a gateway or proxy. The convention differs by provider, and is the same in the TypeScript and Python ports: for **Claude** and **Gemini** give the vendor root without the API-version path (`https://gw.example`; a trailing `/v1` or `/v1beta` is also accepted and stripped), for **OpenAI, Ollama and llama.cpp** (OpenAI-compatible) give the full base including `/v1` (`http://…/v1`). Leave it unset to use the vendor's own endpoint. A value left over in your environment for Ollama will redirect Claude, OpenAI and Gemini too, so unset it when you switch provider.
+
 Install the provider SDK next to `@kohaku-ui/llm`: Claude → `@ai-sdk/anthropic`, OpenAI → `@ai-sdk/openai`, Gemini → `@ai-sdk/google`, Ollama / llama.cpp → `@ai-sdk/openai-compatible` (optional peer dependencies; nothing is installed for providers you do not use).
 
 > **Note on Ollama**: We recommend non-reasoning instruct models. Reasoning models (qwen3.5, etc.) may spend their output tokens on reasoning, making UI synthesis slow or empty. Also, llama.cpp-family backends can be unstable when producing structured output for large schemas, but the default `KOHAKU_LLM_STRUCTURED_MODE=auto` automatically falls back to the prompt-JSON method.
