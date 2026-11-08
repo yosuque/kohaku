@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
 
   // Use .gitignore as the single source of exclusions (don't double-maintain node_modules / dist / coverage / .data).
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true, "defaultBranch": "main" },
@@ -14,12 +14,12 @@
       "!**/node_modules",
       "!**/dist",
       "!coverage",
-      "!spec/schemas",                      // output of generate-schemas
-      "!spec/test/fixtures",                // output of generate-cross-language-fixtures
-      "!apps/sample-web/src/generated",     // output of pnpm intents:emit
-      "!apps/sample-api/src/domain/seed",   // output of pnpm seed
-      "!apps/sample-api/test/golden",       // KOHAKU_GOLDEN_UPDATE=1 writes these back via JSON.stringify(...,2)
-      "!python"                             // registry/_data/core-catalog.json (export-core-catalog)
+      "!spec/schemas", // output of generate-schemas
+      "!spec/test/fixtures", // output of generate-cross-language-fixtures
+      "!apps/sample-web/src/generated", // output of pnpm intents:emit
+      "!apps/sample-api/src/domain/seed", // output of pnpm seed
+      "!apps/sample-api/test/golden", // KOHAKU_GOLDEN_UPDATE=1 writes these back via JSON.stringify(...,2)
+      "!python" // registry/_data/core-catalog.json (export-core-catalog)
     ]
   },
 
@@ -43,9 +43,15 @@
   // choice based on measuring against the 567 existing files, not an accident.
   "javascript": {
     "formatter": {
-      "quoteStyle": "double", "jsxQuoteStyle": "double", "semicolons": "always",
-      "trailingCommas": "all", "arrowParentheses": "always", "bracketSpacing": true,
-      "bracketSameLine": false, "quoteProperties": "asNeeded", "attributePosition": "auto"
+      "quoteStyle": "double",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true,
+      "bracketSameLine": false,
+      "quoteProperties": "asNeeded",
+      "attributePosition": "auto"
     }
   },
 
@@ -107,11 +113,19 @@
       // with `new`; an arrow function is not constructible, so the autofix made the mock return undefined and
       // three tests failed. An inline biome-ignore does not suppress it in argument position, so the rule is
       // turned off for the test tree instead -- it has little value there and this is its only hit.
+      // correctness/noComponentHookFactories (new in Biome 2.6; measured 8 hits, all in tests:
+      // renderer-react/test/spec-view.test.tsx x5, present-list.test.tsx x1, render-hygiene.test.tsx x1 and
+      // sample-web/test/latest-request.test.tsx x1) flags a component defined inside a function. The test
+      // Probe components are defined inside the test body on purpose: they close over per-test state (render
+      // counters, captured labels), so hoisting them to module level would need that state to become
+      // module-global and would obscure what each test observes. The rule stays on for src, where it is a
+      // real bug (a factory-made component remounts its whole subtree on every call); src has 0 hits.
       "includes": ["**/test/**", "**/*.test.ts", "**/*.test.tsx"],
       "linter": {
         "rules": {
           "suspicious": { "noExportsInTest": "off" },
-          "complexity": { "useArrowFunction": "off" }
+          "complexity": { "useArrowFunction": "off" },
+          "correctness": { "noComponentHookFactories": "off" }
         }
       }
     },
