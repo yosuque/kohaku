@@ -353,31 +353,46 @@ class ApprovalSingleUseContract(ApprovalPortContract):
 class RevocationStoreContract:
     """The CapabilityRevocationStore contract. Asserts only what the contract specifies: inside the validity
     window ``is_revoked`` is true, and an unregistered jti is false. Expired-entry behavior is deliberately
-    unspecified (a store may drop the entry or keep it), so this suite does not assert either way."""
+    unspecified (a store may drop the entry or keep it), so this suite does not assert either way.
+
+    ``make_store`` runs inside the test's event loop. A store that holds a connection overrides ``close_store`` (the
+    TS suite's ``dispose``), which every case awaits, in the same loop, once it is done with the store."""
 
     def make_store(self) -> CapabilityRevocationStore:
         raise NotImplementedError
 
+    async def close_store(self, store: CapabilityRevocationStore) -> None:
+        return None
+
     def test_reports_a_jti_as_revoked_while_inside_its_validity_window(self) -> None:
         async def go() -> None:
             store = self.make_store()
-            await store.revoke("contract-jti", int(time.time()) + 3600)
-            assert await store.is_revoked("contract-jti") is True
+            try:
+                await store.revoke("contract-jti", int(time.time()) + 3600)
+                assert await store.is_revoked("contract-jti") is True
+            finally:
+                await self.close_store(store)
 
         run(go())
 
     def test_reports_an_unregistered_jti_as_not_revoked(self) -> None:
         async def go() -> None:
             store = self.make_store()
-            assert await store.is_revoked("contract-never-registered-jti") is False
+            try:
+                assert await store.is_revoked("contract-never-registered-jti") is False
+            finally:
+                await self.close_store(store)
 
         run(go())
 
     def test_revoking_with_an_already_past_expires_at_leaves_the_jti_unrevoked(self) -> None:
         async def go() -> None:
             store = self.make_store()
-            await store.revoke("contract-jti-already-expired", int(time.time()) - 1)
-            assert await store.is_revoked("contract-jti-already-expired") is False
+            try:
+                await store.revoke("contract-jti-already-expired", int(time.time()) - 1)
+                assert await store.is_revoked("contract-jti-already-expired") is False
+            finally:
+                await self.close_store(store)
 
         run(go())
 

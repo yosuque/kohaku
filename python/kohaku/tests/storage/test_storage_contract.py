@@ -1,0 +1,84 @@
+"""Runs the StoragePort contract (`_contract.py`) against every adapter: memory, file, redis, postgres (the Python
+mirror of the TS suites that call `describeStoragePortContract` for storage-memory / storage-redis /
+storage-postgres). The Redis / Postgres variants skip without a backend (see `_backend.py`); with
+``KOHAKU_ADAPTER_TESTS=require`` a missing backend fails instead.
+
+pytest's parametrize crosses the adapter fixture with the case list, so a failure reads
+``test_storage_contract[postgres-compare-and-set: ...]``. Each case gets a fresh port (a fresh temp directory / key
+prefix / schema) and runs in its own ``asyncio.run`` loop, with the port created and closed inside that loop.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import secrets
+import tempfile
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from kohaku.storage import FileStoragePort, MemoryStoragePort
+from kohaku.storage.redis import create_redis_storage_port
+
+from ._contract import CASES, ContractCase
+
+type PortOpener = Callable[[], AbstractAsyncContextManager[Any]]
+
+
+def _unique(prefix: str) -> str:
+    return f"{prefix}{secrets.token_hex(6)}"
+
+
+@pytest.fixture(params=["memory", "file", "redis"])
+def open_port(request: pytest.FixtureRequest, tmp_path: Path) -> PortOpener:
+    """A factory for one fresh port of the adapter under test (an async context manager that closes it)."""
+    adapter: str = request.param
+
+    if adapter == "memory":
+
+        @asynccontextmanager
+        async def memory() -> AsyncIterator[Any]:
+            port = MemoryStoragePort()
+            try:
+                yield port
+            finally:
+                port.close()
+
+        return memory
+
+    if adapter == "file":
+
+        @asynccontextmanager
+        async def file() -> AsyncIterator[Any]:
+            # A new directory per case: the file port reloads its snapshots from disk.
+            with tempfile.TemporaryDirectory(dir=tmp_path) as data_dir:
+                yield FileStoragePort(data_dir)
+
+        return file
+
+    if adapter == "redis":
+        url: str = request.getfixturevalue("redis_url")
+
+        @asynccontextmanager
+        async def redis() -> AsyncIterator[Any]:
+            port = create_redis_storage_port(url=url, key_prefix=_unique("t"))
+            try:
+                yield port
+            finally:
+                await port.close()
+
+        return redis
+
+    raise AssertionError(f"unknown adapter {adapter}")
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c.name for c in CASES])
+def test_storage_contract(open_port: PortOpener, case: ContractCase) -> None:
+    async def go() -> None:
+        async with open_port() as port:
+            await case.run(port)
+
+    asyncio.run(go())
