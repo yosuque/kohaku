@@ -91,8 +91,9 @@ function coerceValue(name: string, value: JsonValue, type: string | undefined): 
  *   `boolean`; everything else stays a string), and a value that does not convert throws `McpArgumentError`;
  * - the reserved parameters (`_cursor`, `_limit`, `_sort`, `_dir`) are never forwarded, except that `_limit` is
  *   mapped onto the tool's own numeric `limit` argument when its `inputSchema` declares one. `_limit` is not
- *   covered by the capability's signed ref, so it can only *lower* the signed `limit`: it must be a positive safe
- *   integer (anything else throws `McpArgumentError`, never widens), when both are present the smaller wins, and
+ *   covered by the capability's signed ref, so it can only *lower* the signed `limit` (without a signed one it sets
+ *   the value, up to `maxLimit`). Both must be positive safe integers when the tool declares a numeric `limit`
+ *   (anything else throws `McpArgumentError`, never widens); when both are present the smaller wins, and
  *   `maxLimit` (default 1000) then caps whatever is left;
  * - a value that is not a string (already typed) is kept as is.
  *
@@ -112,7 +113,15 @@ export function coerceToolArguments(
   const limitType = propertyType(inputSchema, "limit");
   if (limitType === "number" || limitType === "integer") {
     const candidates: number[] = [];
-    if (typeof out["limit"] === "number") candidates.push(out["limit"]);
+    const signed = out["limit"];
+    if (typeof signed === "number") {
+      // A signed limit of 0 or -1 would slip under `maxLimit` (the smaller wins) and, for an upstream doing
+      // `rows[:limit]`, widen the read just like a negative `_limit`: same rule.
+      if (!Number.isSafeInteger(signed) || signed < 1) {
+        throw new McpArgumentError('argument "limit": expected a positive integer');
+      }
+      candidates.push(signed);
+    }
     if (args["_limit"] !== undefined) candidates.push(positiveIntegerLimit(args["_limit"]));
     if (candidates.length > 0) {
       out["limit"] = Math.min(...candidates, options.maxLimit ?? DEFAULT_MAX_LIMIT);

@@ -178,6 +178,17 @@ const COERCION_CASES: { args: Record<string, unknown>; inputSchema: unknown; max
   { args: { limit: "9", _limit: 0.5 }, inputSchema: COERCION_SCHEMA },
   { args: { limit: "9", _limit: true }, inputSchema: COERCION_SCHEMA },
   { args: { limit: "9", _limit: "9007199254740993" }, inputSchema: COERCION_SCHEMA },
+  // A signed limit that is not a positive integer would slip under maxLimit (the smaller wins): same rule.
+  { args: { limit: "-1" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "0" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "-1", _limit: "5" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: -1 }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "0" }, inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
+  { args: { limit: "0.5" }, inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
+  {
+    args: { limit: "0", _limit: "-1" },
+    inputSchema: { type: "object", properties: { limit: { type: "string" } } },
+  },
   {
     args: { limit: "1", _limit: "0.5" },
     inputSchema: { type: "object", properties: { limit: { type: "number" } } },

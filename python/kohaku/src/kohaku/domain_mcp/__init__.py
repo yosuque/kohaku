@@ -13,6 +13,7 @@ from .intents import create_mcp_intents
 from .port import (
     MCP_OUTCOME_UNKNOWN,
     McpDomainPort,
+    McpOutcomeUnknownError,
     McpTimeoutError,
     SchemaProjectionReport,
     SkipReport,
@@ -29,6 +30,7 @@ __all__ = [
     "McpArgumentError",
     "McpCallResult",
     "McpDomainPort",
+    "McpOutcomeUnknownError",
     "McpResultError",
     "McpTimeoutError",
     "McpToolClientLike",

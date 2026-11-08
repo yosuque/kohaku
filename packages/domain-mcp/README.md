@@ -104,7 +104,7 @@ const host = createKohakuHost({
   caller shares that one upstream credential and there is no per-caller authorization upstream.
 - Errors: `McpArgumentError` (code `MCP_ARGUMENT_INVALID`, a string that does not convert), `McpResultError` (not a list
   of rows, or over a limit), `McpToolError` (the tool reported `isError`; text truncated to 500 characters, no code),
-  `McpTimeoutError` (a write's carries the code `MCP_OUTCOME_UNKNOWN`). Raised inside `DomainPort.invoke` for a read,
+  `McpTimeoutError` (a write's carries the code `MCP_OUTCOME_UNKNOWN`), `McpOutcomeUnknownError` (a write that failed after the request may have left: closed connection, failed send, transport error, the SDK's own timeout; same code, the original as `cause`; a JSON-RPC error the server answered is re-thrown unchanged). Raised inside `DomainPort.invoke` for a read,
   the REST host reports all of them like any failed read: 404 `REF_NOT_FOUND` with the detail kept out of the body. A
   write whose upstream call timed out is the exception: 503 `INTERNAL` with the fixed outcome-unknown message, so the
   caller verifies before retrying.

@@ -74,6 +74,38 @@ describe("coerceToolArguments", () => {
     },
   );
 
+  it.each([
+    ["negative", "-1"],
+    ["zero", "0"],
+    ["fractional", "0.5"],
+    ["a typed negative", -1],
+    ["a typed zero", 0],
+  ])(
+    "refuses a signed limit that is not a positive integer (%s), so it cannot slip under maxLimit",
+    (_l, bad) => {
+      for (const type of ["integer", "number"]) {
+        const schema = { type: "object", properties: { limit: { type } } };
+        for (const args of [{ limit: bad }, { limit: bad, _limit: "5" }]) {
+          try {
+            coerceToolArguments(args as never, schema);
+            expect.unreachable("expected a throw");
+          } catch (error) {
+            expect(error).toBeInstanceOf(McpArgumentError);
+            expect((error as McpArgumentError).message).toMatch(
+              /^argument "limit": expected (a positive|an) integer$|expected a number/,
+            );
+          }
+        }
+      }
+    },
+  );
+
+  it("applies the limit rules only when the tool declares a numeric limit", () => {
+    const stringLimit = { type: "object", properties: { limit: { type: "string" } } };
+    expect(coerceToolArguments({ limit: "0", _limit: "-1" }, stringLimit)).toEqual({ limit: "0" });
+    expect(coerceToolArguments({ _limit: "-1", s: "x" }, { type: "object" })).toEqual({ s: "x" });
+  });
+
   it("accepts a positive integer _limit however it is spelled", () => {
     expect(coerceToolArguments({ limit: "9", _limit: "5.0" }, INPUT_SCHEMA)).toEqual({ limit: 5 });
     expect(coerceToolArguments({ limit: "9", _limit: "1e1" }, INPUT_SCHEMA)).toEqual({ limit: 9 });

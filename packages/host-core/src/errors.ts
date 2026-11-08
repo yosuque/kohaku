@@ -68,7 +68,8 @@ export const STORAGE_CONFLICT_MESSAGE = "the resource was modified concurrently;
  * answer never came back (a timeout, a connection lost after the request left), so it may or may not have been
  * applied. REST answers 503 `INTERNAL` with this text and MCP a structured tool error; the caller must check the
  * outcome before sending the same approval again (a stateless approval token would run the write twice). The
- * error's own message (which names the tool) goes only to the observability hook. Follows
+ * error's own message (which names the tool) goes only to the observability hook. SPEC ACT-OUT-001 [Draft] pins the
+ * text as the normative discriminator for a client. Follows
  * {@link LLM_PROVIDER_UNAVAILABLE_MESSAGE}'s precedent: no new wire error code, a fixed text.
  */
 export const OUTCOME_UNKNOWN_MESSAGE = "the action's outcome is unknown; verify before retrying";

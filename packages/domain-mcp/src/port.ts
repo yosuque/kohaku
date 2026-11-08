@@ -36,7 +36,10 @@ const SDK_TIMEOUT_MARGIN_MS = 5_000;
 /** How many constraint names the approver-facing description lists before it says "…". */
 const MAX_LISTED_CONSTRAINTS = 5;
 
-/** The `code` of a write's `McpTimeoutError`: the tool may or may not have run (host-core's `isOutcomeUnknownError`). */
+/**
+ * The `code` of an error that says "the write may have been applied" (host-core's `isOutcomeUnknownError`):
+ * a write's `McpTimeoutError`, and `McpOutcomeUnknownError`.
+ */
 export const MCP_OUTCOME_UNKNOWN = "MCP_OUTCOME_UNKNOWN";
 
 /**
@@ -57,6 +60,48 @@ export class McpTimeoutError extends Error {
     this.name = "McpTimeoutError";
     this.code = write ? MCP_OUTCOME_UNKNOWN : undefined;
   }
+}
+
+/**
+ * A write's upstream call failed in a way that does not tell whether the tool ran: the connection closed or the
+ * send failed after the request may have left, a transport error (`fetch` TypeError, ECONNRESET), or the SDK's own
+ * request timeout. Carries the code `MCP_OUTCOME_UNKNOWN` like a write's {@link McpTimeoutError}, and the original
+ * error as `cause` (the hosts show the caller only the fixed message; the cause reaches `onError`).
+ */
+export class McpOutcomeUnknownError extends Error {
+  readonly code = MCP_OUTCOME_UNKNOWN;
+  constructor(tool: string, cause: unknown) {
+    super(
+      `MCP tool "${tool}": the upstream call failed after the request may have been sent; its effect is unknown`,
+      {
+        cause,
+      },
+    );
+    this.name = "McpOutcomeUnknownError";
+  }
+}
+
+/** `SdkError` codes (`@modelcontextprotocol/client`) raised locally before anything reaches the transport. */
+const PRE_SEND_SDK_ERROR_CODES: ReadonlySet<string> = new Set([
+  "NOT_CONNECTED",
+  "ALREADY_CONNECTED",
+  "NOT_INITIALIZED",
+  "CAPABILITY_NOT_SUPPORTED",
+  "METHOD_NOT_SUPPORTED_BY_PROTOCOL_VERSION",
+]);
+
+/**
+ * Whether a write's failure is one that certainly did not run the tool, so it can be re-thrown unchanged: a
+ * JSON-RPC error the server answered (the SDK's `ProtocolError`, a numeric `code`), or an `SdkError` raised
+ * locally before sending. Duck-typed, since this package never imports the SDK. Every other failure (a closed
+ * connection, a failed send, a transport TypeError, the SDK's request timeout, an unknown shape) is treated as
+ * "may have been applied".
+ */
+function failedBeforeExecution(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "number") return true;
+  return typeof code === "string" && PRE_SEND_SDK_ERROR_CODES.has(code);
 }
 
 export interface McpDomainPortOptions {
@@ -250,24 +295,39 @@ export async function createMcpDomainPort(options: McpDomainPortOptions): Promis
     }
   }
 
-  /** One upstream call with a deadline: aborts the request and never retries. */
+  /**
+   * One upstream call with a deadline: aborts the request and never retries. A failure after the deadline is the
+   * timeout whatever the client rejected with (the deadline settles first and a flag covers the rest), and a write
+   * that fails in a way that does not tell whether the tool ran is wrapped in `McpOutcomeUnknownError`.
+   */
   async function call(name: string, args: Record<string, unknown>, write: boolean): Promise<McpCallResult> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut: McpTimeoutError | undefined;
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = new McpTimeoutError(name, write);
+        // Reject before aborting: the abort can synchronously reject the client's own promise, and that must
+        // not win the race with an arbitrary error.
+        reject(timedOut);
         controller.abort();
-        reject(new McpTimeoutError(name, write));
       }, callTimeoutMs);
     });
     try {
       return await Promise.race([
-        client.callTool(
-          { name, arguments: args },
-          { signal: controller.signal, timeout: callTimeoutMs + SDK_TIMEOUT_MARGIN_MS },
+        // `callTool` may throw synchronously; Promise.resolve().then keeps that inside the race.
+        Promise.resolve().then(() =>
+          client.callTool(
+            { name, arguments: args },
+            { signal: controller.signal, timeout: callTimeoutMs + SDK_TIMEOUT_MARGIN_MS },
+          ),
         ),
         deadline,
       ]);
+    } catch (error) {
+      if (timedOut !== undefined) throw timedOut;
+      if (write && !failedBeforeExecution(error)) throw new McpOutcomeUnknownError(name, error);
+      throw error;
     } finally {
       clearTimeout(timer);
     }
