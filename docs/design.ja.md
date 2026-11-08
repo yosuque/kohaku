@@ -901,9 +901,12 @@ Tasks 拡張は、時間のかかるツール呼び出しを JSON-RPC のやり�
 
 - **タスクは作成者に束縛される**: `TaskStore.create` は `owner` を取り、`get` / `requestCancel` は別の owner に
   対しては未知の ID と全く同じ応答を返す(漏れたタスク ID だけでは、タスクの存在も、完了結果〈`_meta` に bearer
-  の書き込み capability を含む〉も、キャンセルもできない)。owner は、その呼び出しでレートリミッタが使うキー
-  (`rateLimitKey`、なければ解決済み principal の id、なければセッション id、なければ `"anonymous"`)なので、
-  束縛の強さはそのキー次第である。`resolvePrincipal` / `rateLimitKey` が無ければ、同じ接続を共有する呼び出し側
+  の書き込み capability を含む〉も、キャンセルもできない)。owner は、`resolvePrincipal` が配線されていれば解決済み
+  principal の id、なければ `rateLimitKey`、なければセッション id、なければ `"anonymous"` である。レートリミットの
+  キーを先に使わないのは意図的で、NAT の内側にいる別々の認証済み principal は IP ベースの `rateLimitKey` を共有し、
+  互いのタスクを読み取り・キャンセルできてしまうためである。`resolvePrincipal` が無い場合の principal は定数の匿名
+  principal で全員が一致してしまうので、配線されているときだけ参照する。したがって束縛の強さは残りのキー次第で、
+  `resolvePrincipal` / `rateLimitKey` が無ければ、同じ接続を共有する呼び出し側
   (TS のステートレス HTTP と stdio では全員)が owner を共有する。`ttlMs` が切れた実行中のタスクは purge 時に
   abort され、未知タスクのエラーに載せる ID は 128 文字に切り詰める。Python 版でも同一。
 - **Python 版**(`kohaku.host_mcp.tasks`。配線は `host_mcp/server.py`): 設計は同じで、`AttachOptions.tasks_enabled`

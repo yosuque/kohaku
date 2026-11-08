@@ -122,8 +122,9 @@ export interface TaskStore {
  * minutes at most) and created only by explicit task-capable tool calls, not by a background process. A
  * still-working task that expires is also aborted (its body must not keep running unobservably).
  *
- * Ownership: every task is bound to an `owner` string (server.ts derives it from the same key the rate limiter
- * uses: `rateLimitKey`, else the resolved principal's id, else the session id, else `"anonymous"`). `get` /
+ * Ownership: every task is bound to an `owner` string (server.ts's `mcpTaskOwnerKey`: the resolved principal's id
+ * when `resolvePrincipal` is wired, else `rateLimitKey`, else the session id, else `"anonymous"` — deliberately
+ * not the rate-limit key, which a NAT'd IP-based `rateLimitKey` shares between distinct principals). `get` /
  * `requestCancel` answer exactly like an unknown id when the caller's owner differs, so a leaked task id alone
  * neither reveals that the task exists, nor lets its holder read the completed result (which carries the bearer
  * write capability in `_meta`), nor cancel it. The binding is only as strong as that key: with no
