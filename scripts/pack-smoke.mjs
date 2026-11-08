@@ -45,6 +45,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readCatalog } from "./lib/read-catalog.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -233,12 +234,9 @@ function checkTarballContents(pkg) {
 // Step 4: consumer install (plain npm, outside the workspace)
 // ---------------------------------------------------------------------------------------------------------
 
-/** Parses `key: value` lines out of pnpm-workspace.yaml's catalog block (avoids a yaml dependency). */
+/** One catalog entry's range, or null when the catalog has none (the parser is shared: scripts/lib/read-catalog.mjs). */
 function readCatalogVersion(workspaceYaml, key) {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = workspaceYaml.match(new RegExp(`^\\s*"?${escaped}"?:\\s*(\\S.*)$`, "m"));
-  if (!match) return null;
-  return match[1].trim().replace(/^"(.*)"$/, "$1");
+  return readCatalog(workspaceYaml).get(key) ?? null;
 }
 
 function collectExternalPeers(packages, workspaceYaml) {

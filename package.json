@@ -17,6 +17,8 @@
     "build": "pnpm -r --if-present run build",
     "build:dist": "pnpm --filter \"./packages/*\" --filter ./cli --filter ./spec run build",
     "meta:sync": "tsx scripts/sync-package-meta.ts",
+    "init:versions": "tsx scripts/sync-init-versions.ts",
+    "regen": "tsx scripts/regen.ts",
     "test": "vitest run --project \"!playground-drift\"",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --project \"!playground-drift\"",
@@ -33,7 +35,7 @@
     "check": "biome check --write .",
     "check:ci": "biome ci --error-on-warnings .",
     "changeset": "changeset",
-    "version": "changeset version && pnpm run meta:sync && tsx scripts/sync-python-version.ts && pnpm install --lockfile-only",
+    "version": "changeset version && pnpm run meta:sync && tsx scripts/sync-python-version.ts && pnpm run init:versions && pnpm install --lockfile-only",
     "release": "pnpm run build:dist && pnpm -r publish --no-git-checks",
     "python:version": "tsx scripts/sync-python-version.ts"
   },

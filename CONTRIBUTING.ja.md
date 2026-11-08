@@ -49,8 +49,17 @@ LLM キーが無くても始められます。L0 の固定 Spec(`pnpm test` が�
 | `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures` | `spec/test/fixtures/cross-language-canonical.json` | canonical JSON / hash / cacheKey / sanitize 許可リストを変えたとき |
 | `pnpm intents:emit` | `apps/sample-web/src/generated/facet-views.json` | `apps/sample-api/src/intents/catalog.ts` の facet を変えたとき |
 | `pnpm seed` | `apps/sample-api/src/domain/seed/` | seed 生成器を変えたとき |
+| `pnpm meta:sync` | 公開パッケージ(`packages/*`、`cli`、`spec`)の `package.json` にある `publishConfig` と共通の公開メタデータ | 公開パッケージの `exports` を追加・変更したとき |
+| `pnpm python:version` | `python/kohaku/pyproject.toml`、`python/kohaku/src/kohaku/__init__.py`、`python/uv.lock` | TypeScript 側のバージョンが変わったとき(`pnpm version` が実行します) |
+| `pnpm init:versions` | `cli/src/init/versions.ts` | `pnpm-workspace.yaml` の `catalog:` のうち `kohaku init` が固定している版を変えたとき(対象パッケージの一覧は `scripts/lib/init-versions.mjs`) |
+| `KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts` | `cli/test/init/__golden__/` | `kohaku init` のテンプレートを意図して変えたとき(テストが生成プロジェクトをバイト単位で比較します。通常版と `--mcp` の両方) |
 
-複数が該当する場合は次の順で実行してください(後段の手順はワークスペースがインストール済みであることに依存するため、まず install から始めます)。
+ほかに 2 つ、テストで固定されているものの手で書く成果物があります。値がソースからの関数ではなく判断によるためです。
+
+- core カタログのフィンガープリント: `packages/registry/test/catalog.test.ts`(TS)と `python/kohaku/tests/registry/test_fingerprint.py`(Python)。core コンポーネントを追加・変更すると変わります。テストを一度走らせ、失敗の差分に出る新しい値を貼ってください([add-component.md](docs/runbooks/add-component.md) を参照)。
+- `apps/docs-site/snippets/` の docs スニペット: `docs/paths/*.md` の各ページの最初のコードブロックはここから貼ります(スニペットを編集してから両言語のページへ貼る。不一致は `apps/docs-site/test/snippets.test.ts` が検出します)。
+
+**`pnpm regen` は上の表のコマンドをすべて正しい順で実行し、最初に失敗した時点で止まります**(先に `pnpm install` を実行してください。各手順はワークスペースがインストール済みであることに依存するためです)。手で固定する 2 つの成果物には触れません。該当するものが分かっているなら、そのコマンドだけを実行するほうが速く済みます。自分で実行する場合の順序は次のとおりです。
 
 ```
 pnpm install
@@ -59,6 +68,10 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog
 pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures
 pnpm intents:emit
 pnpm seed
+pnpm meta:sync
+pnpm python:version
+pnpm init:versions
+KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts
 ```
 
 ## 6. バイリンガルドキュメント

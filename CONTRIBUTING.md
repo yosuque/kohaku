@@ -49,8 +49,17 @@ Several files in this repository are generated, not hand-written. CI regenerates
 | `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures` | `spec/test/fixtures/cross-language-canonical.json` | After changing canonical JSON / hash / cacheKey / the sanitize allowlist |
 | `pnpm intents:emit` | `apps/sample-web/src/generated/facet-views.json` | After changing facets in `apps/sample-api/src/intents/catalog.ts` |
 | `pnpm seed` | `apps/sample-api/src/domain/seed/` | After changing the seed generator |
+| `pnpm meta:sync` | `publishConfig` and the shared publishing metadata in the publishable packages' `package.json` (`packages/*`, `cli`, `spec`) | After adding or changing an `exports` entry of a publishable package |
+| `pnpm python:version` | `python/kohaku/pyproject.toml`, `python/kohaku/src/kohaku/__init__.py`, `python/uv.lock` | After the TypeScript version changes (`pnpm version` runs it) |
+| `pnpm init:versions` | `cli/src/init/versions.ts` | After changing a version in the `catalog:` block of `pnpm-workspace.yaml` that `kohaku init` pins (the package list is in `scripts/lib/init-versions.mjs`) |
+| `KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts` | `cli/test/init/__golden__/` | After an intentional change to a `kohaku init` template (the test byte-compares the generated project, plain and `--mcp`) |
 
-If more than one applies, run them in this order (install first, since later steps depend on the workspace being installed):
+Two more artifacts are pinned by a test but written by hand, because their value is a judgement rather than a function of the source:
+
+- The core catalog's fingerprint: `packages/registry/test/catalog.test.ts` (TS) and `python/kohaku/tests/registry/test_fingerprint.py` (Python). Adding or changing a core component changes it; run the test once and paste the new value from the failure diff (see [add-component.md](docs/runbooks/add-component.md)).
+- The docs snippets under `apps/docs-site/snippets/`: the first code block of each `docs/paths/*.md` page is pasted from there (edit the snippet, then paste it into both language pages; `apps/docs-site/test/snippets.test.ts` fails on a mismatch).
+
+**`pnpm regen` runs every command in the table above, in the right order, and stops at the first failure** (run `pnpm install` first, since the steps depend on the workspace being installed). It does not touch the two hand-pinned artifacts. If you know which one applies, running only that command is faster; the order, if you run them yourself, is:
 
 ```
 pnpm install
@@ -59,6 +68,10 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog
 pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures
 pnpm intents:emit
 pnpm seed
+pnpm meta:sync
+pnpm python:version
+pnpm init:versions
+KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts
 ```
 
 ## 6. Bilingual documentation

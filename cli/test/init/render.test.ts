@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { INIT_EXTERNAL_PACKAGES } from "../../../scripts/lib/init-versions.mjs";
+import { readCatalog } from "../../../scripts/lib/read-catalog.mjs";
 import { inferProfile, normalizeRows } from "../../src/init/infer.js";
 import { readDataFile } from "../../src/init/readers.js";
 import {
@@ -157,17 +159,17 @@ describe("renderPackageJson", () => {
 });
 
 describe("EXTERNAL_VERSIONS", () => {
-  it("matches the pnpm catalog so the generated project uses the versions this repo tests against", () => {
+  it("is exactly the generated projection of the pnpm catalog", () => {
     const yaml = readFileSync(join(import.meta.dirname, "../../../pnpm-workspace.yaml"), "utf8");
-    // Catalog lines look like `  hono: ^4.13.8` or `  "@hono/node-server": ^2.1.1` (scoped names are quoted).
-    const catalog = new Map<string, string>();
-    for (const line of yaml.split("\n")) {
-      const m = /^\s{2}"?([^":\s]+)"?:\s*(\S+)\s*$/.exec(line);
-      if (m != null) catalog.set(m[1]!, m[2]!);
+    const catalog = readCatalog(yaml);
+    for (const [name, range] of Object.entries(EXTERNAL_VERSIONS)) {
+      expect(
+        catalog.get(name),
+        `${name}: versions.ts differs from the catalog (run pnpm init:versions)`,
+      ).toBe(range);
     }
-    for (const [name, version] of Object.entries(EXTERNAL_VERSIONS)) {
-      expect(catalog.get(name), `${name} is not in the catalog`).toBe(version);
-    }
+    // The other direction: every package the generator projects is present, and nothing was hand-added.
+    expect(Object.keys(EXTERNAL_VERSIONS).sort()).toEqual([...INIT_EXTERNAL_PACKAGES].sort());
   });
 });
 
