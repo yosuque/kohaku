@@ -107,6 +107,18 @@ class InvocationContext:
 
 
 class DomainPort(Protocol):
+    """The business-API connection point.
+
+    Two contract invariants (SPEC ACT-RD-001, design.md #77), because the host guards both the action path and
+    the data-plane read path (`query://` refs) off `list_operations()`:
+
+    - every operation with side effects is listed by `list_operations()` with its `tier` (an operation it does
+      not list is treated as a plain query);
+    - `invoke` dispatches on the exact operation name it is given, with no case folding, trailing-slash
+      stripping, percent-decoding or other normalization, so the name a host looked up in `list_operations()`
+      is the operation that runs.
+    """
+
     async def list_operations(self) -> list[OperationDescriptor]: ...
 
     async def invoke(self, op: str, args: JsonObject, ctx: InvocationContext) -> object: ...

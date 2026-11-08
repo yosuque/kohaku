@@ -8,10 +8,9 @@ Differences from TS:
 - LineageSummary / IntentUsage etc. are dataclasses. tiers / cache / promotions / fixations /
   byKind are fixed-key counters, so they stay as dict[str, int] (corresponding to TS plain objects).
 - Quantile / rate computation is identical to TS (nearest-rank / total / (composed+total)).
-- Known gap (docs/design.md, python/README.md): the `review` block and the `schemaSuggested` /
-  `schemaEdited` counters are not ported. Only the fields of design.md #73 / #74 are mirrored:
-  `usage`, `l2ByIntent` and `schemaEditsByComponent` (the last one reads `component.schemaEdited` /
-  `component.schemaProposed` for its own grouping, without adding the counters).
+- The `review` block (human review turnaround and the zero-edit "accepted as is" count) and the
+  `schemaSuggested` / `schemaEdited` counters are mirrored too; the `review` block is a wire-shaped
+  dataclass whose quantiles are emitted as explicit `null` when nothing was reviewed (`to_wire`).
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from kohaku.spec import LineageEventRecord
@@ -124,6 +124,39 @@ class L2IntentGap:
 
 
 @dataclass(frozen=True)
+class ReviewDuration:
+    """Nearest-rank quantiles (milliseconds) of the paired review turnarounds. None when nothing was paired."""
+
+    p50: float | None
+    p95: float | None
+    max: float | None
+
+    def to_wire(self) -> dict[str, Any]:
+        """Always spell out the 3 quantile keys (explicit `null` for an empty population, like TS)."""
+        return {"p50": self.p50, "p95": self.p95, "max": self.max}
+
+
+@dataclass(frozen=True)
+class ReviewSummary:
+    """Human review turnaround: the time from a candidate's `component.nominated` to the next
+    `component.reviewed` whose decision is approve or reject, paired per (tenant, artifactId). A
+    requestChanges decision does not complete a review, and a re-nomination for a candidate whose window is
+    already open does not restart the measurement (a re-submitted candidate is measured from its *original*
+    nomination). A reviewed event with no preceding open nomination in the window is ignored.
+
+    `count` is the number of *paired* durations that made it into `durationMs`: a pair whose computed delta
+    fails the finite / non-negative guard (out-of-order or malformed timestamps) is silently dropped from both
+    `count` and the quantiles. `acceptedAsIs` counts `component.schemaEdited` records whose `changed` is empty
+    **and** whose `acknowledged` is `true` (the reviewer both made no edits and ticked the acknowledgement
+    checkbox); a record with no `acknowledged` field at all counts the same as `acknowledged: false`.
+    """
+
+    count: int
+    durationMs: ReviewDuration
+    acceptedAsIs: int
+
+
+@dataclass(frozen=True)
 class SchemaEditGap:
     """One row of `LineageSummary.schemaEditsByComponent` (design.md #73; port of TS `SchemaEditGap`).
 
@@ -150,9 +183,7 @@ class SummarizeUsageOptions:
 class LineageSummary:
     """Lineage aggregate summary (the body of the analytics.read response).
 
-    Of the TS additions only `usage`, `l2ByIntent` and `schemaEditsByComponent` (design.md #73 / #74) are
-    mirrored here; the `review` block and the `schemaSuggested` / `schemaEdited` counters remain a known gap
-    (docs/design.md, python/README.md).
+    Field order is the wire key order (`to_jsonable` follows it), identical to the TS object.
     """
 
     events: int
@@ -163,6 +194,7 @@ class LineageSummary:
     durationMs: DurationSummary
     topIntents: list[IntentUsage]
     promotions: dict[str, int]
+    review: ReviewSummary
     fixations: dict[str, int]
     usage: list[UsageRow]
     l2ByIntent: list[L2IntentGap]
@@ -199,6 +231,15 @@ def _tenant_matches(wanted: str | None, record_tenant: str | None) -> bool:
     if wanted is None or wanted == "":
         return True
     return (record_tenant if record_tenant != "" else None) == wanted
+
+
+def _parse_ts_ms(ts: str) -> datetime | None:
+    """Parses a record's ISO8601 `ts` (TS's `Date.parse`); None when it is unparseable."""
+    try:
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _has_fallback(payload: dict[str, Any]) -> bool:
@@ -248,8 +289,10 @@ def summarize_lineage(
         "generated": 0,
         "used": 0,
         "nominated": 0,
+        "schemaSuggested": 0,
         "judged": 0,
         "reviewed": 0,
+        "schemaEdited": 0,
         "published": 0,
         "withdrawn": 0,
     }
@@ -265,6 +308,12 @@ def summarize_lineage(
     l2_rows: dict[str, L2IntentGap] = {}
     proposed_type: dict[tuple[str, str], str] = {}
     schema_edits: list[tuple[tuple[str, str], str, list[str]]] = []
+
+    # Review-turnaround inputs: (tenant, artifactId) -> ts of the latest nomination not yet closed by an
+    # approve / reject review; the paired durations (milliseconds); the zero-edit acknowledged acceptances.
+    open_nominations: dict[tuple[str, str], str] = {}
+    review_durations: list[float] = []
+    accepted_as_is = 0
 
     composed = 0
     fallback_total = 0
@@ -326,10 +375,26 @@ def summarize_lineage(
             promotions["used"] += 1
         elif e.type == "component.nominated":
             promotions["nominated"] += 1
+            # Only open a *fresh* window when none is already open for this (tenant, artifactId): a
+            # re-nomination for a candidate whose window is already open (the "re-submit and approve" flow)
+            # does not restart the measurement, so a re-submitted candidate is measured from its original
+            # nomination. This does not key off payload.by.
+            open_nominations.setdefault(review_key, e.ts)
+        elif e.type == "component.schemaSuggested":
+            promotions["schemaSuggested"] += 1
         elif e.type == "component.judged":
             promotions["judged"] += 1
         elif e.type == "component.reviewed":
             promotions["reviewed"] += 1
+            if e.payload.get("decision") in ("approve", "reject"):
+                nominated_at = open_nominations.pop(review_key, None)
+                if nominated_at is not None:
+                    opened = _parse_ts_ms(nominated_at)
+                    closed = _parse_ts_ms(e.ts)
+                    if opened is not None and closed is not None:
+                        delta = (closed - opened) // timedelta(milliseconds=1)
+                        if delta >= 0:
+                            review_durations.append(delta)
         elif e.type == "component.published":
             promotions["published"] += 1
         elif e.type == "component.withdrawn":
@@ -339,9 +404,17 @@ def summarize_lineage(
         elif e.type == "intent.unfixated":
             fixations["unfixated"] += 1
         elif e.type == "component.schemaEdited":
-            # Only the catalog-gap grouping reads this record (the `schemaEdited` counter and the review
-            # block stay unported; see the module docstring).
+            promotions["schemaEdited"] += 1
             changed = e.payload.get("changed")
+            # acceptedAsIs requires BOTH no edits AND an explicit acknowledgement (payload.acknowledged is
+            # True). A record with no acknowledged field at all (written before that field existed) reads as
+            # not True, the same as an explicit False -- neither counts.
+            if (
+                isinstance(changed, list)
+                and len(changed) == 0
+                and e.payload.get("acknowledged") is True
+            ):
+                accepted_as_is += 1
             if isinstance(changed, list) and len(changed) > 0:
                 fields = [
                     c["field"]
@@ -358,6 +431,7 @@ def summarize_lineage(
         # fixation's pinnedSpec is neither a fresh fixation nor a removal, and has no counter of its own.
 
     durations.sort()
+    review_durations.sort()
     denom = composed + fallback_total
     limit = opts.topIntentsLimit if opts.topIntentsLimit is not None else TOP_INTENTS_DEFAULT
     top_n = min(max(math.floor(limit), 1), TOP_INTENTS_MAX)
@@ -418,6 +492,15 @@ def summarize_lineage(
         ),
         topIntents=top_intents,
         promotions=promotions,
+        review=ReviewSummary(
+            count=len(review_durations),
+            durationMs=ReviewDuration(
+                p50=_quantile(review_durations, 50),
+                p95=_quantile(review_durations, 95),
+                max=review_durations[-1] if len(review_durations) > 0 else None,
+            ),
+            acceptedAsIs=accepted_as_is,
+        ),
         fixations=fixations,
         usage=summarize_usage(scoped, SummarizeUsageOptions(bucket="day")),
         l2ByIntent=l2_by_intent,

@@ -350,7 +350,11 @@ async function packageComposed(
   // `resolved` is the full pre-budget Map of every ref this call already resolved — handed to snapshotHtmlFor
   // below so the legacyUiResource co-emission (which needs the identical ref set) does not re-invoke
   // domain.invoke for refs already resolved here.
-  const { data: initialData, resolved: preresolvedRefs } = await preresolveInitialData(result.spec, ctx);
+  const {
+    data: initialData,
+    resolved: preresolvedRefs,
+    denied: deniedRefs,
+  } = await preresolveInitialData(result.spec, ctx);
   const requestId = result.trace.correlationId ?? ctx.requestId;
   // content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource comes after.
   const content: Array<
@@ -367,7 +371,7 @@ async function packageComposed(
         resource: {
           uri: `ui://kohaku/view/${result.spec.intent.hash}`,
           mimeType: "text/html",
-          text: await snapshotHtmlFor(ctx, result, preresolvedRefs),
+          text: await snapshotHtmlFor(ctx, result, preresolvedRefs, deniedRefs),
         },
       });
     } catch (e) {
@@ -707,6 +711,40 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           principal,
         );
         if ("isError" in authorized) return authorized;
+        // The read path never runs a governed Action (SPEC ACT-RD-001, design.md #77): a ref naming an
+        // operation whose tier is "confirm" / "approve" is refused before domain.invoke (only `_action` holds
+        // such an operation for a confirmation or an approval), and an unreadable operation index fails closed.
+        // host-core's runGatedReadGuard (shared with REST's /binding/resolve) audits both as `action.denied`.
+        const requestId = mcpCorrelationId(extra);
+        const guard = await hostCore.runGatedReadGuard({
+          operationIndex: ctx.operationIndex,
+          operation: base.path,
+          audit: {
+            recorder: ctx.deps.actionAuditRecorder,
+            action: base.path,
+            payload: params,
+            principal: authorized.principal,
+            ...(authorized.tenant != null ? { tenant: authorized.tenant } : {}),
+            correlationId: requestId,
+            report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_resolve_binding.audit`, e, requestId),
+          },
+          report: {
+            indexFailure: (e) =>
+              reportMcpError(ctx.deps, `${ctx.prefix}_resolve_binding.operationIndex`, e, requestId),
+            schemaError: (e) =>
+              reportMcpError(ctx.deps, `${ctx.prefix}_resolve_binding.operationIndex`, e, requestId),
+          },
+        });
+        switch (guard.kind) {
+          case "indexUnavailable":
+            return toolError("operation index unavailable");
+          case "gated":
+            return toolError(`capability denied: ${hostCore.GATED_READ_MESSAGE}`);
+          case "schemaInvalid":
+            return toolError("action parameter schema unavailable");
+          case "readable":
+            break;
+        }
         // The capability's signed tenant, when it binds one (a REST-issued capability replayed here), is
         // carried through to the invocation; this profile resolves no tenant of its own (SPEC CAP-TEN-002).
         const data = await ctx.deps.domain.invoke(base.path, params, {

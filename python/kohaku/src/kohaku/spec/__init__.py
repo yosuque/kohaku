@@ -178,6 +178,7 @@ from .sandbox_dom import (
 )
 from .spec_text import spec_to_text
 from .storage_conflict import StorageConflictError, is_storage_conflict_error
+from .suggestion import SchemaSuggestion, SuggestedDraft, SuggestedEvent
 from .tabular import ColumnType, DataShape, DataShapeColumn, TabularColumn, TabularData
 from .validate import (
     MAX_BIND_VARIANTS,
@@ -291,6 +292,7 @@ __all__ = [
     "SafeParsePatchResult",
     "SafeParseResult",
     "SandboxArtifactRef",
+    "SchemaSuggestion",
     "Scope",
     "SemanticInput",
     "SemanticPort",
@@ -304,6 +306,8 @@ __all__ = [
     "SpecPatch",
     "StorageConflictError",
     "StoragePort",
+    "SuggestedDraft",
+    "SuggestedEvent",
     "SupportsBatchPromotionStates",
     "SupportsValidateIntent",
     "Surface",

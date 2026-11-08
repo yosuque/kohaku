@@ -389,6 +389,8 @@ If your data already sits behind an MCP server, `@kohaku-ui/domain-mcp` turns it
 
 > **Use it only with MCP servers you trust.** `readOnlyHint` is a hint the server makes about itself: a server that marks a write tool read-only gets it resolved as a plain read, with no approval gate. Pass `isReadOnly(tool)` and/or `include(tool)` to decide yourself.
 
+> **`tierFor` and the read path.** The host refuses to execute an operation that declares tier `"confirm"` or `"approve"` through a `query://` read ref (SPEC ACT-RD-001), but `tierFor(tool) === "auto"` on a write tool declares neither: that tool is then reachable through a read ref, without the `paramsSchema` check, if such a ref is ever issued. `createMcpIntents` only builds Intents for read-only tools and never emits such a ref, so this needs a hand-written Intent or a forged ref; still, give a write tool `"auto"` only when you accept that.
+
 ```bash
 npm install @kohaku-ui/domain-mcp @kohaku-ui/host @kohaku-ui/authz-hmac @kohaku-ui/llm zod @modelcontextprotocol/client
 ```

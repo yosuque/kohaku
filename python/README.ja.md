@@ -145,7 +145,7 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
 │  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
-│  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
+│  │  ├─ evals/            # ← packages/evals(judge / スキーマ抽出 / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
 │  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
 │  │  │                    #   (← intent.ts)+ allowed_actions.py(← allowed-actions.ts)+
@@ -518,7 +518,7 @@ Python 側ではそもそも独立パッケージ境界を持たないため(TS 
 
 `kohaku.domain_mcp` は `@kohaku-ui/domain-mcp` のミラーで、既存の MCP サーバーをホストの `DomainPort` にします。
 `annotations.read_only_hint is True` のツールは `query://` の op(結果は `TabularData`)、それ以外のツールは
-`tier="approve"` の Action(`tier_for` で上書き可)で、その `paramsSchema` は `inputSchema` を閉じた
+`tier="approve"` の Action(`tier_for` で上書き可。書き込みツールに `tier_for(tool) == "auto"` を返すと、ホストが読み取りの経路で拒否するのは `confirm` / `approve` の operation だけなので(SPEC ACT-RD-001)、`paramsSchema` の検査なしに `query://` の読み取り ref から到達できます)で、その `paramsSchema` は `inputSchema` を閉じた
 `ActionParamsSchema` の部分集合へ射影したものです(nullable な `Optional[X]` 形以外の `anyOf`、`oneOf`、`$ref`、`additionalProperties: true` を使う場合は付きません)。
 既存の `mcp` extra(`pip install 'kohaku-ui[mcp]'`)に含まれ、`mcp` 自体は import しません: 公式 SDK の `Client` を
 引数で渡します(`list_tools(cursor=...)` / `call_tool(name, arguments)` を持つ任意のオブジェクトで可)。
@@ -614,16 +614,10 @@ failed catalog/structure validation」という文言とは別物にし、この
   (`revision`、`validate_params`)は `getattr` で探ることが TS との違いである。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
-- **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
-  `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
-  フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
-  `schemaSuggested` / `schemaEdited` カウンタ(一方 analytics の `usage` 行、`l2ByIntent`、
-  `schemaEditsByComponent` は反映済み: `summarize_usage` と `summarize_lineage`、
-  design.md #74 / #73。`review` ブロックは引き続き未反映)、TS 側の rubric 0.4(Python の
-  `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
-  を欠く)、`CapabilityRevocationStore` と jti ベースの capability 失効、
+- **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):**
+  `CapabilityRevocationStore` と jti ベースの capability 失効、
   `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、
-  `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
+  `admin-react`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に

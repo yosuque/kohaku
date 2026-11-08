@@ -3,9 +3,11 @@ import {
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
   errorMessage,
+  GATED_READ_MESSAGE,
   type ParsedInvokableRef,
   parseInvokableRef,
   runActionGate,
+  runGatedReadGuard,
   UNDECLARED_ACTION_MESSAGE,
   verifyCapabilitySafely,
 } from "@kohaku-ui/host-core";
@@ -204,6 +206,41 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     if (authorized instanceof Response) return authorized;
     const { principal, tenant } = authorized;
 
+    // The read path never runs a governed Action (SPEC ACT-RD-001, design.md #77): a ref naming an operation
+    // whose tier is "confirm" / "approve" is refused before domain.invoke, since only /binding/action holds
+    // such an operation for a confirmation or an approval. An unreadable operation index fails closed (503),
+    // the same outcome the action path gives. host-core's runGatedReadGuard audits both as `action.denied`.
+    const requestId = requestIdOf(c, deps);
+    const guard = await runGatedReadGuard({
+      operationIndex: () => ctx.operationIndex(),
+      operation: base.path,
+      audit: {
+        recorder: deps.actionAuditRecorder,
+        action: base.path,
+        payload: params,
+        principal,
+        tenant,
+        correlationId: requestId,
+        report: (e: unknown) => reportHostError(deps, "binding/resolve.audit", requestId, e),
+      },
+      report: {
+        indexFailure: (e) => reportHostError(deps, "binding/resolve", requestId, e),
+        schemaError: (e) => reportHostError(deps, "binding/resolve", requestId, e),
+      },
+    });
+    switch (guard.kind) {
+      case "indexUnavailable":
+        return c.json(errorBody("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, requestId), 503);
+      case "gated":
+        return c.json(errorBody("CAPABILITY_DENIED", GATED_READ_MESSAGE, requestId), 403);
+      // A declared operation whose paramsSchema failed validation is never invoked on the read path either:
+      // fail closed (500), the action path's outcome for it.
+      case "schemaInvalid":
+        return c.json(errorBody("INTERNAL", ACTION_DECLARATION_INVALID_MESSAGE, requestId), 500);
+      case "readable":
+        break;
+    }
+
     try {
       // Reserved params (_cursor/_limit/_sort/_dir) are already merged into params by parseInvokableRef
       // (the `_` namespace convention — DomainPort signature unchanged).
@@ -220,7 +257,6 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
       // a permanent "no such reference" versus a transient failure entails introducing a Port contract (typed
       // errors), so that is left as a separate decision. The raw error message never reaches the client (it may
       // leak internals); the original error still reaches onError via reportHostError.
-      const requestId = requestIdOf(c, deps);
       await reportHostError(deps, "binding/resolve", requestId, e);
       return c.json(errorBody("REF_NOT_FOUND", REF_NOT_FOUND_MESSAGE, requestId), 404);
     }
