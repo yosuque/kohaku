@@ -1,6 +1,6 @@
 import { ComposeError, type ComposeErrorContext } from "@kohaku-ui/composer";
 import { LlmError, type LlmErrorCode } from "@kohaku-ui/llm";
-import { QueryRefError, SpecError } from "@kohaku-ui/spec-core";
+import { QueryRefError, SpecError, StorageConflictError } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyHostError,
@@ -13,6 +13,7 @@ import {
   isTypedHostError,
   LLM_PROVIDER_UNAVAILABLE_MESSAGE,
   notifyHook,
+  STORAGE_CONFLICT_MESSAGE,
 } from "../src/errors.js";
 
 const LLM_CODES: LlmErrorCode[] = ["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED"];
@@ -113,6 +114,13 @@ describe("classifyHostError", () => {
     });
     const coded = Object.assign(new Error("governance failed"), { code: "PROMOTION_NOT_PUBLISHED" });
     expect(classifyHostError(coded)).toEqual({ kind: "typed", message: "governance failed" });
+  });
+
+  it("maps a StorageConflictError to conflict with the fixed message, not its own text (even though it carries a string code)", () => {
+    const e = new StorageConflictError("promotion", "art-1");
+    expect(classifyHostError(e)).toEqual({ kind: "conflict", message: STORAGE_CONFLICT_MESSAGE });
+    expect(STORAGE_CONFLICT_MESSAGE).toBe("the resource was modified concurrently; reload and retry");
+    expect(clientMessageFor(e, "fb")).toBe(STORAGE_CONFLICT_MESSAGE);
   });
 
   it("maps a plain Error and a non-Error value to untyped", () => {

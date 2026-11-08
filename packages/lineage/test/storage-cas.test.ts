@@ -103,7 +103,7 @@ function casStorage(options: { supportsCompareAndSet?: boolean } = {}): CasStora
     },
     async getPromotionState(id) {
       const state = states.get(id) ?? null;
-      const snapshot = state == null ? null : JSON.parse(JSON.stringify(state)) as PromotionState;
+      const snapshot = state == null ? null : (JSON.parse(JSON.stringify(state)) as PromotionState);
       fire("afterPromotionRead");
       return snapshot;
     },
@@ -125,7 +125,7 @@ function casStorage(options: { supportsCompareAndSet?: boolean } = {}): CasStora
     },
     async getFixation(intentHash) {
       const record = fixations.get(intentHash) ?? null;
-      const snapshot = record == null ? null : JSON.parse(JSON.stringify(record)) as FixationRecord;
+      const snapshot = record == null ? null : (JSON.parse(JSON.stringify(record)) as FixationRecord);
       fire("afterFixationRead");
       return snapshot;
     },

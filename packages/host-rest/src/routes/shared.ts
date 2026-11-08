@@ -5,6 +5,7 @@ import {
   notifyHook,
   type OperationIndex,
   parseTraceContext,
+  STORAGE_CONFLICT_MESSAGE,
 } from "@kohaku-ui/host-core";
 import {
   exceedsMaxJsonDepth,
@@ -258,6 +259,18 @@ export function requestIdOf(c: Context, deps: KohakuHostDeps): string {
  */
 export function traceContextOf(c: Context): TraceContext | undefined {
   return parseTraceContext(c.req.header("traceparent"), c.req.header("tracestate"));
+}
+
+/**
+ * The 409 `CONFLICT` response for a `StorageConflictError` (SPEC §6.1): a governance write found its record
+ * changed by a concurrent writer between the read and the write, and nothing was written. The message is the
+ * fixed STORAGE_CONFLICT_MESSAGE (the error's own text names the record kind and key, so it never reaches the
+ * client). The host does not retry on its own; the caller reloads and retries. Not reported to `onError`: it
+ * is an expected, client-visible outcome of optimistic concurrency, not a host failure, and the envelope's
+ * requestId already correlates it with the request log.
+ */
+export function storageConflictResponse(c: Context, deps: KohakuHostDeps): Response {
+  return c.json(errorBody("CONFLICT", STORAGE_CONFLICT_MESSAGE, requestIdOf(c, deps)), 409);
 }
 
 /**

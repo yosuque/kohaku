@@ -1,6 +1,6 @@
 import { ComposeError, type ComposeErrorContext } from "@kohaku-ui/composer";
 import { LlmError } from "@kohaku-ui/llm";
-import { QueryRefError, SpecError } from "@kohaku-ui/spec-core";
+import { isStorageConflictError, QueryRefError, SpecError } from "@kohaku-ui/spec-core";
 
 /**
  * A "typed" error the host's own code (spec-core / composer / lineage / host-core / host-mcp-apps) produced
@@ -54,8 +54,18 @@ export function isLlmUnavailableError(e: unknown): boolean {
   return code === "PROVIDER" || code === "CONFIG" || code === "ABORTED";
 }
 
-/** What a host should do with a caught exception: map to 503, pass its message through, or use a fixed fallback. */
+/**
+ * The fixed, client-safe message for a `StorageConflictError` (SPEC §6.1, `CONFLICT`): a governance write found
+ * its record changed by a concurrent writer (typically another host instance on the same backend) between its
+ * read and its write, and nothing was written. REST answers 409 `CONFLICT` with this text and MCP a structured
+ * tool error; the caller reloads and retries (a host never retries on its own). The error's own message (which
+ * names the record kind and key) goes only to the observability hook.
+ */
+export const STORAGE_CONFLICT_MESSAGE = "the resource was modified concurrently; reload and retry";
+
+/** What a host should do with a caught exception: map to 409, map to 503, pass its message through, or use a fixed fallback. */
 export type HostErrorClass =
+  | { kind: "conflict"; message: string }
   | { kind: "upstreamUnavailable"; message: string }
   | { kind: "typed"; message: string }
   | { kind: "untyped" };
@@ -65,6 +75,9 @@ export type HostErrorClass =
  * 503 and MCP's tool error agree on which failures are "the upstream LLM is unavailable".
  */
 export function classifyHostError(e: unknown): HostErrorClass {
+  // Before the typed check: a StorageConflictError carries a string `code` too, so it would otherwise pass its
+  // own message through instead of the fixed STORAGE_CONFLICT_MESSAGE.
+  if (isStorageConflictError(e)) return { kind: "conflict", message: STORAGE_CONFLICT_MESSAGE };
   if (isLlmUnavailableError(e))
     return { kind: "upstreamUnavailable", message: LLM_PROVIDER_UNAVAILABLE_MESSAGE };
   if (isTypedHostError(e)) return { kind: "typed", message: errorMessage(e) };
@@ -93,6 +106,7 @@ export function errorMessage(e: unknown): string {
  * {@link classifyHostError} instead, which adds that third outcome on top of the same typed / untyped split.
  */
 export function clientMessageFor(e: unknown, fallback: string): string {
+  if (isStorageConflictError(e)) return STORAGE_CONFLICT_MESSAGE;
   return isTypedHostError(e) ? errorMessage(e) : fallback;
 }
 

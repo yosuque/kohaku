@@ -1,5 +1,10 @@
 import { DEFAULT_CAPABILITY_TTL_SECONDS, errorMessage } from "@kohaku-ui/host-core";
-import { type ErrorEnvelope, GOVERNANCE_ERROR_DISCRIMINATORS, type Principal } from "@kohaku-ui/spec-core";
+import {
+  type ErrorEnvelope,
+  GOVERNANCE_ERROR_DISCRIMINATORS,
+  isStorageConflictError,
+  type Principal,
+} from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
 import { errorBody } from "../errors.js";
@@ -13,6 +18,7 @@ import {
   requestBodyTooDeep,
   requestIdOf,
   resolveTenant,
+  storageConflictResponse,
   tenantScope,
   tenantScopeOf,
 } from "./shared.js";
@@ -386,6 +392,7 @@ async function ensureArtifact(
  * Maps promotion-action exceptions to the error convention. Since depending on lineage is forbidden (reverse
  * dependency), the error kind is discriminated structurally (code / name) without importing the error type. The
  * discriminator literals are shared with the thrower via spec-core's GOVERNANCE_ERROR_DISCRIMINATORS.
+ * - StorageConflictError (compare-and-set lost a race with another writer) -> 409 CONFLICT, fixed message
  * - PromotionNotPublishedError (code) -> 409 (approved but not published)
  * - TransitionError (name) -> 422 PROMOTION_INVALID (transition rejected)
  * - candidate-store's require() (code) -> 404 (a safeguard for when get is unimplemented and the pre-check could not run)
@@ -397,6 +404,7 @@ async function promotionError(
   endpoint: string,
   e: unknown,
 ): Promise<Response> {
+  if (isStorageConflictError(e)) return storageConflictResponse(c, deps);
   if ((e as { code?: unknown }).code === GOVERNANCE_ERROR_DISCRIMINATORS.notPublishedCode) {
     // The promotion state the batch transition stopped at (PromotionNotPublishedError.status), carried on
     // the wire as error.status (distinct from the HTTP status of this response; SPEC §6.1).

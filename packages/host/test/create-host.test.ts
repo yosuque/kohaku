@@ -500,4 +500,39 @@ describe("createKohakuHost", () => {
     expect(out).toEqual({ canonical: "test.custom", params: { request: "heatmap please" } });
     expect(rules).toHaveBeenCalled();
   });
+
+  describe("compare-and-set warning", () => {
+    const hostOptions = () => ({
+      domain,
+      querySource: "test",
+      llm: new FakeLlm(),
+      intents: [testIntentDef],
+      dataVersion: () => "v1",
+      capabilitySecret: "test-secret",
+    });
+    const casWarnings = (warn: { mock: { calls: unknown[][] } }) =>
+      warn.mock.calls.filter((call) => /supportsCompareAndSet/.test(String(call[0])));
+
+    it("warns once when a custom storage does not declare supportsCompareAndSet", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { supportsCompareAndSet: _declared, ...undeclared } = createMemoryStoragePort();
+        createKohakuHost({ ...hostOptions(), storage: undeclared });
+        expect(casWarnings(warn)).toHaveLength(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("stays silent for the default storage and for one that declares it", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        createKohakuHost(hostOptions());
+        createKohakuHost({ ...hostOptions(), storage: createMemoryStoragePort() });
+        expect(casWarnings(warn)).toHaveLength(0);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
 });

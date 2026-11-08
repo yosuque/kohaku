@@ -1,5 +1,12 @@
 import { coreCatalog, defineComponent, resolveCatalog } from "@kohaku-ui/registry";
-import type { FixationRecord, JsonObject, Principal, StoragePort, UISpec } from "@kohaku-ui/spec-core";
+import {
+  type FixationRecord,
+  type JsonObject,
+  type Principal,
+  StorageConflictError,
+  type StoragePort,
+  type UISpec,
+} from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
@@ -515,6 +522,37 @@ describe("applyCatalogMigration", () => {
     expect(result.applied).toEqual([]);
     expect(result.skipped).toEqual([{ intentHash: INTENT_HASH_CLEAN }]);
     expect(result.blocked).toEqual([]);
+  });
+
+  it("reports a step whose replace() lost a storage compare-and-set race as skipped and propagates any other error", async () => {
+    const plan = await buildPlan();
+    const conflicting: CatalogMigrationFixationReplacer = {
+      async replace() {
+        throw new StorageConflictError("fixation", INTENT_HASH_CLEAN);
+      },
+    };
+
+    const result = await applyCatalogMigration({
+      plan,
+      fixations: conflicting,
+      approver: APPROVER,
+      catalogFor: () => migrationCatalog(),
+    });
+    expect(result).toEqual({ applied: [], skipped: [{ intentHash: INTENT_HASH_CLEAN }], blocked: [] });
+
+    const broken: CatalogMigrationFixationReplacer = {
+      async replace() {
+        throw new Error("disk full");
+      },
+    };
+    await expect(
+      applyCatalogMigration({
+        plan,
+        fixations: broken,
+        approver: APPROVER,
+        catalogFor: () => migrationCatalog(),
+      }),
+    ).rejects.toThrow("disk full");
   });
 
   it("never calls replace for a step already in plan.blocked (only plan.steps is applied)", async () => {
