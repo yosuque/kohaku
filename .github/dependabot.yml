@@ -6,18 +6,20 @@
 #                      python/kohaku/pyproject.toml + python/examples/sales-api/pyproject.toml).
 #   - github-actions:  every workflow under .github/workflows/ (ci.yml, release.yml, version.yml, codeql.yml).
 #
-# --- Catalog caveat (read before "fixing" a stalled npm PR) ---------------------------------------------
+# --- Catalog and the versioning strategy (read before "fixing" a stalled npm PR) -----------------------
 # Most TS dependency versions are centralized in pnpm-workspace.yaml's `catalog:` block (typescript, zod,
 # react, vite, vitest, ai, @ai-sdk/*, @modelcontextprotocol/*, ...); individual package.json files only
-# reference `"catalog:"`. Dependabot's npm updater may not be able to bump a `"catalog:"`-pinned dependency
-# directly inside pnpm's catalog mechanism, so a Dependabot PR for one of those packages can end up limited
-# to root devDependencies + the lockfile, or fail to open a meaningful diff at all. That is expected, not a
-# bug in this config: catalog entries are meant to keep being bumped by a human editing the catalog block
-# directly (see AGENTS.md), and Dependabot's main value for npm here is *detecting* that an update exists
-# (and updating the handful of root-level, non-catalog devDependencies, if any) rather than opening
-# ready-to-merge PRs for every catalog package.
-# A Dependabot PR that does bump a catalog entry still fails CI until `cli/src/init/versions.ts`
-# (`EXTERNAL_VERSIONS`, the versions `kohaku init` writes into a generated project) is synced by hand:
+# reference `"catalog:"`. Dependabot does edit catalog entries: its pnpm workspace updater rewrites
+# pnpm-workspace.yaml with the requirements the npm requirements updater computed, which applies one
+# versioning strategy to every requirement regardless of the file it lives in.
+# The npm entry below sets `versioning-strategy: increase-if-necessary`, so a satisfied `^` range (a catalog
+# floor, or a published package's dependency/peer range) stays as it is and only the lockfile moves, while an
+# exact pin (react, react-dom, typescript, vitepress, @biomejs/biome) is bumped. That is the repo's update
+# policy (docs/adr/0002-update-dependencies-lockfile-only-with-cooldown.md). Under the previous default
+# (`auto`, which raises the floor for an app), every npm PR raised catalog floors and failed CI.
+# A Dependabot PR that does change a catalog entry (an exact pin, e.g. react, or typescript) still fails CI
+# until `cli/src/init/versions.ts` (`EXTERNAL_VERSIONS`, the versions `kohaku init` writes into a generated
+# project) is synced by hand and the init goldens are regenerated:
 # `cli/test/init/render.test.ts` asserts it matches the catalog. Dependabot cannot edit that file.
 #
 # --- Cadence -----------------------------------------------------------------------------------------------
@@ -52,6 +54,9 @@ updates:
       timezone: "Asia/Tokyo"
     cooldown:
       default-days: 7
+    # Keep satisfied `^` ranges (catalog floors, published ranges); move the lockfile and exact pins only.
+    # See the "Catalog and the versioning strategy" note at the top and ADR-0002.
+    versioning-strategy: "increase-if-necessary"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
