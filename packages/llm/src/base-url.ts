@@ -30,9 +30,20 @@ export function normalizeVendorBaseUrl(
   if (trimmed == null || trimmed === "") return undefined;
   const segment = VERSION_SEGMENT[provider];
   if (segment == null) return trimmed;
-  let root = trimmed.replace(/\/+$/, "");
-  if (root.endsWith(segment)) root = root.slice(0, -segment.length).replace(/\/+$/, "");
+  let root = stripTrailingSlashes(trimmed);
+  if (root.endsWith(segment)) root = stripTrailingSlashes(root.slice(0, -segment.length));
   return root === "" ? undefined : root;
+}
+
+/**
+ * Removes every trailing `/` in linear time. A `/\/+$/` regex would backtrack quadratically on an input with
+ * many slashes that do not reach the end of the string (CodeQL js/polynomial-redos), and the value comes from
+ * configuration a library caller passes in.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
 }
 
 /**

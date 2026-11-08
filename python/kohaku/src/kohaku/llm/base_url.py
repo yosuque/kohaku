@@ -10,12 +10,9 @@ trimmed but otherwise unchanged. Pinned across languages by the `llmBaseUrl` cro
 
 from __future__ import annotations
 
-import re
-
 from .env import LlmProvider
 
 _VERSION_SEGMENT: dict[str, str] = {"claude": "/v1", "gemini": "/v1beta"}
-_TRAILING_SLASHES = re.compile(r"/+$")
 
 
 def normalize_vendor_base_url(provider: LlmProvider, base_url: str | None) -> str | None:
@@ -26,7 +23,8 @@ def normalize_vendor_base_url(provider: LlmProvider, base_url: str | None) -> st
     segment = _VERSION_SEGMENT.get(provider)
     if segment is None:
         return trimmed
-    root = _TRAILING_SLASHES.sub("", trimmed)
+    # rstrip is linear; a `/+$` regex backtracks quadratically on many non-trailing slashes (mirrors TS).
+    root = trimmed.rstrip("/")
     if root.endswith(segment):
-        root = _TRAILING_SLASHES.sub("", root[: -len(segment)])
+        root = root[: -len(segment)].rstrip("/")
     return root or None
