@@ -1,0 +1,59 @@
+# Runs the generated project against what the registries actually serve (the published @kohaku-ui/* packages and the
+# kohaku-ui wheel, resolved together with the newest upstream dependencies), which pack-smoke cannot see: it installs
+# tarballs built from the current commit. Nightly, and on demand right after a release (docs/runbooks/release.md).
+name: Published E2E
+
+on:
+  schedule:
+    - cron: "17 18 * * *" # 03:17 JST
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "cli version or dist-tag to check (the PyPI job always checks the latest wheel)"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24, 26]
+        mode: [plain, mcp]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+      # Inputs and matrix values reach the script through env, never interpolated into the command line.
+      - name: Generate a project from the published CLI and exercise it
+        run: node scripts/published-e2e.mjs --version "${VERSION}" ${MODE_FLAG}
+        env:
+          VERSION: ${{ inputs.version || 'latest' }}
+          MODE_FLAG: ${{ matrix.mode == 'mcp' && '--mcp' || '' }}
+
+  pypi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: false
+      # --isolated + --no-project + python -I: only the wheel from PyPI is importable, never this repository's python/.
+      - name: Smoke the published wheel
+        run: uv run --isolated --no-project --with "kohaku-ui[rest,mcp,claude]" python -I scripts/published_e2e_python.py

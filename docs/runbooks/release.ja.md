@@ -161,6 +161,10 @@ OIDC trusted publishing + provenance で 29 パッケージを公開し、`pypi`
 `summary` ジョブのステップサマリには、その実行で実際に公開されたパッケージの一覧、npm パッケージページ・
 PyPI プロジェクトページ・GitHub Release へのリンクが載ります。
 
+実行が緑になったら、`gh workflow run published-e2e.yml -f version=X.Y.Z` でレジストリが今配っている版を確かめます
+(`published-e2e.yml` は毎晩も動きます)。公開済みの CLI でプロジェクトを生成し、テスト・型検査・起動までを、通常と
+`--mcp` の両方で Node 24 / 26 に対して行い、公開済みの wheel も Python 3.12 / 3.13 で確かめます。
+
 ## 6. 失敗した公開の再実行
 
 失敗した公開は、原因を取り除けば再実行して安全です。Trusted Publisher の未登録は、何も公開しないうちに

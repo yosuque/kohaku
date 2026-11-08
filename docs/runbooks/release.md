@@ -164,6 +164,10 @@ twenty-nine packages via OIDC trusted publishing with provenance, then `pypi` pu
 `summary` job's step summary lists which packages this run actually published, and links to the npm
 package page, the PyPI project page, and the GitHub release.
 
+Once the run is green, confirm what the registries now serve with `gh workflow run published-e2e.yml -f version=X.Y.Z`
+(`published-e2e.yml` also runs nightly): it generates a project from the published CLI, then tests, type-checks and
+serves it, in plain and `--mcp` form on Node 24 and 26, and smokes the published wheel on Python 3.12 and 3.13.
+
 ## 6. Re-running a failed publish
 
 A failed publish is safe to re-run once its cause is fixed. A missing trusted publisher stops the run in
