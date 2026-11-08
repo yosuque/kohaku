@@ -520,3 +520,22 @@ class TestMoreTtlAndPrefixCases:
             ]
 
         asyncio.run(run())
+
+
+class TestHugeIntegerExp:
+    def test_an_integer_exp_too_large_for_a_float_is_malformed_not_an_exception(self) -> None:
+        async def run() -> None:
+            claims = {
+                "action": ACTION,
+                "payloadHash": PAYLOAD_HASH,
+                "approverId": APPROVER_ID,
+                "requesterId": REQUESTER_ID,
+                "exp": 10**400,
+                "jti": "j",
+            }
+            result = await _verify(
+                create_hmac_approval_port("test-secret"), _forge("test-secret", claims)
+            )
+            assert (result.ok, result.reason) == (False, "malformed payload")
+
+        asyncio.run(run())

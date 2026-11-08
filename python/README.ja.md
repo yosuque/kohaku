@@ -515,9 +515,11 @@ TTL の上限での切り詰め、自己承認の拒否、`create_memory_approva
 どちらも TS の port とバイト単位で wire 互換であり、言語間 golden の `authzHmac` セクションが、TS が発行した
 capability と approval のトークン一式を固定して、Python の port が検証でき、同一の文字列を再発行できることを
 保証する。さらに、TS の AuthzPort / ApprovalPort / revocation store の契約テスト群の Python 版
-(`python/kohaku/tests/authz_hmac/_contract.py`)も通る。テストで固定できるよう、port は注入可能な `now` と
-`generate_jti` を受け取る(TS は壁時計と `randomBytes` を直接参照する)。TS と違い、既定の秘密鍵は無い
-(必ず渡す。sales サンプルは `KOHAKU_CAPABILITY_SECRET` を読む)。`python/examples/sales-api` の
+(`python/kohaku/tests/authz_hmac/_contract.py`)も通る。テストと golden で固定できるよう、port は `now` と
+`generate_jti` を**テスト専用**の注入点として受け取る(TS は壁時計と `randomBytes` を直接参照する)。本番では
+決して設定しないこと(乱数でない `generate_jti` は jti が衝突して失効と 1 回限りの承認を壊し、ずれた `now` は
+あらゆる期限をずらす)。TS と同じく、ファクトリは秘密鍵を必須とし、開発用の fallback を与えるのは sales
+サンプルの入口だけである(`KOHAKU_CAPABILITY_SECRET`)。`python/examples/sales-api` の
 `annotate`(`"confirm"` tier)と `publish`(`"approve"` tier)operation、および
 `sales_api_tests/test_governed_actions.py` は、TS サンプル自身の統制された Action デモを写している(全体の
 手順は[ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。

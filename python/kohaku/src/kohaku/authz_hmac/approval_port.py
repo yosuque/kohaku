@@ -32,7 +32,7 @@ from kohaku.spec import (
     ApprovalVerifyResult,
 )
 
-from .authz_port import b64url_decode, b64url_encode
+from .authz_port import b64url_decode, b64url_encode, is_utf8_encodable
 from .time import is_expired, now_seconds
 
 APPROVAL_TOKEN_PREFIX = "kohaku-approval.v2."
@@ -54,6 +54,11 @@ def _claims_well_formed(value: object) -> bool:
     if not isinstance(value, dict):
         return False
     exp = value.get("exp")
+    if isinstance(exp, int) and not isinstance(exp, bool):
+        try:
+            float(exp)
+        except OverflowError:  # an int too large for a float: TS would have parsed it as Infinity
+            return False
     return (
         all(
             isinstance(value.get(k), str)
@@ -155,6 +160,8 @@ class HmacApprovalPort:
         signature = rest[dot + 1 :]
 
         # Compare bytes: compare_digest on two str raises TypeError for a non-ASCII value.
+        if not (is_utf8_encodable(signature) and is_utf8_encodable(payload)):
+            return ApprovalVerifyResult(ok=False, reason="invalid signature")
         if not hmac.compare_digest(signature.encode("utf-8"), self._sign(payload).encode("utf-8")):
             return ApprovalVerifyResult(ok=False, reason="invalid signature")
 
@@ -219,6 +226,10 @@ def create_hmac_approval_port(
     generate_jti: Callable[[], str] | None = None,
 ) -> HmacApprovalPort:
     """Creates the HMAC approval-token ApprovalPort (TS: createHmacApprovalPort).
+
+    ``now`` and ``generate_jti`` are TEST-ONLY injection points (TS has none): never set them in production -- a
+    non-random ``generate_jti`` collides jti values, which breaks single-use approvals, and a skewed ``now`` shifts every
+    expiry.
 
     ``ttl_seconds``: default approval lifetime (300). ``max_ttl_seconds``: upper bound on any lifetime granted --
     a larger requested (or configured default) TTL is clamped to it, not rejected (3600). ``store``: optional

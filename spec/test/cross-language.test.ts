@@ -68,8 +68,7 @@ import {
   defaultOutputLocale,
   normalizeGuiAction,
 } from "../../packages/semantic-llm/src/index.js";
-// The fixture derivation shared with the generator: the spec package pins
-// pinning of the HMAC token bytes shares its derivation with the generator (see authz-hmac-fixtures.ts).
+// The HMAC token pinning shares its derivation with the generator (see authz-hmac-fixtures.ts).
 import {
   type ApprovalGoldenCase,
   type AuthzHmacFixtures,

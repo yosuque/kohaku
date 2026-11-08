@@ -139,6 +139,26 @@ export function describeApprovalPortContract<P extends ApprovalPort = ApprovalPo
       expect((await approvals.verifyApproval("not-a-token", req)).ok).toBe(false);
     });
 
+    it("denies a token holding a lone surrogate instead of throwing", async () => {
+      const token = await approvals.issueApproval({
+        action: ACTION,
+        payloadHash: PAYLOAD_HASH,
+        requesterId: REQUESTER_ID,
+        approverId: APPROVER_ID,
+      });
+      const req = { action: ACTION, payloadHash: PAYLOAD_HASH, requesterId: REQUESTER_ID };
+      const payload = token.split(".").at(-2) as string;
+      const bads = [
+        "\ud800",
+        `${token.slice(0, token.lastIndexOf(".") + 1)}\ud800`,
+        token.replace(payload, `\ud800${payload}`),
+        `${token}\udfff`,
+      ];
+      for (const bad of bads) {
+        expect((await approvals.verifyApproval(bad, req)).ok).toBe(false);
+      }
+    });
+
     it("rejects an expired approval", async () => {
       const token = await approvals.issueApproval(
         { action: ACTION, payloadHash: PAYLOAD_HASH, requesterId: REQUESTER_ID, approverId: APPROVER_ID },

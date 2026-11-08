@@ -551,9 +551,11 @@ token, a MAC key derived from the secret, the TTL clamped to a maximum, self-app
 given `create_memory_approval_store()`). Both are wire-compatible with the TS ports byte for byte — the
 `authzHmac` section of the cross-language golden pins a TS-issued capability and approval token set that the Python
 port verifies and re-issues identically — and both pass the Python mirrors of the TS AuthzPort / ApprovalPort /
-revocation-store contract suites (`python/kohaku/tests/authz_hmac/_contract.py`). The ports take an injectable
-`now` and `generate_jti` (TS reads the wall clock and `randomBytes` directly) so tests can pin them. Unlike TS
-there is no default secret: pass one (the sales sample reads `KOHAKU_CAPABILITY_SECRET`). `python/examples/sales-api`'s
+revocation-store contract suites (`python/kohaku/tests/authz_hmac/_contract.py`). The ports also take
+`now` and `generate_jti` (TS reads the wall clock and `randomBytes` directly) as **test-only** injection points so
+tests and the golden can pin them: never set them in production (a non-random `generate_jti` collides jti values,
+which breaks revocation and single-use approvals, and a skewed `now` shifts every expiry). As in TS the factories
+require a secret; only the sales sample's entry points supply a dev fallback (`KOHAKU_CAPABILITY_SECRET`). `python/examples/sales-api`'s
 `annotate` (`"confirm"` tier) and `publish` (`"approve"` tier) operations, and
 `sales_api_tests/test_governed_actions.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
