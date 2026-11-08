@@ -102,6 +102,34 @@ export const SIDEBAR_EN: SidebarGroup[] = [
         text: "0012. Generated init version table",
         link: "/docs/adr/0012-init-version-table-is-generated-from-the-pnpm-catalog",
       },
+      {
+        text: "0013. Empty-revision sentinel for CAS",
+        link: "/docs/adr/0013-unversioned-records-are-guarded-by-an-empty-revision-sentinel",
+      },
+      {
+        text: "0014. Unknown outcome answers 503",
+        link: "/docs/adr/0014-an-unknown-action-outcome-answers-503-with-a-fixed-message",
+      },
+      {
+        text: "0015. MCP task owner is the principal",
+        link: "/docs/adr/0015-mcp-task-owner-is-the-authenticated-principal",
+      },
+      {
+        text: "0016. MCP rate limit after verification",
+        link: "/docs/adr/0016-mcp-data-plane-rate-limit-is-taken-after-capability-verification",
+      },
+      {
+        text: "0017. L1 filters vetted by Intent params",
+        link: "/docs/adr/0017-l1-filter-descriptors-are-vetted-against-the-intent-params",
+      },
+      {
+        text: "0018. Shape-changing facets are not filters",
+        link: "/docs/adr/0018-shape-changing-facets-are-not-l1-filters",
+      },
+      {
+        text: "0019. L1 fixations re-checked on delivery",
+        link: "/docs/adr/0019-l1-fixations-are-rechecked-against-current-filter-descriptors",
+      },
     ],
   },
 ];
@@ -182,6 +210,34 @@ export const SIDEBAR_JA: SidebarGroup[] = [
       {
         text: "0012. init の版表は catalog から生成",
         link: "/ja/docs/adr/0012-init-version-table-is-generated-from-the-pnpm-catalog",
+      },
+      {
+        text: "0013. revision なしレコードの CAS 番兵",
+        link: "/ja/docs/adr/0013-unversioned-records-are-guarded-by-an-empty-revision-sentinel",
+      },
+      {
+        text: "0014. 結果不明は 503 と固定文言",
+        link: "/ja/docs/adr/0014-an-unknown-action-outcome-answers-503-with-a-fixed-message",
+      },
+      {
+        text: "0015. タスクの所有者は principal",
+        link: "/ja/docs/adr/0015-mcp-task-owner-is-the-authenticated-principal",
+      },
+      {
+        text: "0016. MCP のレート制限は検証後",
+        link: "/ja/docs/adr/0016-mcp-data-plane-rate-limit-is-taken-after-capability-verification",
+      },
+      {
+        text: "0017. L1 フィルタを params で検証",
+        link: "/ja/docs/adr/0017-l1-filter-descriptors-are-vetted-against-the-intent-params",
+      },
+      {
+        text: "0018. 形を変える facet はフィルタにしない",
+        link: "/ja/docs/adr/0018-shape-changing-facets-are-not-l1-filters",
+      },
+      {
+        text: "0019. L1 固定化は配信時に再照合",
+        link: "/ja/docs/adr/0019-l1-fixations-are-rechecked-against-current-filter-descriptors",
       },
     ],
   },
