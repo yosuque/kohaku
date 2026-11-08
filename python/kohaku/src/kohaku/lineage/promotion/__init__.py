@@ -1,5 +1,6 @@
 """kohaku.lineage.promotion — the L2 -> L1 promotion state machine and service."""
 
+from .examples import SchemaEditExample, SchemaEditExamplesProvider, schema_edit_examples
 from .machine import (
     ComponentDraft,
     JudgeResult,
@@ -76,6 +77,8 @@ __all__ = [
     "ReviewReject",
     "ReviewRequestChanges",
     "ReviewStart",
+    "SchemaEditExample",
+    "SchemaEditExamplesProvider",
     "SchemaPropose",
     "SuggestContext",
     "TransitionError",
@@ -89,5 +92,6 @@ __all__ = [
     "is_terminal",
     "may_have_projection",
     "query_template_from_wire",
+    "schema_edit_examples",
     "transition",
 ]

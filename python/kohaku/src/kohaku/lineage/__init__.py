@@ -122,6 +122,8 @@ from .promotion import (
     ReviewReject,
     ReviewRequestChanges,
     ReviewStart,
+    SchemaEditExample,
+    SchemaEditExamplesProvider,
     SchemaPropose,
     SuggestContext,
     TransitionError,
@@ -135,6 +137,7 @@ from .promotion import (
     is_terminal,
     may_have_projection,
     query_template_from_wire,
+    schema_edit_examples,
     transition,
 )
 from .recorder import (
@@ -221,6 +224,8 @@ __all__ = [
     "ReviewRequestChanges",
     "ReviewStart",
     "ReviewSummary",
+    "SchemaEditExample",
+    "SchemaEditExamplesProvider",
     "SchemaEditGap",
     "SchemaPropose",
     "SuggestContext",
@@ -263,6 +268,7 @@ __all__ = [
     "merge_usage_rows",
     "now_iso",
     "query_template_from_wire",
+    "schema_edit_examples",
     "sign_bytes",
     "sign_manifest",
     "summarize_lineage",
