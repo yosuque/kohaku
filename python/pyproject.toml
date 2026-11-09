@@ -5,7 +5,7 @@
 name = "kohaku-workspace"
 version = "0.0.0"
 description = "Workspace root of the kohaku Python implementation (not distributed)"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = ["kohaku-ui"]
 
 # Not distributed (package = false below) -- this is only so `uv sync --extra evidence` can install
@@ -58,7 +58,7 @@ testpaths = ["kohaku/tests", "examples/sales-api/sales_api_tests"]
 # asyncio tests are written with plain asyncio.run instead of pytest-asyncio (minimizing dependencies)
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 100
 src = ["kohaku/src", "examples/sales-api/src"]
 
@@ -72,7 +72,7 @@ ignore = [
 
 [tool.mypy]
 strict = true
-python_version = "3.12"
+python_version = "3.13"
 files = ["kohaku/src", "kohaku/tests", "examples/sales-api/src", "examples/sales-api/sales_api_tests"]
 mypy_path = ["kohaku/src", "examples/sales-api/src"]
 

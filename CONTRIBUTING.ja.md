@@ -15,8 +15,17 @@ Issue テンプレートはすべて `.github/ISSUE_TEMPLATE/` にあります�
 
 ## 2. 前提条件
 
-- Node >= 24.22.1、pnpm 12。CI は Node 24 と 26 で検証しています。開発者はローカル開発に `.node-version` の指定(26.12.1)を使って構いません。
-- [uv](https://docs.astral.sh/uv/) — `python/` 配下を触る場合のみ必要です。
+- Node >= 26.12.1、pnpm 12。`.node-version`(26.12.1)はローカル開発用の指定であるだけでなく Node の下限そのもの(下記)なので、変更すると公開物に影響する破壊的変更になります。
+- Python >= 3.13 と [uv](https://docs.astral.sh/uv/) — `python/` 配下を触る場合のみ必要です。
+
+### 対応ランタイムのバージョン
+
+**ランタイムごとに検証するバージョンは 1 つだけで、それを下限として表明します。** CI は Node と Python をそれぞれちょうど 1 つのバージョンで実行し、それより古い版も新しい版も検証しません。パッケージが最低要件として表明する値(`engines.node`、`requires-python`)は常に CI が実際に実行したバージョンなので、検証していないことは約束しません。より新しい版でも動く想定ですが、検証はしていません。
+
+下限は自動ではなく、判断して引き上げます。少なくとも Node の新しい LTS 系列や Python の新しいマイナーバージョンが出たときに見直してください。引き上げは古いランタイムを使う利用者にとって破壊的変更なので、必ず changeset を付けます(パッケージが 0.x の間は `minor`)。
+
+- **Node** — `.node-version` が唯一の記録元です。全ワークフローの setup-node がこれを読み(`node-version-file`)、`pnpm meta:sync` / `pnpm init:versions` が公開する全パッケージの `engines.node`、root の `package.json`、`kohaku init` が生成するプロジェクトに `>=` その版を書き込みます(ずれると CI が失敗します)。引き上げ手順: `.node-version` を編集し、`pnpm regen` を実行し、`kohaku init` の golden を再生成し(§5)、README / CONTRIBUTING / docs/user-guide / AGENTS.md の版表記を(両言語とも)更新し、changeset を追加します。メジャーが変わる場合は pnpm catalog の `@types/node` も合わせて上げます。
+- **Python** — 1 つのファイルにはまとまっていないので、次をすべて同時に変えます: `python/pyproject.toml`・`python/kohaku/pyproject.toml`・`python/examples/sales-api/pyproject.toml` の `requires-python`、`python/kohaku/pyproject.toml` の classifiers、`python/pyproject.toml` の ruff `target-version` と mypy `python_version`、`.github/workflows/ci.yml` の `PYTHON_VERSION` と `release.yml` / `published-e2e.yml` の `python-version`。その後 `cd python && uv lock && uv sync && uv run ruff check --fix` を実行して Python の検証一式を通し、python/README と docs/user-guide を(両言語とも)更新し、changeset を追加します(Python 配布物には独自の changelog がなく、バージョンは TypeScript 側に従います)。
 
 ## 3. セットアップ
 
@@ -49,9 +58,9 @@ LLM キーが無くても始められます。L0 の固定 Spec(`pnpm test` が�
 | `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures` | `spec/test/fixtures/cross-language-canonical.json` | canonical JSON / hash / cacheKey / sanitize 許可リストを変えたとき |
 | `pnpm intents:emit` | `apps/sample-web/src/generated/facet-views.json` | `apps/sample-api/src/intents/catalog.ts` の facet を変えたとき |
 | `pnpm seed` | `apps/sample-api/src/domain/seed/` | seed 生成器を変えたとき |
-| `pnpm meta:sync` | 公開パッケージ(`packages/*`、`cli`、`spec`)の `package.json` にある `publishConfig` と共通の公開メタデータ | 公開パッケージの `exports` を追加・変更したとき |
+| `pnpm meta:sync` | 公開パッケージ(`packages/*`、`cli`、`spec`)の `package.json` にある `publishConfig` と共通の公開メタデータ、および root の `package.json` の `engines.node` | 公開パッケージの `exports` を追加・変更したとき、または `.node-version` を変えたとき |
 | `pnpm python:version` | `python/kohaku/pyproject.toml`、`python/kohaku/src/kohaku/__init__.py`、`python/uv.lock` | TypeScript 側のバージョンが変わったとき(`pnpm version` が実行します) |
-| `pnpm init:versions` | `cli/src/init/versions.ts` | `pnpm-workspace.yaml` の `catalog:` のうち `kohaku init` が固定している版を変えたとき(対象パッケージの一覧は `scripts/lib/init-versions.mjs`) |
+| `pnpm init:versions` | `cli/src/init/versions.ts` | `pnpm-workspace.yaml` の `catalog:` のうち `kohaku init` が固定している版を変えたとき(対象パッケージの一覧は `scripts/lib/init-versions.mjs`)、または `.node-version` を変えたとき |
 | `KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts` | `cli/test/init/__golden__/` | `kohaku init` のテンプレートを意図して変えたとき(テストが生成プロジェクトをバイト単位で比較します。通常版と `--mcp` の両方) |
 
 ほかに 2 つ、テストで固定されているものの手で書く成果物があります。値がソースからの関数ではなく判断によるためです。

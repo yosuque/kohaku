@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { nodeEnginesRange } from "../../scripts/lib/node-floor.mjs";
 
 /**
  * Guards the publishing contract of the workspace manifests, the way dependency-direction.test.ts guards
@@ -23,6 +24,8 @@ import { describe, expect, it } from "vitest";
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+/** Every published package (and the root manifest) declares `>=` the one Node version CI verifies. */
+const NODE_ENGINES = nodeEnginesRange(REPO_ROOT);
 
 interface Manifest {
   name: string;
@@ -88,10 +91,15 @@ describe("publishable package manifests", () => {
       expect(manifest.license, `${manifest.name} license`).toBe("Apache-2.0");
       expect(manifest.description, `${manifest.name} description`).toBeTruthy();
       expect(manifest.repository?.directory, `${manifest.name} repository.directory`).toBe(dir);
-      expect(manifest.engines?.["node"], `${manifest.name} engines.node`).toBe(">=24.22.1");
+      expect(manifest.engines?.["node"], `${manifest.name} engines.node`).toBe(NODE_ENGINES);
       expect(manifest.files, `${manifest.name} files`).toContain("dist");
       expect(manifest.publishConfig?.access, `${manifest.name} publishConfig.access`).toBe("public");
     }
+  });
+
+  it("the root manifest declares the same Node floor", () => {
+    // pnpm install in this repository checks it; `pnpm meta:sync` writes it from `.node-version` as well.
+    expect(readManifest(".").engines?.["node"]).toBe(NODE_ENGINES);
   });
 
   it("publishConfig.exports covers exactly the development exports", () => {

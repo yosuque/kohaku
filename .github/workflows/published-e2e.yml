@@ -23,7 +23,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [24, 26]
         mode: [plain, mcp]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,7 +30,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ matrix.node-version }}
+          # The one Node version CI verifies, which is also every published package's engines.node floor.
+          node-version-file: .node-version
       # Inputs and matrix values reach the script through env, never interpolated into the command line.
       - name: Generate a project from the published CLI and exercise it
         run: node scripts/published-e2e.mjs --version "${VERSION}" ${MODE_FLAG}
@@ -42,17 +42,13 @@ jobs:
   pypi:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13" # = requires-python's floor (CONTRIBUTING.md §2)
           enable-cache: false
       # --isolated + --no-project + python -I: only the wheel from PyPI is importable, never this repository's python/.
       - name: Smoke the published wheel

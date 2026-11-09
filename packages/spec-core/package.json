@@ -30,7 +30,7 @@
     "directory": "packages/spec-core"
   },
   "engines": {
-    "node": ">=24.22.1"
+    "node": ">=26.12.1"
   },
   "sideEffects": false,
   "files": [

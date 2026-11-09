@@ -48,7 +48,7 @@ An L2 artifact is not the end of the story: it is recorded in **lineage**, and o
 
 ## 2. Setup
 
-Prerequisites: Node >= 24.22.1, pnpm 12 (`npm i -g pnpm`). CI verifies on Node 24 and 26. The minimum requirement is the `engines` field in `package.json` (`node >= 24.22.1`); the conformance and Python jobs run on Node 26 only. `.node-version` (currently 26.12.1) specifies the version for the local development environment (read by nodenv and the like) and is pinned independently of the version CI uses — as long as you meet the minimum, any version works. If a version manager errors with something like "version not installed" because you don't have that exact version, install it (e.g. `nodenv install 26.12.1` / `fnm install 26.12.1`) or use any Node >= 24.22.1 you already have instead — the pin is left as-is by design, not a bug to fix. The pnpm version is pinned via `packageManager` in `package.json`.
+Prerequisites: Node >= 26.12.1, pnpm 12 (`npm i -g pnpm`). The minimum is the `engines` field in `package.json` (`node >= 26.12.1`), and it is exactly the version CI runs: `.node-version` (currently 26.12.1) is both the local development pin (read by nodenv and the like) and the single Node version every CI job uses, and `engines.node` is generated from it. Newer Node versions are expected to work but are not tested (see CONTRIBUTING.md §2 for the policy). If a version manager errors with something like "version not installed" because you don't have that exact version, install it (e.g. `nodenv install 26.12.1` / `fnm install 26.12.1`) or use any Node >= 26.12.1 you already have instead. The pnpm version is pinned via `packageManager` in `package.json`.
 
 ```bash
 git clone https://github.com/yosuque/kohaku.git && cd kohaku
@@ -93,7 +93,7 @@ pnpm --filter @kohaku-ui-sample/wc dev    # demo page (:5174; /api proxies to :8
 
 ### Running the Python sample (proof that the backend language is independent)
 
-A **full Python port** (`python/kohaku`; REST via FastAPI, MCP via the MCP Apps profile) of the same protocol (Kohaku Protocol v0.1) ships as well. It is wire-compatible with the TS implementation, and its conformance is CONFORMANT. It is proof that "the same UI on Web and MCP" does not depend on the backend language. Prerequisites are Python 3.12+ + [uv](https://docs.astral.sh/uv/).
+A **full Python port** (`python/kohaku`; REST via FastAPI, MCP via the MCP Apps profile) of the same protocol (Kohaku Protocol v0.1) ships as well. It is wire-compatible with the TS implementation, and its conformance is CONFORMANT. It is proof that "the same UI on Web and MCP" does not depend on the backend language. Prerequisites are Python 3.13+ + [uv](https://docs.astral.sh/uv/).
 
 ```bash
 cd python

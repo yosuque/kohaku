@@ -48,7 +48,7 @@ L2 で生成されたアーティファクトはそこで終わりではあり�
 
 ## 2. セットアップ
 
-前提: Node >= 24.22.1、pnpm 12(`npm i -g pnpm`)。CI は Node 24 と 26 で検証しています。下限要件は `package.json` の `engines`(`node >= 24.22.1`)で、conformance ジョブと Python ジョブは Node 26 のみで実行します。`.node-version`(現在 26.12.1)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは独立して固定しています — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 26.12.1` / `fnm install 26.12.1`)か、手元にある Node >= 24.22.1 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
+前提: Node >= 26.12.1、pnpm 12(`npm i -g pnpm`)。下限要件は `package.json` の `engines`(`node >= 26.12.1`)で、これは CI が実行するバージョンそのものです。`.node-version`(現在 26.12.1)はローカル開発環境用のバージョン指定(nodenv などが読む)であると同時に、CI の全ジョブが使う唯一の Node バージョンで、`engines.node` もこのファイルから生成しています。より新しい Node でも動く想定ですが、検証はしていません(方針は CONTRIBUTING.ja.md §2)。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 26.12.1` / `fnm install 26.12.1`)か、手元にある Node >= 26.12.1 をそのまま使ってください。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
 
 ```bash
 git clone https://github.com/yosuque/kohaku.git && cd kohaku
@@ -93,7 +93,7 @@ pnpm --filter @kohaku-ui-sample/wc dev    # 実演ページ(:5174。/api は :87
 
 ### Python 実装のサンプルを動かす(バックエンド言語非依存の実証)
 
-同じプロトコル(Kohaku Protocol v0.1)の **Python フル移植**(`python/kohaku`。REST は FastAPI・MCP は MCP Apps プロファイル)も同梱されています。TS 実装とワイヤ互換で、conformance は CONFORMANT。「Web と MCP で同じ UI」がバックエンド言語に依らないことの実証です。前提は Python 3.12+ + [uv](https://docs.astral.sh/uv/)。
+同じプロトコル(Kohaku Protocol v0.1)の **Python フル移植**(`python/kohaku`。REST は FastAPI・MCP は MCP Apps プロファイル)も同梱されています。TS 実装とワイヤ互換で、conformance は CONFORMANT。「Web と MCP で同じ UI」がバックエンド言語に依らないことの実証です。前提は Python 3.13+ + [uv](https://docs.astral.sh/uv/)。
 
 ```bash
 cd python

@@ -167,8 +167,8 @@ PyPI プロジェクトページ・GitHub Release へのリンクが載ります
 
 公開の実行(`release.yml`)が緑になったら、`gh workflow run published-e2e.yml -f version=X.Y.Z` でレジストリが今配って
 いる版を確かめます(`published-e2e.yml` は毎晩も動きます)。npm のレグは、公開済みの CLI でプロジェクトを生成し、
-テスト・型検査・起動までを、通常と `--mcp` の両方で Node 24 / 26 に対して行います。`-f version=` が効くのはこのレグだけ
-です。PyPI のレグは `version` に関わらず、常に最新の公開済み wheel を Python 3.12 / 3.13 で確かめます。npm の init
+テスト・型検査・起動までを、通常と `--mcp` の両方で `.node-version` の Node に対して行います。`-f version=` が効くのはこのレグだけ
+です。PyPI のレグは `version` に関わらず、常に最新の公開済み wheel を Python 3.13 で確かめます。npm の init
 手順は、レジストリの反映遅れ(`ETARGET` / `E404`)なら約 8 分リトライするので、公開の直後に実行して構いません。それでも
 赤なら、まず反映遅れを疑って 1 回再実行します。赤が続くなら原因を調べ、リリースを deprecate(npm)するか yank(PyPI)
 するかを決めます(§7)。公開済みの wheel が 0.5.0 以下の間は、PyPI のジョブは `::warning::` を出し、anthropic の
