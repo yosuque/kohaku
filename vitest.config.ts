@@ -46,7 +46,7 @@ export default defineConfig({
         // docs-site's config, theme and sync CLI (`.vitepress/`, `scripts/`) and its snippets are
         // build-time only: no test imports them, so v8 would report them at ~0% however correct they
         // are. They are not unguarded: the VitePress config, theme and sync CLI are exercised by the real
-        // `vitepress build` that the CI docs-site job runs, and the snippets are typechecked by tsc and
+        // `vitepress build` that the CI `build` job runs, and the snippets are typechecked by tsc and
         // asserted byte-identical to the Markdown they're extracted from by
         // `apps/docs-site/test/snippets.test.ts`. None of them sits under a `src` directory, so the
         // `include` above already leaves them out in either mode; these entries only document that

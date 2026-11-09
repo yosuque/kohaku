@@ -55,7 +55,7 @@ jobs:
       - name: Test (with coverage on the primary leg)
         run: ${{ matrix.node-version == 26 && 'pnpm test:coverage' || 'pnpm test' }}
         env:
-          # The Redis / Postgres adapter suites need a backend, and the dedicated `adapters` job below runs
+          # The Redis / Postgres adapter suites need a backend, and the `integration` job below runs
           # them against real service containers with KOHAKU_ADAPTER_TESTS=require, so the 24 leg skips them
           # (`skip` short-circuits the backend resolution in packages/port-contracts/src/backend.ts) rather
           # than start testcontainers a third time. The 26 leg must NOT skip them: `coverage.include` counts
@@ -168,161 +168,34 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run lint-imports
-      # The Redis / Postgres adapter suites need a backend; the dedicated `adapters` job below runs them against
+      # The Redis / Postgres adapter suites need a backend; the `integration` job below runs them against
       # real service containers with KOHAKU_ADAPTER_TESTS=require, so this job skips them (`skip` short-circuits the
       # backend resolution in kohaku/tests/storage/_backend.py) rather than start testcontainers once per Python leg.
       - run: uv run pytest
         env:
           KOHAKU_ADAPTER_TESTS: skip
-  # REST black-box conformance against the TS host itself, once per storage backend behind it: `file` (the
-  # sample's default port) proves the compiled CLI against a real running server, the same way
-  # conformance-python below proves the Python port; `redis` / `postgres` catch a backend-specific deviation
-  # in the Spec cache / lineage / fixation path through the spec suite, not only through the contract tests.
-  # (Formerly two jobs, conformance-ts and conformance-ts-adapters; one matrix is one fewer runner per run.)
-  # No LLM key is configured, so the default `claude` provider only warns at startup (KOHAKU_LLM_STRUCTURED_MODE
-  # etc. never engage); the checked Intent (sales.quarterly_summary) is served by the L0 fixed path and never
-  # calls the LLM.
-  conformance-ts:
+  # Everything that needs a real Redis / Postgres, in one job against one pair of job services (formerly the
+  # `adapters` job plus the six-leg `conformance-ts` / `conformance-python` matrices, whose legs spent ~20-50s on
+  # runner and container setup to run a ~3s check each).
+  #
+  # 1. The production adapters, in both languages. Locally these suites skip without Docker / a URL (see
+  #    @kohaku-ui/port-contracts' resolveAdapterBackend and kohaku/tests/storage/_backend.py); here
+  #    KOHAKU_ADAPTER_TESTS=require turns a skip into a failure, so this job can never pass vacuously. It runs the
+  #    TS suites, the Python storage suites (kohaku.storage.redis / .postgres against the same services), and the
+  #    cross-language tests: each storage-redis / storage-postgres python-interop test starts the Python adapter
+  #    (python/.venv, hence the uv sync before the vitest step) against the same backend, writes with one language
+  #    and compare-and-sets with the other.
+  # 2. The REST black-box conformance check against each sample host (TS sample-api, Python sales-api) on each
+  #    storage backend behind it: `file` (the samples' default port) proves the CLI against a real running server;
+  #    `redis` / `postgres` catch a backend-specific deviation in the Spec cache / lineage / fixation path through
+  #    the spec suite, not only through the contract tests. scripts/ci-conformance.sh gives every (host, storage)
+  #    pair its own Redis key prefix and Postgres schema, so no leg sees what another one, or step 1, left behind.
+  #    No LLM key is configured: the TS host's default `claude` provider only warns at startup and the checked
+  #    Intent (sales.quarterly_summary) is served by the L0 fixed path; the Python sample defaults to its
+  #    deterministic pseudo-LLM (KOHAKU_LLM_PROVIDER=fake).
+  integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        storage: [file, redis, postgres]
-    # Each leg starts only the backend it tests: a service whose image is an empty string is not started.
-    services:
-      redis:
-        image: ${{ matrix.storage == 'redis' && 'redis:7-alpine' || '' }}
-        ports: ["6379:6379"]
-        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
-      postgres:
-        image: ${{ matrix.storage == 'postgres' && 'postgres:16-alpine' || '' }}
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Start TS sample-api on ${{ matrix.storage }} and run the REST black-box check
-        env:
-          KOHAKU_STORAGE: ${{ matrix.storage }}
-          KOHAKU_REDIS_URL: redis://localhost:6379
-          KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
-          # A redis/postgres backend requires a real capability secret (sample-api's from-env refuses to
-          # start on the fixed demo default once storage leaves the single-process file/hmac shape) — this
-          # is a CI-only value, never used outside this ephemeral job. The `file` leg gets an empty value,
-          # which from-env treats as unset, so it keeps exercising the zero-config demo default.
-          KOHAKU_CAPABILITY_SECRET: ${{ matrix.storage != 'file' && 'ci-conformance-adapters-test-secret-not-for-production-use' || '' }}
-        run: |
-          LOG=$(mktemp)
-          (KOHAKU_DATA_DIR=$(mktemp -d) PORT=8787 pnpm --filter @kohaku-ui-sample/api start) >"$LOG" 2>&1 &
-          SERVER_PID=$!
-          # Always stop the server regardless of the conformance outcome (cleanup).
-          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-          scripts/wait-for-http.sh http://localhost:8787/api/kohaku/catalog 30 "$LOG"
-          node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku
-  # Conformance black-box check against the Python host (guarantees cross-implementation spec conformance in CI),
-  # once per storage backend behind it exactly like conformance-ts above: `file` (the sample's default port),
-  # `redis` and `postgres` (kohaku.storage.redis / .postgres, the Python ports of the TS adapters).
-  # The LLM uses the example (sales-api) deterministic pseudo-LLM (KOHAKU_LLM_PROVIDER=fake by default); no real LLM required.
-  conformance-python:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        storage: [file, redis, postgres]
-    # Each leg starts only the backend it tests: a service whose image is an empty string is not started.
-    services:
-      redis:
-        image: ${{ matrix.storage == 'redis' && 'redis:7-alpine' || '' }}
-        ports: ["6379:6379"]
-        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
-      postgres:
-        image: ${{ matrix.storage == 'postgres' && 'postgres:16-alpine' || '' }}
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          python-version: "3.12"
-          enable-cache: true
-          # Must stay scoped: the default globs (**/pyproject.toml, **/uv.lock, ...) are walked after
-          # `pnpm install` above, i.e. through node_modules, which took ~7 minutes of this ~7.5-minute job.
-          cache-dependency-glob: python/uv.lock
-      - run: uv sync --frozen
-        working-directory: python
-      # The L2 JS sidecar live test requires Node+CLI. The python job has no Node and always skips it, so we run it
-      # as required in conformance-python, which already has Node+pnpm+uv (this costs less CI time and fewer
-      # duplicate installs than adding setup-node to the pytest job).
-      - name: L2 JS sidecar live test (requires Node)
-        # Independent of the storage backend, so only the `file` leg runs it.
-        if: matrix.storage == 'file'
-        run: KOHAKU_REQUIRE_NODE_SIDECAR=1 uv run pytest kohaku/tests/composer/test_l2_js_sidecar.py kohaku/tests/composer/test_compose.py::TestComposeL2::test_l2_script_syntax_repair_via_sidecar -q
-        working-directory: python
-      - name: Start Python sales-api on ${{ matrix.storage }} and run REST black-box check
-        env:
-          KOHAKU_STORAGE: ${{ matrix.storage }}
-          KOHAKU_REDIS_URL: redis://localhost:6379
-          KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
-          # A redis/postgres backend requires a real capability secret (the sample refuses to start on the fixed
-          # demo default once storage leaves the single-process file shape, like the TS sample-api) -- this is a
-          # CI-only value, never used outside this ephemeral job. The `file` leg gets an empty value, which counts
-          # as unset, so it keeps exercising the zero-config demo default.
-          KOHAKU_CAPABILITY_SECRET: ${{ matrix.storage != 'file' && 'ci-conformance-adapters-test-secret-not-for-production-use' || '' }}
-        run: |
-          LOG=$(mktemp)
-          (cd python && KOHAKU_DATA_DIR=$(mktemp -d) PORT=8790 uv run python -m sales_api) >"$LOG" 2>&1 &
-          SERVER_PID=$!
-          # Always stop the server regardless of the conformance outcome (cleanup).
-          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-          scripts/wait-for-http.sh http://localhost:8790/api/kohaku/catalog 30 "$LOG"
-          node cli/bin/kohaku.js conformance --rest http://localhost:8790/api/kohaku
-  # Reports whether a pull request carries a changeset, without blocking on it: documentation, CI and
-  # internal-tooling changes legitimately have none, and a hard gate on those would only teach people to
-  # write empty changesets. Same report-only stance as the dependency audit above. Tighten it once the
-  # release cadence has settled.
-  changeset-check:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - env:
-          BASE_REF: ${{ github.base_ref }}
-        run: pnpm changeset status --since="origin/$BASE_REF"
-        continue-on-error: true
-  # The production adapters against real backends, in both languages. Locally these suites skip without Docker / a
-  # URL (see @kohaku-ui/port-contracts' resolveAdapterBackend and kohaku/tests/storage/_backend.py); here the
-  # backends run as job services and KOHAKU_ADAPTER_TESTS=require turns a skip into a failure, so this job can never
-  # pass vacuously. It runs the TS suites, the Python storage suites (kohaku.storage.redis / .postgres against the
-  # same services), and the cross-language tests: each storage-redis / storage-postgres python-interop test starts the
-  # Python adapter (python/.venv, hence the uv sync before the vitest step) against the same backend, writes with
-  # one language and compare-and-sets with the other.
-  adapters:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       redis:
         image: redis:7-alpine
@@ -338,6 +211,8 @@ jobs:
       KOHAKU_ADAPTER_TESTS: require
       KOHAKU_TEST_REDIS_URL: redis://localhost:6379
       KOHAKU_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+      KOHAKU_REDIS_URL: redis://localhost:6379
+      KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -350,57 +225,92 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          # uv.lock alone determines the environment; the default globs would walk node_modules after the install.
+          # Must stay scoped: the default globs (**/pyproject.toml, **/uv.lock, ...) are walked after
+          # `pnpm install` above, i.e. through node_modules, which once took ~7 minutes of a ~7.5-minute job.
           cache-dependency-glob: python/uv.lock
       - run: uv sync --frozen
         working-directory: python
-      - run: pnpm vitest run --project storage-redis --project storage-postgres --project authz-jwt --project sample-api
-      - run: uv run pytest kohaku/tests/storage -q
+      - name: Adapter suites (TS + cross-language interop)
+        run: pnpm vitest run --project storage-redis --project storage-postgres --project authz-jwt --project sample-api
+      - name: Adapter suites (Python 3.12)
+        run: uv run pytest kohaku/tests/storage -q
         working-directory: python
-      # The Python storage suite again on the newest supported interpreter (the repo's `python` job covers 3.12 and
+      # The Python storage suite again on the newest supported interpreter (the `python` job covers 3.12 and
       # 3.13, but without backends): --isolated keeps python/.venv (3.12) untouched.
-      - run: uv run --isolated --frozen --python 3.13 pytest kohaku/tests/storage -q
+      - name: Adapter suites (Python 3.13)
+        run: uv run --isolated --frozen --python 3.13 pytest kohaku/tests/storage -q
         working-directory: python
-  # The `ci` job above typechecks and tests against `src/*.ts` directly (packages export source; publishConfig
-  # only applies once a package is packed). That means nothing in `ci` ever notices a missing publishConfig
-  # entry, a `.d.ts` that stops resolving once packed, or a guest closure (packages/sandbox) whose stringified
-  # source changes shape under the build. A separate job rather than an extra step in `ci`, for two reasons:
-  # it does its own `pnpm pack` + a plain `npm install` of the tarballs outside the workspace, which is a
-  # meaningfully different (slower) install path than the rest of `ci`'s single `pnpm install --frozen-lockfile`,
-  # and -- like every other job here -- it never calls an LLM, so it should not share a job with steps that
-  # might one day gain a real one.
-  pack-smoke:
+      # The L2 JS sidecar live test requires Node+CLI. The python job has no Node and always skips it, so it runs
+      # here, where Node+pnpm+uv are already installed (cheaper than adding setup-node to the pytest job).
+      - name: L2 JS sidecar live test (requires Node)
+        run: KOHAKU_REQUIRE_NODE_SIDECAR=1 uv run pytest kohaku/tests/composer/test_l2_js_sidecar.py kohaku/tests/composer/test_compose.py::TestComposeL2::test_l2_script_syntax_repair_via_sidecar -q
+        working-directory: python
+      # One step per (host, storage) pair so a failure names its leg. `if: !cancelled()` keeps the remaining legs
+      # running after one fails, the way the former matrices (one job per leg) reported every leg.
+      - name: Conformance — TS host, file
+        if: ${{ !cancelled() }}
+        run: scripts/ci-conformance.sh ts file
+      - name: Conformance — TS host, redis
+        if: ${{ !cancelled() }}
+        run: scripts/ci-conformance.sh ts redis
+      - name: Conformance — TS host, postgres
+        if: ${{ !cancelled() }}
+        run: scripts/ci-conformance.sh ts postgres
+      - name: Conformance — Python host, file
+        if: ${{ !cancelled() }}
+        run: scripts/ci-conformance.sh python file
+      - name: Conformance — Python host, redis
+        if: ${{ !cancelled() }}
+        run: scripts/ci-conformance.sh python redis
+      - name: Conformance — Python host, postgres
+        if: ${{ !cancelled() }}
+        run: scripts/ci-conformance.sh python postgres
+  # Build-and-package checks that look at build output rather than source (formerly the `pack-smoke` and
+  # `docs-site` jobs, plus the report-only `changeset-check` job; `pnpm install` restores from the pnpm cache in
+  # seconds, so a separate runner per check bought nothing but setup time).
+  #
+  # - pack-smoke: the `ci` job typechecks and tests against `src/*.ts` directly (packages export source;
+  #   publishConfig only applies once a package is packed), so nothing there notices a missing publishConfig
+  #   entry, a `.d.ts` that stops resolving once packed, or a guest closure (packages/sandbox) whose stringified
+  #   source changes shape under the build. `pnpm run smoke:pack` packs every package and does a plain
+  #   `npm install` of the tarballs outside the workspace.
+  # - docs-site: the documentation site is generated from docs/ at build time (apps/docs-site/scripts/sync-docs.ts)
+  #   into a gitignored directory, so "drift" here means two things: the site must still build from the Markdown
+  #   as committed (dead links, broken frontmatter), and the build must leave the checkout untouched (nothing
+  #   generated may be tracked or hand-edited). The sidebar <-> page, snippet <-> Markdown, and (per GitHub's own
+  #   heading-slug rule) anchor-link resolution checks all run in `ci` as ordinary Vitest tests (apps/docs-site/test).
+  # - The static playground (design.md decision 57) in strict mode (forbidNodeBuiltins' default), the same build a
+  #   Pages deploy would run -- proves it stays Node-dependency-free and buildable on every push, independent of
+  #   whether Pages is ever actually enabled (see pages.yml, workflow_dispatch-only and not wired up yet). The
+  #   playground fixture replay (`pnpm vitest run --project playground-drift`) is not run here: no fixture has been
+  #   recorded yet (docs/user-guide.md §10), so it would check nothing; pages.yml runs it, blocking, before a deploy.
+  # - A changeset report: whether a pull request carries a changeset, without blocking on it -- documentation, CI
+  #   and internal-tooling changes legitimately have none, and a hard gate on those would only teach people to
+  #   write empty changesets. Tighten it once the release cadence has settled.
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # `changeset status --since` needs the base branch's history
+          # This job uploads an artifact and nothing after the checkout needs an authenticated git remote, so
+          # the token is not left in .git/config (zizmor: artipacked).
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run smoke:pack
-  # The documentation site is generated from docs/ at build time (apps/docs-site/scripts/sync-docs.ts) into a
-  # gitignored directory, so "drift" here means two things: the site must still build from the Markdown as
-  # committed (dead links, broken frontmatter), and the build must leave the checkout untouched (nothing
-  # generated may be tracked or hand-edited). The sidebar <-> page, snippet <-> Markdown, and (per GitHub's
-  # own heading-slug rule) anchor-link resolution checks all run in `ci` as ordinary Vitest tests
-  # (apps/docs-site/test). A separate job rather than a step in `ci`, because VitePress brings its own Vite
-  # and Vue and is slower to install than anything `ci` needs.
-  docs-site:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - name: Changeset report (report only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: pnpm changeset status --since="origin/$BASE_REF"
+        continue-on-error: true
       - run: pnpm docs:build
-      - name: Generated-output drift check (the build must not touch the checkout)
+      - name: Generated-output drift check (the docs build must not touch the checkout)
         run: |
           git status --porcelain
           test -z "$(git status --porcelain)"
@@ -408,27 +318,27 @@ jobs:
         with:
           name: docs-site
           path: apps/docs-site/dist/
-      # The static playground (design.md decision 57) in strict mode (forbidNodeBuiltins' default), the same build a Pages
-      # deploy would run — proves it stays Node-dependency-free and buildable on every push, independent of
-      # whether Pages is ever actually enabled (see pages.yml, workflow_dispatch-only and not wired up yet).
       - name: Playground build (strict mode — must have zero Node-only imports)
         run: pnpm --filter @kohaku-ui-sample/playground run build
-  # Replays whatever fixtures/*.json the playground actually ships against a real host (no LLM) — see
-  # apps/playground/test/drift/fixtures-drift.test.ts's own doc comment. Not required for a PR: today every
-  # requiresFixtures scenario is still "awaiting recording" (real-LLM recording has not been done; see
-  # docs/user-guide.md §10), and once fixtures do exist, a prompt-building change elsewhere in the repo could make
-  # this fail without that change's own PR having touched anything under apps/playground — visible, but not
-  # blocking, until fixtures are actually recorded and this suite's failure modes are better understood.
-  playground-drift:
+      - name: Pack smoke (pack every package and verify the tarballs outside the workspace)
+        run: pnpm run smoke:pack
+  # The single required status check for this workflow (the main ruleset requires `ci-ok` plus CodeQL's two
+  # `analyze` legs). Requiring each job -- and each matrix leg -- by name broke every time a job was renamed or
+  # matrixed: the ruleset kept waiting for a context that no longer reported. With this gate the job layout above
+  # can change freely; only a job added to `needs` below becomes required. `always()` so that a failed or
+  # cancelled dependency still produces a (failing) `ci-ok` instead of a skipped one, which a ruleset would treat
+  # as missing.
+  ci-ok:
+    if: always()
+    needs: [ci, python, integration, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    continue-on-error: true
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm vitest run --project playground-drift
+      - name: Every required job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = "success" ] || { echo "::error::a required CI job did not succeed ($r)"; exit 1; }
+          done

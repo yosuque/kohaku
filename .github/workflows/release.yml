@@ -118,7 +118,7 @@ jobs:
           echo "version=$EXPECTED" >> "$GITHUB_OUTPUT"
       - run: pnpm typecheck
       - run: pnpm test
-      # The same gate the pack-smoke job runs on pull requests, repeated immediately before publishing:
+      # The same gate ci.yml's `build` job runs on pull requests, repeated immediately before publishing:
       # this is the last point at which a broken tarball can still be stopped.
       - run: pnpm run smoke:pack
 

@@ -10,7 +10,7 @@ TS 実装とはワイヤ互換 — canonical JSON がバイト一致するため
 キャッシュキー / catalogFingerprint が言語をまたいで一致する。
 
 **conformance**: TS 側 CLI(`node cli/bin/kohaku.js conformance --rest`)は、この実装に対して
-`MUST: 19/19 passed → CONFORMANT` を報告し、CI の `conformance-python` ジョブが毎コミット
+`MUST: 19/19 passed → CONFORMANT` を報告し、CI の `integration` ジョブが毎コミット
 これを実行する。19 は conformance manifest の全 37 MUST のうち黒箱検査可能なものだが、
 そのすべてが Python ホストへの検査というわけではない:
 
@@ -250,7 +250,7 @@ Python サンプル(`examples/sales-api`)はシード JSON をリポジトリル
 
 **`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。任意の forward-paging 拡張 `page_lineage`(design.md #53)も実装しており、呼び出し側では `put_promotion_states` が使う「`isinstance` と `runtime_checkable` Protocol」の仕組みではなく、単純な `hasattr(storage, "page_lineage")` プローブで確認する — 理由は `kohaku.spec.ports.StoragePort` の `page_lineage` に付けたコメントを参照。
 
-**`kohaku.storage.redis` / `kohaku.storage.postgres`(`storage-redis` / `storage-postgres` の Python 移植)**: 複数のホストインスタンスが 1 つのバックエンドを共有するための、本番向けの `StoragePort` と `CapabilityRevocationStore` のアダプタ。ドライバは extra で入れる(`pip install 'kohaku-ui[redis]'`、`pip install 'kohaku-ui[postgres]'` と、libpq が無ければ `psycopg[binary]`)。`kohaku.storage` 自体はこれらを import しない。**TS のアダプタとデータ互換**で、Redis のキー配置と sorted set の索引、Postgres の DDL・`POSTGRES_SCHEMA_VERSION`・advisory lock によるマイグレーション、保存される JSON 文字列は同じである。そのため TS のホストと Python のホストが 1 つの Redis、あるいは 1 つのデータベースを共有できる(言語間 golden の `storageLayout` と、同じバックエンドに対して TS と Python のアダプタを動かす `python-interop` テストで固定している)。どちらも任意の compare-and-set を宣言する(`supports_compare_and_set`、`expected_revision` → `StorageConflictError`)。Redis は redis-py がトランザクションに固定する接続での WATCH / MULTI / EXEC、Postgres は DDL を変えない 1 本の条件付き文である。redis-py のクライアントと psycopg のプールは最初に使ったイベントループに結びつくので、ポートの構築と serve は 1 つのループで行うこと(`sales_api.__main__` はそうしている)。`examples/sales-api` は TS のサンプルと同じ変数でバックエンドを選ぶ: `KOHAKU_STORAGE=file|memory|redis|postgres`、`KOHAKU_REDIS_URL`(と `KOHAKU_STORAGE_KEY_PREFIX`)、`KOHAKU_POSTGRES_URL`(と `KOHAKU_POSTGRES_SCHEMA`)。共有バックエンドを選んだときに公開デモの `KOHAKU_CAPABILITY_SECRET` を使うと起動を拒否する。Python の storage スイート(`kohaku/tests/storage/_contract.py`。`@kohaku-ui/port-contracts` の `describeStoragePortContract` の移植)は memory / file / redis / postgres に対して動く。Redis / Postgres のケースは `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL`、無ければ使い捨ての testcontainers、それも無ければ skip でバックエンドを解決する(`KOHAKU_ADAPTER_TESTS=require` で skip を禁止、これは CI の `adapters` ジョブと同じ。`=skip` で強制的に skip)。
+**`kohaku.storage.redis` / `kohaku.storage.postgres`(`storage-redis` / `storage-postgres` の Python 移植)**: 複数のホストインスタンスが 1 つのバックエンドを共有するための、本番向けの `StoragePort` と `CapabilityRevocationStore` のアダプタ。ドライバは extra で入れる(`pip install 'kohaku-ui[redis]'`、`pip install 'kohaku-ui[postgres]'` と、libpq が無ければ `psycopg[binary]`)。`kohaku.storage` 自体はこれらを import しない。**TS のアダプタとデータ互換**で、Redis のキー配置と sorted set の索引、Postgres の DDL・`POSTGRES_SCHEMA_VERSION`・advisory lock によるマイグレーション、保存される JSON 文字列は同じである。そのため TS のホストと Python のホストが 1 つの Redis、あるいは 1 つのデータベースを共有できる(言語間 golden の `storageLayout` と、同じバックエンドに対して TS と Python のアダプタを動かす `python-interop` テストで固定している)。どちらも任意の compare-and-set を宣言する(`supports_compare_and_set`、`expected_revision` → `StorageConflictError`)。Redis は redis-py がトランザクションに固定する接続での WATCH / MULTI / EXEC、Postgres は DDL を変えない 1 本の条件付き文である。redis-py のクライアントと psycopg のプールは最初に使ったイベントループに結びつくので、ポートの構築と serve は 1 つのループで行うこと(`sales_api.__main__` はそうしている)。`examples/sales-api` は TS のサンプルと同じ変数でバックエンドを選ぶ: `KOHAKU_STORAGE=file|memory|redis|postgres`、`KOHAKU_REDIS_URL`(と `KOHAKU_STORAGE_KEY_PREFIX`)、`KOHAKU_POSTGRES_URL`(と `KOHAKU_POSTGRES_SCHEMA`)。共有バックエンドを選んだときに公開デモの `KOHAKU_CAPABILITY_SECRET` を使うと起動を拒否する。Python の storage スイート(`kohaku/tests/storage/_contract.py`。`@kohaku-ui/port-contracts` の `describeStoragePortContract` の移植)は memory / file / redis / postgres に対して動く。Redis / Postgres のケースは `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL`、無ければ使い捨ての testcontainers、それも無ければ skip でバックエンドを解決する(`KOHAKU_ADAPTER_TESTS=require` で skip を禁止、これは CI の `integration` ジョブと同じ。`=skip` で強制的に skip)。
 
 **`kohaku explain` / DevTools(design.md #54/#55)**: `ComposeTrace.cacheKeyParts`(`cache_key()` 呼び出し
 そのものの部品。TS とバイト単位で一致)と、上で述べた相関 id は、`kohaku.lineage` の `view.composed` /
@@ -274,7 +274,7 @@ DevTools 自体は TS のみである(`cli` と `@kohaku-ui/client` は Python �
 - **canonical JSON**: JS `JSON.stringify` とバイト互換(ES の数値表記・array index キーの
   数値昇順優先・UTF-16 コードユニット順ソート・孤立サロゲートのエスケープまで再現)。
   実装は `kohaku/src/kohaku/spec/canonical_json.py`。
-- **conformance**: CI の `conformance-python` ジョブが Python ホストを起動して
+- **conformance**: CI の `integration` ジョブが Python ホストを(file / redis / postgres のそれぞれで)起動して
   TS 側 CLI の黒箱検査を実行する。
 - **lineage forward-paging カーソル**(design.md #53): `kohaku.spec.lineage_page` の
   `encode_seq_cursor` / `decode_seq_cursor` は、TS の

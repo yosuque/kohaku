@@ -1,6 +1,6 @@
 """The Python half of the cross-language backend test (driven by the TS vitest suites
 packages/storage-redis/test/python-interop.test.ts and packages/storage-postgres/test/python-interop.test.ts, so
-it runs in the CI `adapters` job next to the backend services; it is not a pytest module).
+it runs in the CI `integration` job next to the backend services; it is not a pytest module).
 
 Usage: ``python interop_peer.py <redis|postgres> <backend url> <namespace> <command>``, where the namespace is the
 Redis key prefix / the Postgres schema both languages are pointed at, and the command is one of:

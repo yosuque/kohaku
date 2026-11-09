@@ -12,7 +12,7 @@ pnpm typecheck               # tsc --noEmit for all packages
 pnpm check                   # Biome: format + safe lint fixes + organize imports (writes)
 pnpm check:ci                # Biome: verify only (what CI runs)
 pnpm build:dist              # emit dist for the 30 publishable packages (same tsc as typecheck; dist is gitignored)
-pnpm smoke:pack              # pack every package and verify the tarballs outside the workspace (own CI job)
+pnpm smoke:pack              # pack every package and verify the tarballs outside the workspace (CI `build` job)
 node scripts/published-e2e.mjs [--version <v>] [--mcp]   # generate + run a project from the PUBLISHED packages (network; nightly via published-e2e.yml, also runs the PyPI wheel smoke scripts/published_e2e_python.py)
 pnpm meta:sync               # regenerate the publishing metadata / publishConfig (CI checks for drift)
 pnpm changeset               # record a version bump for a change (a version PR is opened from main; publishing is a separate, tag-driven step — docs/runbooks/release.md)
