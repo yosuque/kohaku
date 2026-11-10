@@ -29,17 +29,19 @@ jobs:
   ci:
     name: ci (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: a1, c1: default, c2: w4, c3: threads }
-          - { name: a2, c1: default, c2: w4, c3: threads }
-          - { name: b1, c1: w4, c2: threads, c3: default }
-          - { name: b2, c1: w4, c2: threads, c3: default }
-          - { name: c1, c1: threads, c2: default, c3: w4 }
-          - { name: c2, c1: threads, c2: default, c3: w4 }
+          - { name: a1, c1: default, c2: w4, c3: threadscfg, c4: threadsw4 }
+          - { name: a2, c1: default, c2: w4, c3: threadscfg, c4: threadsw4 }
+          - { name: b1, c1: w4, c2: threadsw4, c3: default, c4: threadscfg }
+          - { name: b2, c1: w4, c2: threadsw4, c3: default, c4: threadscfg }
+          - { name: c1, c1: threadscfg, c2: default, c3: threadsw4, c4: w4 }
+          - { name: c2, c1: threadscfg, c2: default, c3: threadsw4, c4: w4 }
+          - { name: d1, c1: threadsw4, c2: threadscfg, c3: w4, c4: default }
+          - { name: d2, c1: threadsw4, c2: threadscfg, c3: w4, c4: default }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No `version:` input here: package.json's `packageManager` field is the single source of
@@ -68,6 +70,10 @@ jobs:
         run: ./.github/measure-run.sh
         env:
           CFG: ${{ matrix.c3 }}
+      - name: Test run 4
+        run: ./.github/measure-run.sh
+        env:
+          CFG: ${{ matrix.c4 }}
   # Source-level checks that need neither the test run nor build output: formatting / lint, the per-package
   # typecheck, the spec self-check, and every "regenerate and diff" check for a committed generated file. They
   # used to run inside `ci` after the test step, where a type error or a stale generated file was reported only
