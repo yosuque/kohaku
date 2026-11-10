@@ -26,7 +26,7 @@ import {
   VITE_CONFIG_TEMPLATE,
   WEB_MAIN_TEMPLATE,
 } from "./templates.js";
-import { EXTERNAL_VERSIONS } from "./versions.js";
+import { EXTERNAL_VERSIONS, NODE_ENGINES } from "./versions.js";
 
 export interface ProjectFile {
   path: string;
@@ -304,7 +304,7 @@ export function renderPackageJson(
         test: "vitest run",
         ...(options.mcp === true ? MCP_SCRIPTS : {}),
       },
-      engines: { node: ">=24.22.1" },
+      engines: { node: NODE_ENGINES },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
       devDependencies: Object.fromEntries(Object.entries(devDependencies).sort()),
     },

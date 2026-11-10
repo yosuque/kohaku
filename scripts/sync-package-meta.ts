@@ -21,10 +21,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeEnginesRange } from "./lib/node-floor.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_URL = "git+https://github.com/yosuque/kohaku.git";
 const HOMEPAGE = "https://github.com/yosuque/kohaku";
+/** `>=` the exact version in `.node-version`: the one Node version CI verifies (scripts/lib/node-floor.mjs). */
+const NODE_ENGINES = nodeEnginesRange(REPO_ROOT);
 
 /** Workspace directories whose packages are published to npm. `apps/*` are samples and stay private. */
 const PUBLISHED_DIRS = [
@@ -104,7 +107,7 @@ for (const dir of PUBLISHED_DIRS) {
   setField(manifest, "homepage", `${HOMEPAGE}/tree/main/${dir}#readme`);
   setField(manifest, "bugs", { url: `${HOMEPAGE}/issues` });
   setField(manifest, "repository", { type: "git", url: REPO_URL, directory: dir });
-  setField(manifest, "engines", { node: ">=24.22.1" });
+  setField(manifest, "engines", { node: NODE_ENGINES });
   // Every library module is free of top-level side effects, so bundlers may drop unused ones. The CLI is
   // the exception: it is an executable whose entry parses argv and runs as soon as it is evaluated, which
   // is also why it publishes a bin and no importable entry point at all.
@@ -138,7 +141,17 @@ for (const dir of PUBLISHED_DIRS) {
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-console.log(`synced ${PUBLISHED_DIRS.length} manifests`);
+// The root manifest is private and otherwise hand-written, but its engines.node states the same floor (it is
+// what `pnpm install` in this repository checks), so it follows `.node-version` too. Only that one field is
+// touched; pnpm's own `engines.pnpm` entry is kept.
+{
+  const rootPath = join(REPO_ROOT, "package.json");
+  const root = JSON.parse(readFileSync(rootPath, "utf8")) as Json;
+  root["engines"] = { ...((root["engines"] as Json | undefined) ?? {}), node: NODE_ENGINES };
+  writeFileSync(rootPath, `${JSON.stringify(root, null, 2)}\n`);
+}
+
+console.log(`synced ${PUBLISHED_DIRS.length} manifests (+ the root engines.node)`);
 if (missingDescriptions > 0) {
   console.error(`${missingDescriptions} package(s) still need a description`);
   process.exit(1);

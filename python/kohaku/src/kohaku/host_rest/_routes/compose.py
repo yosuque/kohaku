@@ -483,7 +483,7 @@ async def _compose_stream_body(
     principal: Principal,
     request_id: str,
     abort: AbortSignal | None = None,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """The SSE event sequence for /compose/stream (event: spec -> patch* -> exactly one done / error).
 
     The keepalive heartbeat is not overlaid here (_with_heartbeat handles it). The body always terminates,

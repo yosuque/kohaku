@@ -84,7 +84,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 26
+          node-version-file: .node-version
           # Deliberately no `cache: pnpm` in the release workflow: a restored cache is a supply-chain input
           # to the artifacts this workflow publishes, so it runs cache-free (zizmor: cache-poisoning). CI
           # keeps its caches; pnpm's lockfile integrity hashes still verify every package here.
@@ -151,7 +151,7 @@ jobs:
       # pnpm refuses to start when that variable is unset. The default registry is npmjs.org anyway.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 26
+          node-version-file: .node-version
           # Deliberately no `cache: pnpm` in the release workflow: a restored cache is a supply-chain input
           # to the artifacts this workflow publishes, so it runs cache-free (zizmor: cache-poisoning). CI
           # keeps its caches; pnpm's lockfile integrity hashes still verify every package here.
@@ -233,7 +233,7 @@ jobs:
       # version tag is required here; Dependabot still bumps exact tags.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version: "3.12"
+          python-version: "3.13" # = requires-python's floor (CONTRIBUTING.md §2)
           # Deliberately no enable-cache here: a restored cache is a supply-chain input, and this job
           # publishes with trusted publishing, so zizmor flags caching as cache-poisoning risk.
       - run: uv build --package kohaku-ui --out-dir dist

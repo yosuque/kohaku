@@ -130,6 +130,14 @@ export const SIDEBAR_EN: SidebarGroup[] = [
         text: "0019. L1 fixations re-checked on delivery",
         link: "/docs/adr/0019-l1-fixations-are-rechecked-against-current-filter-descriptors",
       },
+      {
+        text: "0020. ci-ok is the single required check",
+        link: "/docs/adr/0020-ci-ok-is-the-single-required-ci-check",
+      },
+      {
+        text: "0021. One verified runtime version = the floor",
+        link: "/docs/adr/0021-ci-verifies-one-runtime-version-which-is-the-declared-floor",
+      },
     ],
   },
 ];
@@ -238,6 +246,14 @@ export const SIDEBAR_JA: SidebarGroup[] = [
       {
         text: "0019. L1 固定化は配信時に再照合",
         link: "/ja/docs/adr/0019-l1-fixations-are-rechecked-against-current-filter-descriptors",
+      },
+      {
+        text: "0020. 必須チェックは ci-ok 1 つ",
+        link: "/ja/docs/adr/0020-ci-ok-is-the-single-required-ci-check",
+      },
+      {
+        text: "0021. 検証する 1 バージョンを下限にする",
+        link: "/ja/docs/adr/0021-ci-verifies-one-runtime-version-which-is-the-declared-floor",
       },
     ],
   },

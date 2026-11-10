@@ -27,7 +27,7 @@ TS のパッケージテストが固定し、この側では Python 側の対応
 
 ## セットアップ・検証
 
-前提は Python 3.12+ + [uv](https://docs.astral.sh/uv/) 本体のインストールが必要。
+前提は Python 3.13+ + [uv](https://docs.astral.sh/uv/) 本体のインストールが必要。
 
 ```bash
 cd python
@@ -40,7 +40,7 @@ uv run lint-imports # レイヤ依存方向(逆流禁止)の契約検査(import-
 ```
 
 CI(`.github/workflows/ci.yml` の `python` ジョブ)も `ruff check` / `ruff format --check` / `mypy` / `lint-imports` / `pytest` の順で、
-Python 3.12 と 3.13 の両方で全部を実行する。
+Python 3.13(`requires-python` の下限で、CI が実行する唯一のバージョン。CONTRIBUTING.ja.md §2)で全部を実行する。
 
 この uv workspace で作業するのではなく公開パッケージをインストールする場合: `pip install kohaku-ui`(core)、
 または全オプション機能(rest, mcp, llm, claude, gemini)をまとめて入れる `pip install "kohaku-ui[all]"`。

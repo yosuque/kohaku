@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { INIT_EXTERNAL_PACKAGES, renderInitVersions } from "../../../scripts/lib/init-versions.mjs";
+import { nodeEnginesRange } from "../../../scripts/lib/node-floor.mjs";
 import { readCatalog } from "../../../scripts/lib/read-catalog.mjs";
 import { inferProfile, normalizeRows } from "../../src/init/infer.js";
 import { readDataFile } from "../../src/init/readers.js";
@@ -176,7 +177,9 @@ describe("EXTERNAL_VERSIONS", () => {
     const yaml = readFileSync(join(import.meta.dirname, "../../../pnpm-workspace.yaml"), "utf8");
     const committed = readFileSync(join(import.meta.dirname, "../../src/init/versions.ts"), "utf8");
     // Catches header, order and format drift that the value comparison above cannot see.
-    expect(committed).toBe(renderInitVersions(readCatalog(yaml)));
+    expect(committed).toBe(
+      renderInitVersions(readCatalog(yaml), nodeEnginesRange(join(import.meta.dirname, "../../.."))),
+    );
   });
 });
 

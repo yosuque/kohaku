@@ -15,8 +15,17 @@ All issue templates are under `.github/ISSUE_TEMPLATE/`.
 
 ## 2. Prerequisites
 
-- Node >= 24.22.1, pnpm 12. CI verifies on Node 24 and 26. Contributors may use the version pinned in `.node-version` (26.12.1) for local development.
-- [uv](https://docs.astral.sh/uv/) — only needed if you touch anything under `python/`.
+- Node >= 26.12.1, pnpm 12. `.node-version` (26.12.1) is not only a local-development pin: it is the Node floor (see below), so editing it is a published, breaking change.
+- Python >= 3.13 and [uv](https://docs.astral.sh/uv/) — only needed if you touch anything under `python/`.
+
+### Supported runtime versions
+
+**One verified version per runtime, and that version is the declared floor.** CI runs exactly one Node version and exactly one Python version; neither older nor newer releases are tested. What the packages declare as their minimum (`engines.node`, `requires-python`) is always the version CI actually ran, so nothing is promised that was not verified. Newer releases are expected to work but are not tested.
+
+The floors are raised deliberately, not automatically: review them at least when a new Node LTS line or a new Python minor version ships. Raising one is a breaking change for consumers on the older runtime, so it always comes with a changeset (`minor` while the packages are 0.x).
+
+- **Node** — `.node-version` is the single source. Every workflow's setup-node reads it (`node-version-file`), and `pnpm meta:sync` / `pnpm init:versions` write `>=` it into every published package's `engines.node`, the root `package.json` and the project `kohaku init` generates (CI fails on drift). To raise it: edit `.node-version`, run `pnpm regen`, regenerate the `kohaku init` goldens (§5), update the version in README / CONTRIBUTING / docs/user-guide / AGENTS.md (both languages), and add a changeset. If the new floor's major differs, bump `@types/node` in the pnpm catalog with it.
+- **Python** — no single file; change all of these together: `requires-python` in `python/pyproject.toml`, `python/kohaku/pyproject.toml` and `python/examples/sales-api/pyproject.toml`; the classifiers in `python/kohaku/pyproject.toml`; ruff's `target-version` and mypy's `python_version` in `python/pyproject.toml`; `PYTHON_VERSION` in `.github/workflows/ci.yml` and `python-version` in `release.yml` / `published-e2e.yml`. Then `cd python && uv lock && uv sync && uv run ruff check --fix`, run the full Python verification, update python/README and docs/user-guide (both languages), and add a changeset (the Python distribution has no changelog of its own; its version follows the TypeScript one).
 
 ## 3. Setup
 
@@ -49,9 +58,9 @@ Several files in this repository are generated, not hand-written. CI regenerates
 | `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures` | `spec/test/fixtures/cross-language-canonical.json` | After changing canonical JSON / hash / cacheKey / the sanitize allowlist |
 | `pnpm intents:emit` | `apps/sample-web/src/generated/facet-views.json` | After changing facets in `apps/sample-api/src/intents/catalog.ts` |
 | `pnpm seed` | `apps/sample-api/src/domain/seed/` | After changing the seed generator |
-| `pnpm meta:sync` | `publishConfig` and the shared publishing metadata in the publishable packages' `package.json` (`packages/*`, `cli`, `spec`) | After adding or changing an `exports` entry of a publishable package |
+| `pnpm meta:sync` | `publishConfig` and the shared publishing metadata in the publishable packages' `package.json` (`packages/*`, `cli`, `spec`), plus the root `package.json`'s `engines.node` | After adding or changing an `exports` entry of a publishable package, or changing `.node-version` |
 | `pnpm python:version` | `python/kohaku/pyproject.toml`, `python/kohaku/src/kohaku/__init__.py`, `python/uv.lock` | After the TypeScript version changes (`pnpm version` runs it) |
-| `pnpm init:versions` | `cli/src/init/versions.ts` | After changing a version in the `catalog:` block of `pnpm-workspace.yaml` that `kohaku init` pins (the package list is in `scripts/lib/init-versions.mjs`) |
+| `pnpm init:versions` | `cli/src/init/versions.ts` | After changing a version in the `catalog:` block of `pnpm-workspace.yaml` that `kohaku init` pins (the package list is in `scripts/lib/init-versions.mjs`), or changing `.node-version` |
 | `KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run --project cli cli/test/init/render-golden.test.ts` | `cli/test/init/__golden__/` | After an intentional change to a `kohaku init` template (the test byte-compares the generated project, plain and `--mcp`) |
 
 Two more artifacts are pinned by a test but written by hand, because their value is a judgement rather than a function of the source:
