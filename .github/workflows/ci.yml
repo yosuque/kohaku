@@ -20,35 +20,27 @@ jobs:
   # The TypeScript test suite, and nothing else: this job is the critical path of the whole workflow (its test
   # step alone outlasts every other job), so everything that does not need the test run -- lint, typecheck, the
   # generator drift checks -- lives in `static` below and runs alongside it instead of after it.
-  # MEASUREMENT ONLY (never merge): the same test step nine times in one run, so every variant sees the same
-  # commit and the same time of day. default-* = Vitest's own worker count (CPUs - 1), w4-* = VITEST_MAX_WORKERS=4,
-  # debug = testcontainers' debug log (where the ~22 s before the first test result goes), prepull-* = the three
-  # images testcontainers needs are pulled in the background while the job sets itself up.
+  # MEASUREMENT ONLY (never merge), round 2. Round 1 compared variants across jobs and the machine-to-machine
+  # spread (126-216 s for the same configuration) swamped every effect, so this round is paired: each job runs
+  # the test step three times on ONE machine, once per configuration, in a Latin-square order so that every
+  # configuration sits in every position twice. The three images testcontainers needs are pulled up front, so
+  # no run pays for a pull. default = Vitest's own worker count (CPUs - 1) with forks, w4 = VITEST_MAX_WORKERS=4,
+  # threads = --pool=threads.
   ci:
     name: ci (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: default-1 }
-          - { name: default-2 }
-          - { name: default-3 }
-          - { name: w4-1, workers: "4" }
-          - { name: w4-2, workers: "4" }
-          - { name: w4-3, workers: "4" }
-          - { name: debug, debug: "testcontainers*" }
-          - { name: prepull-1, prepull: true }
-          - { name: prepull-2, prepull: true }
+          - { name: a1, c1: default, c2: w4, c3: threads }
+          - { name: a2, c1: default, c2: w4, c3: threads }
+          - { name: b1, c1: w4, c2: threads, c3: default }
+          - { name: b2, c1: w4, c2: threads, c3: default }
+          - { name: c1, c1: threads, c2: default, c3: w4 }
+          - { name: c2, c1: threads, c2: default, c3: w4 }
     steps:
-      - name: Pre-pull the adapter images in the background (measurement only)
-        if: matrix.prepull
-        run: |
-          for image in postgres:16-alpine redis:7-alpine testcontainers/ryuk:0.14.0; do
-            nohup bash -c 'date +%T.%N; time docker pull -q "$0"; date +%T.%N' "$image" \
-              > "/tmp/pull-$(echo "$image" | tr '/:' '__').log" 2>&1 &
-          done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
@@ -59,27 +51,23 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The thresholds in vitest.config.ts are the gate. The Redis / Postgres adapter suites run here too, under
-      # the default resolution (env URL -> Docker -> skip; on the runner that is testcontainers), even though the
-      # `integration` job runs them again against service containers with KOHAKU_ADAPTER_TESTS=require:
-      # `coverage.include` counts storage-postgres / storage-redis src toward the global thresholds, and without
-      # the adapter suites the functions figure drops from ~89% to ~87% and fails the 88% floor.
-      - name: Test (with coverage)
-        run: pnpm test:coverage
-        env:
-          VITEST_MAX_WORKERS: ${{ matrix.workers }}
-          DEBUG: ${{ matrix.debug }}
-      - name: Runner facts (measurement only)
-        if: always()
+      - name: Runner facts and image pre-pull
         run: |
-          echo "nproc=$(nproc)"; free -m | sed -n '1,2p'
-          docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}'
-          for f in /tmp/pull-*.log; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done || true
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: matrix.name == 'default-1'
-        with:
-          name: coverage
-          path: coverage/
+          lscpu | grep -E 'Model name|^CPU\(s\)|MHz|L3'
+          echo "nproc=$(nproc)"
+          for image in postgres:16-alpine redis:7-alpine testcontainers/ryuk:0.14.0; do docker pull -q "$image"; done
+      - name: Test run 1
+        run: ./.github/measure-run.sh
+        env:
+          CFG: ${{ matrix.c1 }}
+      - name: Test run 2
+        run: ./.github/measure-run.sh
+        env:
+          CFG: ${{ matrix.c2 }}
+      - name: Test run 3
+        run: ./.github/measure-run.sh
+        env:
+          CFG: ${{ matrix.c3 }}
   # Source-level checks that need neither the test run nor build output: formatting / lint, the per-package
   # typecheck, the spec self-check, and every "regenerate and diff" check for a committed generated file. They
   # used to run inside `ci` after the test step, where a type error or a stale generated file was reported only
