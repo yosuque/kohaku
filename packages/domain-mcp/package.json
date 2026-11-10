@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/domain-mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Turns an existing MCP server into a kohaku DomainPort: read-only tools become query:// references, every other tool becomes an approve-tier governed Action.",
   "type": "module",
   "exports": {
