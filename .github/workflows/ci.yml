@@ -20,10 +20,35 @@ jobs:
   # The TypeScript test suite, and nothing else: this job is the critical path of the whole workflow (its test
   # step alone outlasts every other job), so everything that does not need the test run -- lint, typecheck, the
   # generator drift checks -- lives in `static` below and runs alongside it instead of after it.
+  # MEASUREMENT ONLY (never merge): the same test step nine times in one run, so every variant sees the same
+  # commit and the same time of day. default-* = Vitest's own worker count (CPUs - 1), w4-* = VITEST_MAX_WORKERS=4,
+  # debug = testcontainers' debug log (where the ~22 s before the first test result goes), prepull-* = the three
+  # images testcontainers needs are pulled in the background while the job sets itself up.
   ci:
+    name: ci (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: default-1 }
+          - { name: default-2 }
+          - { name: default-3 }
+          - { name: w4-1, workers: "4" }
+          - { name: w4-2, workers: "4" }
+          - { name: w4-3, workers: "4" }
+          - { name: debug, debug: "testcontainers*" }
+          - { name: prepull-1, prepull: true }
+          - { name: prepull-2, prepull: true }
     steps:
+      - name: Pre-pull the adapter images in the background (measurement only)
+        if: matrix.prepull
+        run: |
+          for image in postgres:16-alpine redis:7-alpine testcontainers/ryuk:0.14.0; do
+            nohup bash -c 'date +%T.%N; time docker pull -q "$0"; date +%T.%N' "$image" \
+              > "/tmp/pull-$(echo "$image" | tr '/:' '__').log" 2>&1 &
+          done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
@@ -41,7 +66,17 @@ jobs:
       # the adapter suites the functions figure drops from ~89% to ~87% and fails the 88% floor.
       - name: Test (with coverage)
         run: pnpm test:coverage
+        env:
+          VITEST_MAX_WORKERS: ${{ matrix.workers }}
+          DEBUG: ${{ matrix.debug }}
+      - name: Runner facts (measurement only)
+        if: always()
+        run: |
+          echo "nproc=$(nproc)"; free -m | sed -n '1,2p'
+          docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+          for f in /tmp/pull-*.log; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.name == 'default-1'
         with:
           name: coverage
           path: coverage/
