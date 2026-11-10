@@ -24,6 +24,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # The storage-postgres / storage-redis suites start their backends through testcontainers in a Vitest
+      # `globalSetup`, and Vitest runs every globalSetup before the first test file: pulling these images there
+      # held the whole suite back by ~9 s. Pulled here instead, detached, they download while the steps below
+      # install Node and the dependencies (~18 s), and are local by the time the test step asks for them.
+      # Purely an optimisation: a failed or unfinished pull is ignored and testcontainers pulls the image itself,
+      # as before. The tags mirror packages/storage-{postgres,redis}/test/global-setup.ts and the reaper image
+      # testcontainers pins (RYUK_CONTAINER_IMAGE default); a stale tag here costs nothing but the saving.
+      - name: Pre-pull the testcontainers images in the background
+        run: |
+          for image in postgres:16-alpine redis:7-alpine testcontainers/ryuk:0.14.0; do
+            nohup docker pull -q "$image" > /dev/null 2>&1 &
+          done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
@@ -39,8 +51,10 @@ jobs:
       # `integration` job runs them again against service containers with KOHAKU_ADAPTER_TESTS=require:
       # `coverage.include` counts storage-postgres / storage-redis src toward the global thresholds, and without
       # the adapter suites the functions figure drops from ~89% to ~87% and fails the 88% floor.
+      # VITEST_MAX_WORKERS: Vitest's default is one worker fewer than the CPU count (3 on this 4-vCPU runner);
+      # using all of them measured ~6.6% faster here, on top of the ~9% from the threads pool the script selects.
       - name: Test (with coverage)
-        run: pnpm test:coverage
+        run: VITEST_MAX_WORKERS="$(nproc)" pnpm test:coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage
