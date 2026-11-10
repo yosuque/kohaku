@@ -2,6 +2,14 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // The pool is NOT set here, on purpose: a root-level `pool` is not inherited by the projects below (each
+    // resolves its own config, so all of them would stay on the default `forks`). The `test` / `test:coverage`
+    // scripts in package.json pass `--pool=threads` on the command line instead, which does reach every
+    // project. Worker threads keep per-file isolation (`isolate` stays on) and only drop the per-file process
+    // start: measured on the CI runner, back to back on the same machine, that is about 9% off the run. If a
+    // thread-unsafe test ever appears (`process.chdir()`, a native addon), set `pool: "forks"` in that
+    // package's own vitest.config.ts.
+    //
     // Do not put passWithNoTests here (across all projects): making it global would hide a total
     // loss of test files (e.g. a glob mistake). Place passWithNoTests via a local vitest.config.ts
     // only in workspaces that have no tests (see apps/sample-wc / apps/sample-web).

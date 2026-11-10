@@ -17,10 +17,25 @@ concurrency:
 env:
   PYTHON_VERSION: "3.13"
 jobs:
+  # The TypeScript test suite, and nothing else: this job is the critical path of the whole workflow (its test
+  # step alone outlasts every other job), so everything that does not need the test run -- lint, typecheck, the
+  # generator drift checks -- lives in `static` below and runs alongside it instead of after it.
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # The storage-postgres / storage-redis suites start their backends through testcontainers in a Vitest
+      # `globalSetup`, and Vitest runs every globalSetup before the first test file: pulling these images there
+      # held the whole suite back by ~9 s. Pulled here instead, detached, they download while the steps below
+      # install Node and the dependencies (~18 s), and are local by the time the test step asks for them.
+      # Purely an optimisation: a failed or unfinished pull is ignored and testcontainers pulls the image itself,
+      # as before. The tags mirror packages/storage-{postgres,redis}/test/global-setup.ts and the reaper image
+      # testcontainers pins (RYUK_CONTAINER_IMAGE default); a stale tag here costs nothing but the saving.
+      - name: Pre-pull the testcontainers images in the background
+        run: |
+          for image in postgres:16-alpine redis:7-alpine testcontainers/ryuk:0.14.0; do
+            nohup docker pull -q "$image" > /dev/null 2>&1 &
+          done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
@@ -31,10 +46,41 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Placed before the test suite so a formatting or lint slip is reported in well under a minute
-      # instead of after the full run. --error-on-warnings makes biome.jsonc the single source of truth for
-      # what blocks CI -- anything that should not block is set to "info" or "off" there, with its measured
-      # count and reason, rather than relying on Biome's shipped severities.
+      # The thresholds in vitest.config.ts are the gate. The Redis / Postgres adapter suites run here too, under
+      # the default resolution (env URL -> Docker -> skip; on the runner that is testcontainers), even though the
+      # `integration` job runs them again against service containers with KOHAKU_ADAPTER_TESTS=require:
+      # `coverage.include` counts storage-postgres / storage-redis src toward the global thresholds, and without
+      # the adapter suites the functions figure drops from ~89% to ~87% and fails the 88% floor.
+      # VITEST_MAX_WORKERS: Vitest's default is one worker fewer than the CPU count (3 on this 4-vCPU runner);
+      # using all of them measured ~6.6% faster here, on top of the ~9% from the threads pool the script selects.
+      - name: Test (with coverage)
+        run: VITEST_MAX_WORKERS="$(nproc)" pnpm test:coverage
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage/
+  # Source-level checks that need neither the test run nor build output: formatting / lint, the per-package
+  # typecheck, the spec self-check, and every "regenerate and diff" check for a committed generated file. They
+  # used to run inside `ci` after the test step, where a type error or a stale generated file was reported only
+  # once the ~3-minute test run had finished; here they report within the first minute and off the critical path.
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every git command below is a local `git diff`; nothing needs an authenticated remote, so do not
+          # leave the token in .git/config (zizmor: artipacked, same as the `build` job).
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # First, so a formatting or lint slip is the earliest thing this workflow reports. --error-on-warnings makes
+      # biome.jsonc the single source of truth for what blocks CI -- anything that should not block is set to
+      # "info" or "off" there, with its measured count and reason, rather than relying on Biome's shipped severities.
       - name: Format & lint (Biome)
         run: pnpm biome ci --error-on-warnings --reporter=github .
       # Report-only: the remaining high-severity findings come from transitive dependencies of jsdom, the MCP SDK,
@@ -43,19 +89,8 @@ jobs:
       - name: Production dependency audit (report only)
         run: pnpm audit --prod --audit-level=high
         continue-on-error: true
-      # The thresholds in vitest.config.ts are the gate. The Redis / Postgres adapter suites run here too, under
-      # the default resolution (env URL -> Docker -> skip; on the runner that is testcontainers), even though the
-      # `integration` job runs them again against service containers with KOHAKU_ADAPTER_TESTS=require:
-      # `coverage.include` counts storage-postgres / storage-redis src toward the global thresholds, and without
-      # the adapter suites the functions figure drops from ~89% to ~87% and fails the 88% floor.
-      - name: Test (with coverage)
-        run: pnpm test:coverage
       - run: pnpm typecheck
       - run: node cli/bin/kohaku.js conformance --self
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage
-          path: coverage/
       - name: JSON Schema drift check
         run: |
           pnpm --filter @kohaku-ui/spec run generate-schemas
@@ -100,7 +135,8 @@ jobs:
           git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py python/uv.lock
       # Only here for `uvx zizmor` below, so no cache: with caching on, setup-uv hashes its default
       # `**/pyproject.toml` / `**/uv.lock` / ... globs to build the key, and after `pnpm install` that walk
-      # descends into node_modules and took ~8 minutes of this job's ~11. It must be an explicit `false`:
+      # descends into node_modules and took ~8 minutes of an ~11-minute job (measured when this step still lived in
+      # `ci`; `static` installs the same workspace). It must be an explicit `false`:
       # since v10 the default is `auto`, which enables the cache on GitHub-hosted runners.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
@@ -233,7 +269,7 @@ jobs:
   # `docs-site` jobs, plus the report-only `changeset-check` job; `pnpm install` restores from the pnpm cache in
   # seconds, so a separate runner per check bought nothing but setup time).
   #
-  # - pack-smoke: the `ci` job typechecks and tests against `src/*.ts` directly (packages export source;
+  # - pack-smoke: the `ci` and `static` jobs test and typecheck against `src/*.ts` directly (packages export source;
   #   publishConfig only applies once a package is packed), so nothing there notices a missing publishConfig
   #   entry, a `.d.ts` that stops resolving once packed, or a guest closure (packages/sandbox) whose stringified
   #   source changes shape under the build. `pnpm run smoke:pack` packs every package and does a plain
@@ -294,7 +330,7 @@ jobs:
   # as missing.
   ci-ok:
     if: always()
-    needs: [ci, python, integration, build]
+    needs: [ci, static, python, integration, build]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
