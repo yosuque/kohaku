@@ -1,5 +1,25 @@
 # @kohaku-ui/cli
 
+## 0.7.0
+
+### Minor Changes
+
+- [#138](https://github.com/yosuque/kohaku/pull/138) [`2f5fa15`](https://github.com/yosuque/kohaku/commit/2f5fa156e84262d3380d5fda9cfce133382e8589) Thanks [@yosuque](https://github.com/yosuque)! - Raise the minimum runtimes: Node from 24.22.1 to **26.12.1** and Python (the `kohaku-ui` distribution) from 3.12 to **3.13**. Every published package's `engines.node` is now `>=26.12.1`, and so is the `package.json` that `kohaku init` generates; `kohaku-ui` now declares `requires-python = ">=3.13"`. CI now verifies exactly one version of each runtime, and the declared floor is that version (CONTRIBUTING.md §2), so Node 24 and Python 3.12 are no longer tested. Projects still on Node 24 or Python 3.12 should upgrade before taking this release.
+
+### Patch Changes
+
+- Updated dependencies [[`2f5fa15`](https://github.com/yosuque/kohaku/commit/2f5fa156e84262d3380d5fda9cfce133382e8589)]:
+  - @kohaku-ui/client@0.7.0
+  - @kohaku-ui/composer@0.7.0
+  - @kohaku-ui/evals@0.7.0
+  - @kohaku-ui/host-core@0.7.0
+  - @kohaku-ui/lineage@0.7.0
+  - @kohaku-ui/registry@0.7.0
+  - @kohaku-ui/sandbox@0.7.0
+  - @kohaku-ui/spec-core@0.7.0
+  - @kohaku-ui/storage-memory@0.7.0
+  - @kohaku-ui/spec@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes
